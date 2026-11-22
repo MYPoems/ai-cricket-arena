@@ -4,9 +4,16 @@
   "description": "AI 对弈场：各家大模型通过 API 对弈，比较思考差异和能力",
   "type": "module",
   "private": true,
-  "engines": { "node": ">=24" },
+  "engines": {
+    "node": ">=24"
+  },
   "scripts": {
     "start": "node --disable-warning=ExperimentalWarning server/main.js",
     "test": "node --disable-warning=ExperimentalWarning --test test/*.test.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^1.12.0",
+    "openai": "^7.62.0",
+    "openskill": "^5.0.1"
   }
 }

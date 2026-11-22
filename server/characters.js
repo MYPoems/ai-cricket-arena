@@ -1,0 +1,126 @@
+// 选手（AI 角色）管理。配置创建后锁定，想改模型或参数就「派生」新选手。
+
+import { newId, now } from './db.js';
+import { PRESETS, rankedAllowed, EFFORTS } from './providers/presets.js';
+import { HttpError } from './http.js';
+
+const AVATARS = ['🦊', '🐯', '🐼', '🦁', '🐉', '🦅', '🐺', '🦉', '🐬', '🦄', '🐢', '🐲', '🦈', '🐙', '🦚', '🐝'];
+
+export const LOCKED = ['kind', 'provider', 'base_url', 'model', 'effort', 'style', 'memory', 'show_legal', 'level'];
+export const EDITABLE = ['name', 'avatar', 'auto_match', 'daily_limit', 'daily_tokens', 'archived'];
+
+export const MAX_DAILY_LIMIT = 50; // 平台允许的每日对局上限
+
+export function getCharacter(db, id) {
+  const c = db.get('SELECT * FROM characters WHERE id = ?', id);
+  if (!c) throw new HttpError(404, '选手不存在');
+  return c;
+}
+
+/** 是否能参加排位赛 */
+export function canRank(db, c) {
+  if (c.kind !== 'model') return true; // 系统参照选手和玩家本人
+  if (c.provider === 'mock') return true;
+  return rankedAllowed(c.provider) || (db.getSetting('allowLocalRanked', false) && c.provider === 'ollama');
+}
+
+export function publicCharacter(db, c) {
+  return {
+    ...c,
+    providerName: c.provider ? PRESETS[c.provider]?.name || (c.provider === 'mock' ? '模拟模型' : c.provider) : null,
+    effortName: c.effort ? EFFORTS[c.effort] : null,
+    ranked: canRank(db, c),
+  };
+}
+
+function clean(s, max) {
+  return String(s ?? '').trim().slice(0, max);
+}
+
+export function createCharacter(db, ownerId, input, { system = false } = {}) {
+  const kind = input.kind || 'model';
+  if (!['model', 'builtin', 'random', 'engine', 'human'].includes(kind)) throw new HttpError(400, '未知选手类型');
+  const name = clean(input.name, 24);
+  if (!name) throw new HttpError(400, '请填写选手名字');
+  const c = {
+    id: newId('ch'),
+    owner_id: ownerId,
+    name,
+    avatar: clean(input.avatar, 8) || AVATARS[Math.floor(Math.random() * AVATARS.length)],
+    kind,
+    provider: null, base_url: null, model: null, effort: null,
+    style: clean(input.style, 300),
+    memory: input.memory ? 1 : 0,
+    show_legal: input.show_legal === false || input.show_legal === 0 ? 0 : 1,
+    level: null,
+    parent_id: input.parent_id || null,
+    system: system ? 1 : 0,
+    auto_match: input.auto_match ? 1 : 0,
+    daily_limit: Math.max(1, Math.min(MAX_DAILY_LIMIT, Number(input.daily_limit) || 10)),
+    daily_tokens: input.daily_tokens ? Math.max(1000, Number(input.daily_tokens)) : null,
+    archived: 0,
+    created_at: now(),
+  };
+  if (kind === 'model') {
+    const allowMock = process.env.ARENA_DEV === '1';
+    if (!PRESETS[input.provider] && !(allowMock && input.provider === 'mock')) throw new HttpError(400, '请选择模型平台');
+    c.provider = input.provider;
+    c.model = clean(input.model, 120);
+    if (!c.model) throw new HttpError(400, '请填写模型 ID');
+    const base = clean(input.base_url, 300);
+    if (input.provider === 'custom' && !base) throw new HttpError(400, '自定义接口需要填写地址');
+    c.base_url = base && base !== PRESETS[input.provider]?.baseURL ? base : null;
+    c.effort = EFFORTS[input.effort] ? input.effort : 'low';
+  } else {
+    c.style = '';
+    c.memory = 0;
+    if (kind === 'builtin') c.level = Math.max(1, Math.min(4, Number(input.level) || 3));
+    if (kind === 'engine') c.level = Math.max(50, Math.min(5000, Number(input.level) || 200)); // 每步思考毫秒数
+  }
+  db.insert('characters', c);
+  return c;
+}
+
+export function updateCharacter(db, id, input) {
+  const c = getCharacter(db, id);
+  const patch = {};
+  for (const k of EDITABLE) {
+    if (!(k in input)) continue;
+    if (k === 'name') patch.name = clean(input.name, 24) || c.name;
+    else if (k === 'avatar') patch.avatar = clean(input.avatar, 8) || c.avatar;
+    else if (k === 'daily_limit') patch.daily_limit = Math.max(1, Math.min(MAX_DAILY_LIMIT, Number(input.daily_limit) || c.daily_limit));
+    else if (k === 'daily_tokens') patch.daily_tokens = input.daily_tokens ? Math.max(1000, Number(input.daily_tokens)) : null;
+    else patch[k] = input[k] ? 1 : 0;
+  }
+  const locked = LOCKED.filter((k) => k in input && input[k] !== c[k]);
+  if (locked.length) throw new HttpError(400, '选手的模型配置创建后不能修改，请用「派生」创建新选手');
+  if (Object.keys(patch).length) db.update('characters', { id }, patch);
+  return getCharacter(db, id);
+}
+
+/** 系统参照选手和「我」：首次启动时创建 */
+export function ensureSystemCharacters(db, ownerId) {
+  const have = new Set(db.all('SELECT name FROM characters WHERE system = 1').map((r) => r.name));
+  const defs = [
+    { kind: 'random', name: '随机走子', avatar: '🎲' },
+    { kind: 'builtin', name: '内置 AI · 初级', avatar: '🤖', level: 2 },
+    { kind: 'builtin', name: '内置 AI · 中级', avatar: '🦾', level: 3 },
+  ];
+  for (const d of defs) {
+    if (!have.has(d.name)) createCharacter(db, ownerId, { ...d, auto_match: 1, daily_limit: MAX_DAILY_LIMIT }, { system: true });
+  }
+  if (!db.get("SELECT 1 FROM characters WHERE kind = 'human' AND owner_id = ?", ownerId)) {
+    createCharacter(db, ownerId, { kind: 'human', name: '我', avatar: '🙂' });
+  }
+}
+
+/** 有 Pikafish 时创建「守关」选手 */
+export function ensureEngineCharacter(db, ownerId) {
+  if (!db.get("SELECT 1 FROM characters WHERE kind = 'engine' AND system = 1")) {
+    createCharacter(db, ownerId, { kind: 'engine', name: 'Pikafish 守关', avatar: '🐟', level: 200 }, { system: true });
+  }
+}
+
+export function humanCharacter(db, ownerId) {
+  return db.get("SELECT * FROM characters WHERE kind = 'human' AND owner_id = ?", ownerId);
+}
