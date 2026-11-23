@@ -476,7 +476,7 @@ dialog .dlg-head h3 { font: 400 24px/1.2 var(--brush); background: var(--gold-te
 dialog .dlg-body { padding: 18px 22px; display: flex; flex-direction: column; gap: 16px; max-height: 70vh; overflow-y: auto; }
 dialog .dlg-foot { padding: 12px 22px 16px; border-top: 1px solid var(--groove-d); box-shadow: inset 0 1px 0 var(--groove-l); display: flex; justify-content: flex-end; gap: 10px; background: rgb(0 0 0 / .12); }
 :root[data-theme="light"] dialog .dlg-foot { background: rgb(154 116 32 / .06); }
-.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.grid2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
 @media (max-width: 640px) { .grid2 { grid-template-columns: 1fr; } }
 .note { padding: 8px 0 8px 12px; border-left: 2px solid var(--gold); font-size: 14px; }
 .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--groove-d); box-shadow: 0 1px 0 var(--groove-l); margin-bottom: 20px; overflow-x: auto; }
@@ -488,7 +488,8 @@ dialog .dlg-foot { padding: 12px 22px 16px; border-top: 1px solid var(--groove-d
 /* ================= 页面标题（书法 + 回纹下沿 + 水印） ================= */
 .page-head { position: relative; overflow: hidden; display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; margin-bottom: 26px; padding: 6px 2px 24px; }
 .page-head > :not(.wm) { position: relative; z-index: 1; }
-.page-head::after { content: ''; position: absolute; left: 0; right: 0; bottom: 2px; height: 10px; background: var(--fret) left bottom / 12px 10px repeat-x; opacity: .6; -webkit-mask-image: linear-gradient(90deg, #000 40%, transparent); mask-image: linear-gradient(90deg, #000 40%, transparent); }
+.page-head::after { content: ''; position: absolute; left: 0; right: 0; bottom: 2px; height: 10px; background: var(--fret) left bottom / 12px 10px repeat-x; opacity: .6; -webkit-mask-image: linear-gradient(90deg, #000 24%, transparent 42%); mask-image: linear-gradient(90deg, #000 24%, transparent 42%); }
+/* 回纹带在 42% 处收尽，右侧留给大字水印，两者不重叠 */
 .page-head h1 { font: 400 clamp(36px, 4.6vw, 54px)/1.1 var(--brush); background: var(--gold-text); -webkit-background-clip: text; background-clip: text; color: transparent; filter: var(--gold-text-shadow) drop-shadow(0 4px 6px rgb(0 0 0 / .35)); padding: 2px 4px 0 0; }
 :root[data-theme="light"] .page-head h1 { filter: var(--gold-text-shadow); }
 .page-head .sub { color: var(--muted); margin-top: 8px; }
@@ -610,8 +611,9 @@ dialog .dlg-foot { padding: 12px 22px 16px; border-top: 1px solid var(--groove-d
 .emoji-pick button.on { box-shadow: 0 0 0 2px var(--gold-2), 0 2px 4px rgb(0 0 0 / .4); background: rgb(240 205 120 / .16); }
 .keyline { display: flex; gap: 8px; align-items: center; }
 .keyline .btn { white-space: nowrap; flex: none; }
-.profile { display: grid; grid-template-columns: 340px 1fr; gap: 24px; align-items: start; }
+.profile { display: grid; grid-template-columns: 340px minmax(0, 1fr); gap: 24px; align-items: start; }
 @media (max-width: 900px) { .profile { grid-template-columns: 1fr; } }
+.profile table.list td:nth-child(2) { white-space: normal; min-width: 160px; } /* 多人局对手名单可换行 */
 .stat-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
 .stat { padding: 10px; text-align: center; border-radius: var(--r); background: var(--well-bg); box-shadow: var(--well-sh); }
 .stat b { display: block; font: 600 24px/1.2 var(--num); }
@@ -795,6 +797,8 @@ pre.code { margin: 0; padding: 14px 80px 14px 16px; overflow-x: auto; border-rad
 @supports (color: oklch(from red l c h)) {
   .camp .side-tag { color: oklch(from var(--side-color) calc((.66 - l) * 999) 0 0); text-shadow: 0 1px 0 oklch(from var(--side-color) calc((l - .66) * 999) 0 0 / .4); }
 }
+.side-tag.seat-lab { font-size: 13px; padding: 5px 10px; }
+.setup-main, .setup-side { padding: 22px 24px; }
 .side-tag.b { background: #3a302a; color: #f4e6c4; }
 .delta-up { color: var(--good); font: 600 13px/1 var(--num); }
 .delta-down { color: var(--zhu-2); font: 600 13px/1 var(--num); }

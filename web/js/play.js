@@ -1,6 +1,6 @@
 // 开局：选游戏、人数和各座位的选手。
 
-import { h, api, post, guard, avatar, modelLine, MODE_NAMES, listen } from './ui.js';
+import { h, api, post, guard, avatar, modelLine, MODE_NAMES, listen, pageHead } from './ui.js';
 
 export async function playView(root, { meta, characters, go, session }) {
   // 排位赛由天梯自动匹配产生；只有庄家能手动开排位（测试用）
@@ -70,7 +70,7 @@ export async function playView(root, { meta, characters, go, session }) {
       : null);
     modeSeg.replaceChildren(...[['casual', '娱乐赛'], ...(canRanked ? [['ranked', '排位赛']] : [])].map(([v, l]) => h('button', { class: sel.mode === v ? 'on' : '', onclick: () => { sel.mode = v; redraw(); } }, l)));
     seatsBox.replaceChildren(...seatIds().map((seat, i) => h('div', { class: 'col', style: { gap: '8px' } },
-      h('div', { class: 'row', style: { gap: '8px' } }, h('span', { class: 'side-tag', style: { background: 'var(--text)' } }, g.seatNames[seat] || seat)),
+      h('div', { class: 'row', style: { gap: '8px' } }, h('span', { class: 'side-tag seat-lab' }, g.seatNames[seat] || seat)),
       seatBox(seat))));
     startExtra.replaceChildren(
       sel.game === 'xiangqi' && sel.mode === 'casual' ? h('label', { class: 'field' }, h('span', {}, '起始局面'), startSel) : null,
@@ -97,10 +97,10 @@ export async function playView(root, { meta, characters, go, session }) {
   drawLive(liveMatches);
 
   defaults();
-  root.replaceChildren(h('div', { class: 'setup' },
-    h('div', { class: 'col', style: { gap: '22px' } },
-      h('div', { class: 'section-title', style: { margin: 0 } }, h('h2', {}, '开一局'), modeSeg),
-      h('div', { class: 'small muted' }, '座位上可以放你自己的蛐蛐、你本人和系统选手。想和别人的蛐蛐斗，去「组局」。'),
+  root.replaceChildren(
+    pageHead('开一局', '座位上可以放你自己的蛐蛐、你本人和系统选手。想和别人的蛐蛐斗，去「组局」。', '开', modeSeg),
+    h('div', { class: 'setup' },
+    h('div', { class: 'card framed col setup-main', style: { gap: '22px' } },
       h('div', { class: 'row' }, gameSeg, playersSel),
       seatsBox,
       h('div', { class: 'grid2' },
@@ -111,9 +111,8 @@ export async function playView(root, { meta, characters, go, session }) {
       ),
       h('div', { class: 'row' }, h('button', { class: 'btn primary', onclick: start }, '开始对局'), h('a', { href: '#/characters', class: 'small' }, '创建新的 AI 选手')),
     ),
-    h('div', { class: 'col' },
-      h('div', { class: 'col', style: { gap: '8px' } }, h('div', { class: 'section-title', style: { margin: 0 } }, h('h3', {}, '正在进行')), liveList),
-    ),
+    h('div', { class: 'card framed col setup-side', style: { gap: '10px' } },
+      h('div', { class: 'section-title', style: { margin: 0 } }, h('h3', {}, '正在进行')), liveList),
   ));
   redraw();
 

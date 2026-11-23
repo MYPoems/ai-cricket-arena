@@ -136,7 +136,7 @@ const CSS = `
 .ddz-plate.win { --edge-now: var(--edge-hi); }
 .ddz-plate .coin { font-size: 1.55em; width: 2.1em; height: 2.1em; flex: none; font-family: var(--num); font-weight: 600; margin-bottom: .2em; }
 .ddz-plate .who { display: grid; gap: .25em; min-width: 0; flex: 1; }
-.ddz-plate .who b { font: 900 1.5em/1.15 var(--serif); white-space: nowrap; }
+.ddz-plate .who b { font: 900 1.5em/1.15 var(--serif); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ddz-plate .who span { display: flex; align-items: center; gap: .45em; font: 600 1.05em/1 var(--sans); color: var(--muted); white-space: nowrap; }
 .ddz-plate .tag { font: 700 1em/1 var(--sans); padding: .32em .55em; border-radius: .3em; color: var(--muted); background: var(--well-bg); box-shadow: var(--well-sh); }
 .ddz-plate .seal { font-size: 1.05em; width: 2.5em; height: 2.5em; flex: none; writing-mode: vertical-rl; letter-spacing: -.08em; line-height: 1; margin: 0 -.2em 0 .1em; }
@@ -174,7 +174,10 @@ const CSS = `
   -webkit-mask: radial-gradient(closest-side, transparent 18%, #000 30%, transparent 72%); mask: radial-gradient(closest-side, transparent 18%, #000 30%, transparent 72%); }
 
 /* 结果 */
-.ddz-res { translate: -50% 0; display: grid; justify-items: center; gap: .5em; pointer-events: none; text-align: center; }
+.ddz-res { translate: -50% 0; display: grid; justify-items: center; gap: .5em; pointer-events: none; text-align: center; isolation: isolate; z-index: 5; }
+/* 结算字下垫一层暗漆晕，把最后一手牌压下去，字和牌不再打架 */
+.ddz-res::before { content: ''; position: absolute; inset: -1.6em -5em; z-index: -1; border-radius: 50%; background: radial-gradient(closest-side, rgb(26 6 3 / .9), rgb(26 6 3 / .66) 62%, transparent); }
+:root[data-theme="light"] .ddz-res::before { background: radial-gradient(closest-side, rgb(40 10 5 / .86), rgb(40 10 5 / .6) 62%, transparent); }
 .ddz-res b { font: 400 6.4em/1.05 var(--brush); background: var(--gold-text); -webkit-background-clip: text; background-clip: text; color: transparent; padding: 0 .1em;
   filter: drop-shadow(0 .03em 0 rgb(40 12 2 / .9)) drop-shadow(0 .08em .1em rgb(0 0 0 / .6)); }
 .ddz-res span { font: 600 1.4em/1.3 var(--sans); color: #f2e3c2; letter-spacing: .14em; padding: .35em 1em; border-radius: 1em; background: rgb(10 3 2 / .55); box-shadow: inset 0 .05em .2em rgb(0 0 0 / .6), 0 .06em 0 rgb(255 224 176 / .14); }
@@ -382,7 +385,7 @@ export default {
       const status = role || (view.phase === 'bid' ? (bid ? (bid.bid ? `叫 ${bid.bid} 分` : '不叫') : view.first === seat ? '首叫' : '等待叫分') : '');
       return el('div', { class: `ddz-plate${turn ? ' on' : ''}${won ? ' win' : ''}`, style: `left:${pos.plate[0]}em;top:${pos.plate[1]}em;width:${L.plateW}em` },
         el('span', { class: 'coin' }, String(idx + 1)),
-        el('div', { class: 'who' }, el('b', {}, name), el('span', {}, status)),
+        el('div', { class: 'who' }, el('b', { title: name }, name), el('span', {}, status)),
         roleEl,
         el('div', { class: `cnt${warn ? ' warn' : ''}` }, cnt, el('small', {}, '张')),
         warn ? el('div', { class: 'alarm' }, count === 1 ? '报单' : '报双') : null,
