@@ -71,6 +71,9 @@ export function createCharacter(db, ownerId, input, { system = false } = {}) {
     if (input.provider === 'custom' && !base) throw new HttpError(400, '自定义接口需要填写地址');
     c.base_url = base && base !== PRESETS[input.provider]?.baseURL ? base : null;
     c.effort = EFFORTS[input.effort] ? input.effort : 'low';
+    if (c.effort === 'off' && !PRESETS[c.provider]?.thinkingParams?.canOff && c.provider !== 'mock') {
+      throw new HttpError(400, `${PRESETS[c.provider]?.name || c.provider} 不能关闭思考`);
+    }
   } else {
     c.style = '';
     c.memory = 0;

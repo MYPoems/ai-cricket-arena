@@ -267,12 +267,13 @@ export class Arena {
       if (parsed.action) {
         return { action: parsed.action, text: res.text, reasoning: res.reasoning, winrate: parsed.winrate, attempts, usage, model: served };
       }
-      attempts.push({ text: res.text, reasoning: res.reasoning, error: parsed.error, attempted: parsed.attempted });
-      this.hub.emit(channel, { type: 'illegal', ply: partial.ply, seat, attempt, error: parsed.error, attempted: parsed.attempted });
+      const error = res.text.trim() ? parsed.error : '只有思考、没有给出回答（可能用完了输出长度上限）';
+      attempts.push({ text: res.text, reasoning: res.reasoning, error, attempted: parsed.attempted });
+      this.hub.emit(channel, { type: 'illegal', ply: partial.ply, seat, attempt, error, attempted: parsed.attempted });
       if (attempt === MAX_RETRIES) {
         return { forfeit: `${game.seatNames[seat]}连续 ${MAX_RETRIES + 1} 次给出无效着法，判负`, text: res.text, reasoning: res.reasoning, attempts, usage, model: served };
       }
-      conv.messages.push({ role: 'user', content: game.retryPrompt(parsed.error, attempt + 1, MAX_RETRIES) });
+      conv.messages.push({ role: 'user', content: game.retryPrompt(error, attempt + 1, MAX_RETRIES) });
     }
     throw new Error('不可能到达');
   }

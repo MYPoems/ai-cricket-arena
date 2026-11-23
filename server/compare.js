@@ -70,9 +70,9 @@ export class Compare {
           const p = game.parseReply(state, r.text);
           winrate = p.winrate;
           if (p.action) { action = p.action; error = null; break; }
-          error = p.error;
+          error = r.text.trim() ? p.error : '只有思考、没有给出回答（可能用完了输出长度上限）';
           this.arena.hub.emit(channel, { type: 'illegal', characterId: c.id, attempt, error });
-          messages.push({ role: 'user', content: game.retryPrompt(p.error, attempt + 1, MAX_RETRIES) });
+          messages.push({ role: 'user', content: game.retryPrompt(error, attempt + 1, MAX_RETRIES) });
         }
       } else if (c.kind === 'builtin') {
         action = (await this.arena.aiPool.run('move', game.fen(state), c.level || 3)).move;

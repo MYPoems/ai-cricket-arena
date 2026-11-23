@@ -34,7 +34,7 @@ export function createDialog({ meta, reloadMeta, base = null, onDone }) {
     ? { ...base, name: `${base.name}·新`, kind: base.kind }
     : { kind: 'model', name: '', avatar: EMOJIS[Math.floor(Math.random() * EMOJIS.length)], provider: 'deepseek', model: meta.presets[0].models[0] || '', base_url: '', effort: 'low', style: '', memory: false, show_legal: true, auto_match: true, daily_limit: 10, daily_tokens: '', level: 3 };
   f.memory = !!f.memory; f.show_legal = f.show_legal !== 0 && f.show_legal !== false; f.auto_match = !!f.auto_match;
-  if (meta.dev) meta.presets = meta.presets.some((p) => p.id === 'mock') ? meta.presets : [...meta.presets, { id: 'mock', name: '模拟模型（开发用）', models: ['mock'], baseURL: null, needsKey: false, ranked: true, showsReasoning: true }];
+  if (meta.dev) meta.presets = meta.presets.some((p) => p.id === 'mock') ? meta.presets : [...meta.presets, { id: 'mock', name: '模拟模型（开发用）', models: ['mock'], baseURL: null, needsKey: false, ranked: true, showsReasoning: true, canDisableThinking: true }];
 
   const body = h('div', { class: 'col', style: { gap: '14px' } });
   const testOut = h('div', { class: 'small' });
@@ -57,7 +57,7 @@ export function createDialog({ meta, reloadMeta, base = null, onDone }) {
       f.kind === 'model' ? [
         h('div', { class: 'grid2' },
           h('label', { class: 'field' }, h('span', {}, '平台'),
-            h('select', { onchange: (e) => { f.provider = e.target.value; f.model = preset()?.models[0] || ''; f.base_url = ''; draw(); } },
+            h('select', { onchange: (e) => { f.provider = e.target.value; f.model = preset()?.models[0] || ''; f.base_url = ''; if (f.effort === 'off' && !preset()?.canDisableThinking) f.effort = 'low'; if (f.provider === 'ollama') f.effort = 'off'; draw(); } },
               ...meta.presets.map((x) => h('option', { value: x.id, selected: x.id === f.provider }, `${x.name}${keys[x.id] === 'none' ? '（未配置密钥）' : ''}`)))),
           h('label', { class: 'field' }, h('span', {}, '模型 ID'),
             h('div', { class: 'keyline' },
@@ -79,7 +79,7 @@ export function createDialog({ meta, reloadMeta, base = null, onDone }) {
           p.note ? h('span', {}, p.note) : null) : null,
         !p.ranked ? h('div', { class: 'small muted' }, '这个平台的选手只能下娱乐赛，不参加排位。') : null,
         h('div', { class: 'field' }, h('span', {}, '推理强度'),
-          h('div', { class: 'seg' }, ...Object.entries(meta.efforts).map(([v, l]) => h('button', { class: f.effort === v ? 'on' : '', onclick: () => { f.effort = v; draw(); } }, l)))),
+          h('div', { class: 'seg' }, ...Object.entries(meta.efforts).filter(([v]) => v !== 'off' || p.canDisableThinking).map(([v, l]) => h('button', { class: f.effort === v ? 'on' : '', onclick: () => { f.effort = v; draw(); } }, l)))),
         h('label', { class: 'field' }, h('span', {}, '风格'),
           h('textarea', { maxlength: 300, placeholder: STYLE_EXAMPLES[Math.floor(Math.random() * STYLE_EXAMPLES.length)], oninput: (e) => { f.style = e.target.value; } }, f.style || '')),
         h('div', { class: 'row', style: { gap: '20px' } },
