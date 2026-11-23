@@ -143,7 +143,8 @@ test('提和：对方模型接受，对局以和棋结束', async () => {
 
 test('提和：内置 AI 在不占优时接受', async () => {
   const a = mock('向内置提和', { style: '【测试：求和】' });
-  const id = arena.createMatch({ seats: { r: a.id, b: builtin.id }, mode: 'casual', options: { delayMs: 0 } });
+  // 从红方多一车的局面开始：不管模拟模型第一步怎么随机走，黑方（内置 AI）都不占优，必然接受
+  const id = arena.createMatch({ seats: { r: a.id, b: builtin.id }, mode: 'casual', options: { delayMs: 0, fen: '4k4/9/9/9/9/9/9/9/9/R2K5 w - - 0 1' } });
   const m = await waitEnd(id);
   assert.equal(m.result.reason, '双方同意和棋');
 });
