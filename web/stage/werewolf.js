@@ -84,6 +84,8 @@ const roleChip = (name) => el('span', { class: 'chip ww-role', style: `--rc:${RO
 /** 行动行：b 标题 + 内容 + 右侧状态 chip */
 const act = (head, body, tag = null, cls = '') => el('div', { class: `act${cls ? ` ${cls}` : ''}` }, el('b', {}, head), body, tag);
 const panel = (title, ...kids) => el('div', { class: 'panel' }, el('div', { class: 'label' }, title), ...kids);
+/** 面板摘要：屏幕放不下时，对局页把面板折成胶囊按钮，按钮上显示这句（只用面板里本来就有的信息） */
+const withSum = (p, sum) => { if (sum) p.dataset.sum = sum; return p; };
 const isNight = (view) => view.phase !== 'over' && (!!view.night || NIGHT_PHASES.has(view.phase));
 const isVoting = (view) => view.phase === 'vote' || view.phase === 'revote';
 const todayVotes = (view) => (view.voteLog || []).filter((v) => v.day === view.day);
@@ -231,7 +233,8 @@ function votePanel(view) {
     if (!view.god) kids.push(el('div', { class: 'ww-empty' }, '计票后公开票型'));
   }
   if (!kids.length) kids.push(el('div', { class: 'ww-empty' }, '发言结束后投票'));
-  return panel('投票', el('div', { class: 'ww-list' }, kids));
+  const sum = isVoting(view) ? `已投 ${(view.voters || []).length - (view.pending || []).length}/${(view.voters || []).length}` : entries.length ? voteOutcome(entries.at(-1)) : '';
+  return withSum(panel('投票', el('div', { class: 'ww-list' }, kids)), sum);
 }
 
 /** 今夜行动：每个本视角能看到的角色一行（上帝视角全部；玩家只有自己的角色和狼队） */
@@ -289,7 +292,7 @@ function deathsPanel(view) {
   const ds = view.deaths || [];
   const rows = ds.map((d) => act(`第 ${d.day} ${d.time === 'night' ? '夜' : '天'}`, el('span', {}, `${no(d.seat)} 号${view.roles?.[d.seat] ? ` · ${view.roles[d.seat]}` : ''}`),
     chip(d.cause ? CAUSE[d.cause] : '死亡', d.cause === 'vote' || !d.cause ? '' : 'red')));
-  return panel('出局', rows.length ? rows : el('div', { class: 'ww-empty' }, '还没有人出局'));
+  return withSum(panel('出局', rows.length ? rows : el('div', { class: 'ww-empty' }, '还没有人出局')), ds.length ? `${ds.length} 人` : '无');
 }
 
 /** 终局：全部身份（终局时 view 是上帝视角） */
@@ -299,7 +302,7 @@ function rolesPanel(view) {
   for (const s of view.seats) { const r = view.roles?.[s]; if (r) (by[r] ||= []).push(s); }
   const rows = ['狼人', '预言家', '女巫', '猎人', '村民'].filter((r) => by[r]).map((r) => el('div', { class: 'act' }, roleChip(r),
     el('span', {}, by[r].map((s) => `${no(s)} 号${alive.has(s) ? '' : '（出局）'}`).join('、'))));
-  return panel('身份', rows);
+  return withSum(panel('身份', rows), by['狼人'] ? `狼人 ${by['狼人'].map(no).join('、')} 号` : '');
 }
 
 export default {

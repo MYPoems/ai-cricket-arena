@@ -69,6 +69,8 @@ const chip = (text, cls = '') => el('span', { class: `chip${cls ? ` ${cls}` : ''
 const roleChip = (name) => el('span', { class: 'chip uc-role', style: `--rc:${ROLE_COLOR[name] || 'var(--gold)'}` }, name);
 const act = (head, body, tag = null, cls = '') => el('div', { class: `act${cls ? ` ${cls}` : ''}` }, el('b', {}, head), body, tag);
 const panel = (title, ...kids) => el('div', { class: 'panel' }, el('div', { class: 'label' }, title), ...kids);
+/** 面板摘要：屏幕放不下时，对局页把面板折成胶囊按钮，按钮上显示这句 */
+const withSum = (p, sum) => { if (sum) p.dataset.sum = sum; return p; };
 const isVoting = (view) => view.phase === 'vote' || view.phase === 'revote';
 
 function countVotes(votes) {
@@ -184,7 +186,8 @@ function votePanel(view) {
     if (!view.god) kids.push(el('div', { class: 'uc-empty' }, '计票后公开票型'));
   }
   if (!kids.length) kids.push(el('div', { class: 'uc-empty' }, '描述结束后投票'));
-  return panel(label, el('div', { class: 'uc-list' }, kids));
+  const sum = isVoting(view) ? `已投 ${(view.voters || []).length - (view.pending || []).length}/${(view.voters || []).length}` : entries.length ? voteOutcome(entries.at(-1)) : '';
+  return withSum(panel(label, el('div', { class: 'uc-list' }, kids)), sum);
 }
 
 /** 历史：每轮的结果（出局者和身份，或无人出局） */

@@ -4,6 +4,7 @@
 
 import { h, api, post, listen, toast, guard, tierBadge, fmtMs, fmtTokens, pct, MODE_NAMES, resultText, modelLine } from './ui.js';
 import { loadRenderer, PALETTE } from '../stage/index.js';
+import { createFold } from './fold.js';
 
 const LINE_KEYS = ['判断', '威胁', '理由', '推断', '计划'];
 const QUALITY_CLASS = { 最佳: 'good', 好棋: 'good', 缓着: 'warn', 失误: 'warn', 大漏着: 'bad' };
@@ -93,6 +94,7 @@ export async function matchView(root, id, { characters }) {
   const seatEls = Object.fromEntries(seats.map((s) => [s, h('div', { class: 'seat' })]));
   const sceneEl = h('div', { class: 'scene' });
   const logSum = h('span', {}, '全部记录');
+  let fold = null;
   const focusEl = h('div', { class: 'focus' });
   if (duo) {
     // 全部行动记录默认收起：发言在焦点区按人看，这里只留给想逐步翻的人
@@ -104,6 +106,10 @@ export async function matchView(root, id, { characters }) {
       h('section', { class: 'stage' }, statusBar, sceneEl, focusEl, h('div', { class: 'duo-stage' }, stage.el), logBox),
       h('div', { class: 'seats' }, ...rightSeats.map((s) => seatEls[s])),
     ));
+    // 放不下时把面板收成胶囊按钮（见 fold.js）；按钮条放在面板的位置上
+    const arenaEl = root.firstElementChild;
+    fold = createFold({ arena: arenaEl, stageCol: arenaEl.querySelector('.stage'), focusEl, panelRoot: stage.el, logBox, moves, logLabel: () => logSum.textContent.replace(/^全部记录\s*·\s*/, '') });
+    logBox.before(fold.el);
   } else {
     root.replaceChildren(h('div', { class: `arena g-${d.game}${winbarOn ? '' : ' no-winbar'}${recordMode ? ' recording' : ''}`, style: { '--aw': aw, '--ah': ah } },
       h('div', { class: 'camp-col' }, ...leftSeats.map((s) => camps[s].el)),
@@ -271,9 +277,14 @@ export async function matchView(root, id, { characters }) {
         hidden ? h('span', { class: 'chip' }, '想法对局结束后公开') : null,
         h('span', { class: 'hint' }, focusSeat ? '' : '点座位换人看'),
         focusSeat ? h('button', { class: 'btn sm ghost', onclick: () => { focusSeat = null; seats.forEach(renderSeat); renderFocus(); } }, '跟随当前') : null),
-      h('div', { class: 'paper said' }, h('span', { class: 'lab' }, said.length ? `说的 · ${said.length} 句` : '说的'), saidBox),
+      // 宣纸右下角淡淡的座号水印：大屏上宣纸撑高时留白有个落点（宣纸矮时不显示，见 app.css）
+      h('div', { class: `paper said${(focusEl.querySelector('.said')?.clientHeight || 0) >= 240 ? ' tall' : ''}` }, h('span', { class: 'wm-no', 'aria-hidden': 'true' }, `${seats.indexOf(seat) + 1}号`), h('span', { class: 'lab' }, said.length ? `说的 · ${said.length} 句` : '说的'), saidBox),
       solo ? null : h('div', { class: `well thought2${live ? ' typing' : ''}` }, h('span', { class: 'lab' }, d.viewer ? '想的' : '想的 · 上帝视角'), h('div', { class: 'tt' }, thoughtText || '思考中…')));
     saidBox.scrollTop = saidBox.scrollHeight;
+    const markScrolled = () => saidBox.classList.toggle('scrolled', saidBox.scrollTop > 2);
+    saidBox.addEventListener('scroll', markScrolled, { passive: true });
+    requestAnimationFrame(markScrolled);
+    fold?.schedule();
   }
 
   function renderCamp(seat) {
@@ -375,6 +386,7 @@ export async function matchView(root, id, { characters }) {
       try { duoInfo = renderer.duoView(view, { movable, actions: movable ? d.humanActions : null, viewer: d.viewer }) || duoInfo; } catch (err) { console.error(err); }
       renderScene();
       seats.forEach(renderSeat);
+      fold?.update();
     }
     if (winbarOn) {
       let e = null;
@@ -692,5 +704,5 @@ export async function matchView(root, id, { characters }) {
         break;
     }
   });
-  return () => { stop(); stopReplay(); document.body.classList.remove('record-mode'); };
+  return () => { stop(); stopReplay(); fold?.destroy(); document.body.classList.remove('record-mode'); };
 }
