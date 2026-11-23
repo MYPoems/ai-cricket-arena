@@ -157,7 +157,8 @@ export class Arena {
    * seats: { seat: characterId }，座位数决定人数；mode: casual / ranked
    * options: { showLegal, delayMs, fen, setup, seed, hideThoughts, series }
    */
-  createMatch({ game: gameId = 'xiangqi', seats, mode = 'casual', options = {}, challenge = null }) {
+  /** origin：auto 自动匹配 / room 组局 / manual 手动开局；每日主动对局上限只算 auto。createdBy：开局的用户 */
+  createMatch({ game: gameId = 'xiangqi', seats, mode = 'casual', options = {}, challenge = null, origin = 'manual', createdBy = null }) {
     const game = getGame(gameId);
     const n = Object.keys(seats || {}).length || game.players.default;
     if (n < game.players.min || n > game.players.max) throw new HttpError(400, `${game.name}需要 ${game.players.min}–${game.players.max} 名选手`);
@@ -216,6 +217,8 @@ export class Arena {
       actions: [],
       challenge,
       conversations: {},
+      origin: ['auto', 'room', 'manual'].includes(origin) ? origin : 'manual',
+      created_by: createdBy,
       created_at: now(),
       started_at: now(),
     };
@@ -687,11 +690,12 @@ ${game.noun || '行动'}：${act}`;
   // ---------- 查询 ----------
 
   summary(matchId) {
-    const m = this.db.get('SELECT id, game, mode, status, seats, result, rating_changes, challenge, created_at, finished_at, actions, options FROM matches WHERE id = ?', matchId);
+    const m = this.db.get('SELECT id, game, mode, status, seats, result, rating_changes, challenge, created_at, finished_at, actions, options, origin, created_by FROM matches WHERE id = ?', matchId);
     if (!m) return null;
     const players = {};
     for (const [seat, cid] of Object.entries(m.seats)) {
-      players[seat] = this.db.get('SELECT id, name, avatar, kind, provider, model, level FROM characters WHERE id = ?', cid);
+      // owner：这只蛐蛐是谁的（组局里显示「谁带来的」）
+      players[seat] = this.db.get('SELECT c.id, c.name, c.avatar, c.kind, c.provider, c.model, c.level, c.owner_id, c.system, u.name AS owner FROM characters c LEFT JOIN users u ON u.id = c.owner_id WHERE c.id = ?', cid);
     }
     let game = null;
     try { game = getGame(m.game); } catch { /* 游戏已下线 */ }
@@ -748,15 +752,17 @@ ${game.noun || '行动'}：${act}`;
   /** 今天某选手已下的盘数和 token 用量 */
   todayUsage(characterId) {
     const t = localDate(new Date());
-    const rows = this.db.all("SELECT id, seats, created_at FROM matches WHERE created_at >= ? AND status != 'aborted'", new Date(Date.now() - 2 * 864e5).toISOString())
+    const rows = this.db.all("SELECT id, seats, created_at, origin, mode FROM matches WHERE created_at >= ? AND status != 'aborted'", new Date(Date.now() - 2 * 864e5).toISOString())
       .filter((r) => localDate(new Date(r.created_at)) === t && Object.values(r.seats).includes(characterId));
+    // 每日上限只算「主动参加」的对局（自动匹配）；被拉进组局、手动开的不算。旧数据没有 origin 时按排位赛算
+    const counted = rows.filter((r) => r.origin === 'auto' || (!r.origin && r.mode !== 'casual'));
     let tokens = 0;
     for (const r of rows) {
       for (const u of this.db.all('SELECT usage FROM turns WHERE match_id = ? AND character_id = ?', r.id, characterId)) {
         tokens += (u.usage?.input || 0) + (u.usage?.output || 0);
       }
     }
-    return { games: rows.length, tokens, matchIds: rows.map((r) => r.id) };
+    return { games: counted.length, all: rows.length, tokens, matchIds: rows.map((r) => r.id) };
   }
 
   busy(characterId) {

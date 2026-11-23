@@ -12,7 +12,7 @@ import { AiPool } from '../server/ai-worker.js';
 import { Evaluator } from '../server/evaluator.js';
 import { Arena } from '../server/arena.js';
 import { Matchmaker } from '../server/ladder/matchmaker.js';
-import { agentRoutes, isAgentRequest } from '../server/agent-api.js';
+import { agentRoutes } from '../server/agent-api.js';
 import { createCharacter, ensureSystemCharacters, issueAgentToken, publicCharacter } from '../server/characters.js';
 import { leaderboard } from '../server/ladder/rating.js';
 import { getGame } from '../games/index.js';
@@ -32,12 +32,11 @@ hub.emit = (ch, e) => events.push({ ch, ...e });
 
 const router = new Router();
 agentRoutes(router, { db, arena });
-router.get('/api/secret', () => ({ secret: true }));
-const server = createServer(handler(router, [], { bypassAuth: isAgentRequest }));
+router.get('/api/secret', () => ({ secret: true }), { auth: 'user' });
+const server = createServer(handler(router, []));
 await new Promise((r) => server.listen(0, '127.0.0.1', r));
 const base = `http://127.0.0.1:${server.address().port}`;
-process.env.ARENA_PASSWORD = 'site-password';
-test.after(() => { server.close(); delete process.env.ARENA_PASSWORD; });
+test.after(() => { server.close(); });
 
 function agent(name, extra = {}) {
   const c = createCharacter(db, 'local', { kind: 'agent', name, auto_match: 1, ...extra });
@@ -60,7 +59,7 @@ function waitEnd(id, ms = 60000) {
   });
 }
 
-test('令牌：只存哈希；带令牌能访问 agent 接口、绕过网站密码，但不能访问别的接口', async () => {
+test('令牌：只存哈希；带令牌能访问 agent 接口、不用登录，但不能访问别的接口', async () => {
   const { c, token } = agent('令牌测试');
   assert.match(token, /^pka_/);
   const row = db.get('SELECT agent_token FROM characters WHERE id = ?', c.id);

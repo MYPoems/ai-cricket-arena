@@ -21,7 +21,9 @@ export function findChrome() {
 }
 
 export class Recorder {
-  constructor({ db, outDir, baseUrl }) {
+  /** sessionToken()：录制用的临时登录会话（不开放观战时也能打开对局页） */
+  constructor({ db, outDir, baseUrl, sessionToken = null }) {
+    this.sessionToken = sessionToken;
     this.db = db;
     this.outDir = outDir;
     this.baseUrl = baseUrl;
@@ -94,7 +96,7 @@ export class Recorder {
     });
     try {
       const page = await browser.newPage();
-      if (process.env.ARENA_PASSWORD) await page.authenticate({ username: 'recorder', password: process.env.ARENA_PASSWORD });
+      if (this.sessionToken) await browser.setCookie({ name: 'dsqq_sid', value: this.sessionToken(), domain: new URL(this.baseUrl).hostname, path: '/', httpOnly: true });
       await page.goto(`${this.baseUrl}/#/match/${job.match_id}?record=1&speed=${job.speed}`, { waitUntil: 'domcontentloaded', timeout: 60e3 });
       await page.waitForSelector('.arena', { timeout: 30e3 });
       await page.evaluate(() => document.fonts.ready);

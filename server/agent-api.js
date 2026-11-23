@@ -6,7 +6,7 @@
 //   POST /api/agent/move               提交 { turn_id, reply 或 action, model?, usage? }，返回判定结果
 //   POST /api/agent/mcp                同样的能力做成 MCP 工具（Streamable HTTP，JSON 响应）
 //
-// 令牌只能操作这一名选手；agent 拿到的局面和提示词与 API 模型选手完全一样（隐藏信息游戏只有本座位能看到的）。
+// 令牌只能操作这一名选手，不需要登录；agent 拿到的局面和提示词与 API 模型选手完全一样（隐藏信息游戏只有本座位能看到的）。
 
 import { agentByToken, agentOnline } from './characters.js';
 import { HttpError } from './http.js';
@@ -20,8 +20,8 @@ function bearer(req) {
   return m ? m[1] : null;
 }
 
-/** 带 agent 令牌的请求（跳过网站访问密码，由路由自己校验令牌） */
-export const isAgentRequest = (req, path) => path.startsWith('/api/agent/') && /^pka_/.test(bearer(req) || '');
+// agent 接口用选手自己的令牌鉴权，不需要登录会话
+const ANY = { auth: 'any' };
 
 export function agentRoutes(router, { db, arena }) {
   function auth(req) {
@@ -111,13 +111,13 @@ export function agentRoutes(router, { db, arena }) {
     return Promise.race([verdict, timeout]);
   }
 
-  router.get('/api/agent/me', ({ req }) => me(auth(req)));
+  router.get('/api/agent/me', ({ req }) => me(auth(req)), ANY);
   router.get('/api/agent/turn', async ({ req, query }) => {
     const c = auth(req);
     return { turn: turnJson(await waitTurn(c, query.wait ?? 0, req), req) };
-  });
-  router.post('/api/agent/think', ({ req, body }) => think(auth(req), body));
-  router.post('/api/agent/move', ({ req, body }) => move(auth(req), body));
+  }, ANY);
+  router.post('/api/agent/think', ({ req, body }) => think(auth(req), body), ANY);
+  router.post('/api/agent/move', ({ req, body }) => move(auth(req), body), ANY);
 
   // ---------- MCP（Streamable HTTP，无状态，只用 JSON 响应） ----------
   const TOOLS = [
@@ -195,6 +195,6 @@ export function agentRoutes(router, { db, arena }) {
     const out = Array.isArray(body) ? (await Promise.all(body.map(rpc))).filter(Boolean) : await rpc(body);
     if (out === null || (Array.isArray(out) && !out.length)) { res.writeHead(202); res.end(); return undefined; }
     return out;
-  });
-  router.get('/api/agent/mcp', ({ res }) => { res.writeHead(405, { Allow: 'POST' }); res.end(); });
+  }, ANY);
+  router.get('/api/agent/mcp', ({ res }) => { res.writeHead(405, { Allow: 'POST' }); res.end(); }, ANY);
 }

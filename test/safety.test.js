@@ -13,7 +13,7 @@ import { getGame } from '../games/index.js';
 async function withServer(fn) {
   const router = new Router();
   router.get('/api/ping', () => ({ ok: true }));
-  router.post('/api/echo', ({ body }) => body);
+  router.post('/api/echo', ({ body }) => body, { auth: 'any' });
   const server = createServer(handler(router, []));
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   try {

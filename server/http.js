@@ -1,8 +1,7 @@
-// 极简 HTTP 框架：路由、JSON、静态文件、SSE 推送。
+// 极简 HTTP 框架：路由（带权限级别）、JSON、静态文件、SSE 推送。
 
 import { createReadStream, existsSync, statSync } from 'node:fs';
 import { extname, join, normalize, resolve } from 'node:path';
-import { timingSafeEqual } from 'node:crypto';
 
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
@@ -22,16 +21,23 @@ export class Router {
     this.routes = [];
   }
 
-  on(method, pattern, handler) {
+  /**
+   * opts.auth：谁能调用。
+   *   any    任何人（登录、注册、agent 自己的令牌接口）
+   *   public 登录用户；开放观战时游客也可以（GET 的默认值）
+   *   user   登录用户（写操作的默认值）
+   *   admin  庄家
+   */
+  on(method, pattern, handler, opts = {}) {
     const keys = [];
     const re = new RegExp(`^${pattern.replace(/:(\w+)/g, (_, k) => { keys.push(k); return '([^/]+)'; })}$`);
-    this.routes.push({ method, re, keys, handler });
+    this.routes.push({ method, re, keys, handler, auth: opts.auth || (method === 'GET' ? 'public' : 'user') });
   }
 
-  get(p, h) { this.on('GET', p, h); }
-  post(p, h) { this.on('POST', p, h); }
-  patch(p, h) { this.on('PATCH', p, h); }
-  delete(p, h) { this.on('DELETE', p, h); }
+  get(p, h, o) { this.on('GET', p, h, o); }
+  post(p, h, o) { this.on('POST', p, h, o); }
+  patch(p, h, o) { this.on('PATCH', p, h, o); }
+  delete(p, h, o) { this.on('DELETE', p, h, o); }
 
   match(method, path) {
     for (const r of this.routes) {
@@ -39,7 +45,7 @@ export class Router {
       const m = r.re.exec(path);
       if (!m) continue;
       try {
-        return { handler: r.handler, params: Object.fromEntries(r.keys.map((k, i) => [k, decodeURIComponent(m[i + 1])])) };
+        return { handler: r.handler, auth: r.auth, params: Object.fromEntries(r.keys.map((k, i) => [k, decodeURIComponent(m[i + 1])])) };
       } catch {
         throw new HttpError(400, '请求地址不合法');
       }
@@ -49,7 +55,7 @@ export class Router {
 }
 
 async function readJson(req) {
-  // 只接受 JSON：跨站的表单提交带不了这个类型（浏览器会自动带上 Basic 认证，不能只靠密码）
+  // 只接受同源 JSON：跨站的表单提交带不了这个类型，浏览器又会自动带上登录 Cookie
   if (!/^application\/json\b/i.test(req.headers['content-type'] || '')) throw new HttpError(415, '请求必须是 JSON');
   const sameOrigin = !req.headers.origin || (() => { try { return new URL(req.headers.origin).host === req.headers.host; } catch { return false; } })();
   if (!sameOrigin) throw new HttpError(403, '不接受跨站请求');
@@ -95,22 +101,10 @@ function serveStatic(req, res, path, mounts) {
 }
 
 /**
- * 访问密码：设置了 ARENA_PASSWORD 时，所有页面和接口都要求 HTTP Basic 认证（用户名随意）。
- * 这是上线账号系统之前的临时保护，避免挂到公网后别人用你的 API Key。
+ * resolveUser(req)：从登录会话找出用户（没登录返回 null）；publicView()：游客能不能观战（只读接口）。
+ * 静态页面总是能打开（登录页要能加载），接口按路由的 auth 级别检查。
  */
-function authorized(req) {
-  const pw = process.env.ARENA_PASSWORD;
-  if (!pw) return true;
-  const m = /^Basic\s+(.+)$/i.exec(req.headers.authorization || '');
-  if (!m) return false;
-  const decoded = Buffer.from(m[1], 'base64').toString('utf8');
-  const given = decoded.slice(decoded.indexOf(':') + 1);
-  const a = Buffer.from(given);
-  const b = Buffer.from(pw);
-  return a.length === b.length && timingSafeEqual(a, b);
-}
-
-export function handler(router, mounts, { bypassAuth = () => false } = {}) {
+export function handler(router, mounts, { resolveUser = () => null, publicView = () => true } = {}) {
   return async (req, res) => {
     let url;
     try {
@@ -120,18 +114,16 @@ export function handler(router, mounts, { bypassAuth = () => false } = {}) {
       res.end('请求地址不合法');
       return;
     }
-    // bypassAuth：自带 agent 用自己的令牌访问 /api/agent/*，不需要网站访问密码（路由里校验令牌）
-    if (!authorized(req) && !bypassAuth(req, url.pathname)) {
-      res.writeHead(401, { 'WWW-Authenticate': 'Basic realm="AI Arena", charset="UTF-8"', 'Content-Type': 'text/plain; charset=utf-8' });
-      res.end('需要访问密码');
-      return;
-    }
     try {
       if (url.pathname.startsWith('/api/')) {
         const m = router.match(req.method, url.pathname);
         if (!m) throw new HttpError(404, '接口不存在');
+        req.user = resolveUser(req);
+        if (m.auth === 'public' && !req.user && !publicView()) throw new HttpError(401, '请先登录');
+        if ((m.auth === 'user' || m.auth === 'admin') && !req.user) throw new HttpError(401, '请先登录');
+        if (m.auth === 'admin' && req.user.role !== 'admin') throw new HttpError(403, '只有庄家可以这样做');
         const body = ['POST', 'PATCH', 'PUT', 'DELETE'].includes(req.method) ? await readJson(req) : {};
-        const out = await m.handler({ req, res, params: m.params, query: Object.fromEntries(url.searchParams), body });
+        const out = await m.handler({ req, res, params: m.params, query: Object.fromEntries(url.searchParams), body, user: req.user });
         if (out !== undefined && !res.headersSent) sendJson(res, 200, out);
         return;
       }

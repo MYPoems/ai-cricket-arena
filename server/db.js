@@ -179,6 +179,24 @@ export function openDb(file) {
   if (!ccols.has('agent_timeout')) db.exec('ALTER TABLE characters ADD COLUMN agent_timeout INTEGER');
   if (!ccols.has('last_seen')) db.exec('ALTER TABLE characters ADD COLUMN last_seen TEXT');
   db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_token ON characters(agent_token)');
+  // 账号系统：登录名、密码哈希、角色（admin 庄家 / user）、状态（pending 待审批 / active / rejected / disabled）
+  const ucols = new Set(db.prepare('PRAGMA table_info(users)').all().map((c) => c.name));
+  for (const [col, type] of [['username', 'TEXT'], ['pass_hash', 'TEXT'], ['role', "TEXT NOT NULL DEFAULT 'user'"], ['status', "TEXT NOT NULL DEFAULT 'active'"], ['note', 'TEXT'], ['reviewed_at', 'TEXT'], ['reviewed_by', 'TEXT']]) {
+    if (!ucols.has(col)) db.exec(`ALTER TABLE users ADD COLUMN ${col} ${type}`);
+  }
+  db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_username ON users(username)');
+  db.exec(`CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, created_at TEXT NOT NULL, expires_at TEXT NOT NULL);
+    CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);`);
+  // 对局：谁开的、怎么来的（auto 自动匹配 / room 组局 / manual 手动开局）；每日上限只算 auto
+  const mcols = new Set(db.prepare('PRAGMA table_info(matches)').all().map((c) => c.name));
+  if (!mcols.has('created_by')) db.exec('ALTER TABLE matches ADD COLUMN created_by TEXT');
+  if (!mcols.has('origin')) db.exec('ALTER TABLE matches ADD COLUMN origin TEXT');
+  // 组局：房主开房，大家把自己的 AI 蛐蛐拉进座位，坐满后房主开局
+  db.exec(`CREATE TABLE IF NOT EXISTS rooms (
+    id TEXT PRIMARY KEY, game TEXT NOT NULL, players INTEGER NOT NULL, title TEXT NOT NULL, host_id TEXT NOT NULL,
+    status TEXT NOT NULL, seats TEXT NOT NULL DEFAULT '{}', options TEXT NOT NULL DEFAULT '{}', match_id TEXT,
+    created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+    CREATE INDEX IF NOT EXISTS idx_rooms_status ON rooms(status);`);
   if (!db.prepare('SELECT 1 FROM users WHERE id = ?').get('local')) {
     db.prepare('INSERT INTO users (id, name, created_at) VALUES (?, ?, ?)').run('local', '我', now());
   }

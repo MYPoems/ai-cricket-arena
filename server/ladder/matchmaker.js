@@ -59,7 +59,7 @@ export class Matchmaker {
       const u = this.arena.todayUsage(c.id);
       if (u.games >= c.daily_limit) continue;
       if (c.daily_tokens && u.tokens >= c.daily_tokens) continue;
-      if (!c.system && this.arena.busy(c.id)) continue;
+      // AI 蛐蛐可以同时参加多盘对局，不再因为正在下别的对局而跳过
       out.push({ ...c, usage: u });
     }
     if (s.globalDailyTokens) {
@@ -104,7 +104,7 @@ export class Matchmaker {
           const seatIds = game.seats(n);
           const seats = Object.fromEntries(seatIds.map((sid, i) => [sid, players[i].id]));
           const series = game.rankedSeries ? { id: `s_${Date.now().toString(36)}`, leg: 1, of: game.rankedSeries.legs, seed: Math.floor(Math.random() * 2 ** 31) } : null;
-          const id = this.arena.createMatch({ game: g.id, seats, mode: 'ranked', challenge: { by: ch.id, text: pick.declaration }, options: series ? { series, seed: series.seed } : {} });
+          const id = this.arena.createMatch({ game: g.id, seats, mode: 'ranked', origin: 'auto', challenge: { by: ch.id, text: pick.declaration }, options: series ? { series, seed: series.seed } : {} });
           this.#log(`${ch.name} 向 ${pick.opponent.name} 发起${game.name}挑战：${pick.declaration || '（无宣言）'}`);
           return id;
         }
@@ -142,7 +142,7 @@ export class Matchmaker {
       ...(row.options.hideThoughts !== undefined ? { hideThoughts: row.options.hideThoughts } : {}),
     };
     try {
-      const id = this.arena.createMatch({ game: sum.game, seats, mode: 'ranked', options });
+      const id = this.arena.createMatch({ game: sum.game, seats, mode: 'ranked', origin: 'auto', options });
       this.#log(`${game.name}系列赛第 ${next.leg}/${next.of} 盘开始`);
       return id;
     } catch (e) {
