@@ -4,6 +4,7 @@ import * as R from '../games/xiangqi/rules.js';
 import { moveToChinese, chineseToMove } from '../games/xiangqi/notation.js';
 import { chooseMove } from '../games/xiangqi/ai.js';
 import xiangqi from '../games/xiangqi/index.js';
+import { replay } from '../games/index.js';
 
 const movesFrom = (fen, from) =>
   R.legalMoves(R.parseFen(fen)).map(R.moveToIccs).filter((m) => !from || m.startsWith(from)).sort();
@@ -124,25 +125,26 @@ test('中文记谱解析，兼容繁体和半角数字', () => {
 
 test('解析模型回答', () => {
   const s = xiangqi.create();
-  const ok = xiangqi.parseReply(s, '判断：开局均势\n威胁：无\n理由：中炮\n胜率：52%\n着法：h2e2');
+  const ok = xiangqi.parseReply(s, 'r', '判断：开局均势\n威胁：无\n理由：中炮\n胜率：52%\n着法：h2e2');
   assert.deepEqual(ok, { action: 'h2e2', attempted: 'h2e2', winrate: 52, error: null });
-  assert.equal(xiangqi.parseReply(s, '着法：炮二平五').action, 'h2e2');
-  assert.equal(xiangqi.parseReply(s, '我决定走 H2-E2').action, 'h2e2');
-  assert.match(xiangqi.parseReply(s, '着法：b0b5').error, /不符合规则/);
-  assert.match(xiangqi.parseReply(s, '着法：e5e6').error, /没有棋子/);
-  assert.match(xiangqi.parseReply(s, '着法：h7e7').error, /对方的棋子/);
-  assert.match(xiangqi.parseReply(s, '我想想').error, /没有找到着法/);
+  assert.equal(xiangqi.parseReply(s, 'r', '着法：炮二平五').action, 'h2e2');
+  assert.equal(xiangqi.parseReply(s, 'r', '我决定走 H2-E2').action, 'h2e2');
+  assert.match(xiangqi.parseReply(s, 'r', '着法：b0b5').error, /不符合规则/);
+  assert.match(xiangqi.parseReply(s, 'r', '着法：e5e6').error, /没有棋子/);
+  assert.match(xiangqi.parseReply(s, 'r', '着法：h7e7').error, /对方的棋子/);
+  assert.match(xiangqi.parseReply(s, 'r', '我想想').error, /没有找到着法/);
 });
 
 test('游戏定义：走棋、记谱、终局名次、重建', () => {
   let s = xiangqi.create();
-  s = xiangqi.apply(s, 'h2e2');
-  s = xiangqi.apply(s, 'h9g7');
+  s = xiangqi.apply(s, 'r', 'h2e2');
+  s = xiangqi.apply(s, 'b', 'h9g7');
+  assert.throws(() => xiangqi.apply(s, 'b', 'h7e7'), /不是黑方走棋/);
   assert.deepEqual(s.moves.map((m) => m.cn), ['炮二平五', '马８进７']);
-  assert.equal(xiangqi.toMove(s), 'r');
-  const again = xiangqi.replay(R.START_FEN, ['h2e2', 'h9g7']);
+  assert.deepEqual(xiangqi.pending(s), ['r']);
+  const again = replay(xiangqi, { players: 2, actions: ['h2e2', { seat: 'b', action: 'h9g7' }] });
   assert.equal(xiangqi.fen(again), xiangqi.fen(s));
-  const mate = xiangqi.create({ fen: 'R3k4/1R7/9/9/9/9/9/9/9/3K5 b - - 0 1' });
+  const mate = xiangqi.create({ setup: { fen: 'R3k4/1R7/9/9/9/9/9/9/9/3K5 b - - 0 1' } });
   assert.deepEqual(xiangqi.outcome(mate), { over: true, winner: 'r', ranks: { r: 1, b: 2 }, reason: '将死' });
 });
 

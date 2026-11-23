@@ -1,6 +1,7 @@
-// 电子斗蛐蛐核心：创建对局、轮流向各座位的玩家要着法、推送实时事件、结算积分。
+// 电子斗蛐蛐核心：创建对局、向该出手的座位要行动（可以多个座位同时行动）、推送实时事件、结算积分。
+// 游戏规则全部由 games/ 下的游戏定义负责，这里只负责调度。
 
-import { getGame } from '../games/index.js';
+import { getGame, replay } from '../games/index.js';
 import { newId, now } from './db.js';
 import { callModel } from './providers/index.js';
 import { getCharacter, canRank } from './characters.js';
@@ -8,12 +9,12 @@ import { applyResult, PLACEMENT_GAMES } from './ladder/rating.js';
 import { moveQuality } from './evaluator.js';
 import { HttpError } from './http.js';
 
-export const MAX_RETRIES = 3; // 不合法着法最多重走 3 次，仍不合法判负
+export const MAX_RETRIES = 3; // 无效行动最多重来 3 次，仍无效判负
 const NOTES_IN_PROMPT = 5;
 
 class Abort extends Error {}
 
-// ---------- 提和 ----------
+// ---------- 提和（只用于支持提和的两人棋类游戏） ----------
 // 任一方在走棋时可以附带提出和棋；对方下一步可以接受（对局以和棋结束），照常走棋即视为拒绝。
 // 被拒后同一方 20 步（各 10 回合）内再提会被忽略，避免反复提和。
 export const DRAW_COOLDOWN_PLIES = 20;
@@ -25,7 +26,6 @@ function drawState(m) {
   if (!m.options.draw) m.options.draw = { offers: [] };
   return m.options.draw;
 }
-/** 对 seat 而言，对方提出、尚未回应的和棋 */
 function pendingOfferTo(m, seat) {
   const o = drawState(m).offers.at(-1);
   return o && o.status === 'pending' && o.seat !== seat ? o : null;
@@ -35,14 +35,13 @@ function canOffer(m, seat, ply) {
   return !last || ply - last.ply >= DRAW_COOLDOWN_PLIES;
 }
 
-const today = () => {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-};
-const localDate = (iso) => {
-  const d = new Date(iso);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-};
+const localDate = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+/** 对局记录 → 重建用的参数；兼容只有 start_fen 的旧对局 */
+export function recordOf(m) {
+  const s = m.setup || {};
+  return { setup: s.setup || (m.start_fen ? { fen: m.start_fen } : {}), seed: s.seed, players: s.players || Object.keys(m.seats).length, actions: m.actions };
+}
 
 export class Arena {
   constructor({ db, hub, aiPool, evaluator, ownerId = 'local' }) {
@@ -57,40 +56,52 @@ export class Arena {
   // ---------- 创建 ----------
 
   /**
-   * seats: { seat: characterId }；mode: casual / ranked
-   * options: { showLegal, delayMs, fen }
+   * seats: { seat: characterId }，座位数决定人数；mode: casual / ranked
+   * options: { showLegal, delayMs, fen, setup, seed, hideThoughts, series }
    */
   createMatch({ game: gameId = 'xiangqi', seats, mode = 'casual', options = {}, challenge = null }) {
     const game = getGame(gameId);
+    const n = Object.keys(seats || {}).length || game.players.default;
+    if (n < game.players.min || n > game.players.max) throw new HttpError(400, `${game.name}需要 ${game.players.min}–${game.players.max} 名选手`);
+    const seatIds = game.seats(n);
     const chars = {};
-    for (const seat of game.seats) {
-      if (!seats?.[seat]) throw new HttpError(400, `请为${game.seatNames[seat]}选择选手`);
+    for (const seat of seatIds) {
+      if (!seats?.[seat]) throw new HttpError(400, `请为${game.seatName(seat)}选择选手`);
       chars[seat] = getCharacter(this.db, seats[seat]);
     }
     const humans = Object.values(chars).filter((c) => c.kind === 'human');
+    if (humans.length > 1) throw new HttpError(400, '目前一盘里只能有一位玩家本人');
+    const setup = { ...(options.setup || {}), ...(options.fen ? { fen: options.fen } : {}) };
     if (mode === 'ranked') {
       const bad = Object.values(chars).filter((c) => !canRank(this.db, c));
-      if (bad.length) throw new HttpError(400, `${bad.map((c) => c.name).join('、')} 不能参加排位赛（本地模型和自定义接口只能下娱乐赛）`);
-      if (options.fen) throw new HttpError(400, '排位赛只能从标准开局开始');
-      if (new Set(Object.values(seats)).size < game.seats.length) throw new HttpError(400, '排位赛不能自己对自己');
+      if (bad.length) throw new HttpError(400, `${bad.map((c) => c.name).join('、')} 不能参加排位赛（本机订阅和自定义接口只能下娱乐赛）`);
+      if (setup.fen) throw new HttpError(400, '排位赛只能从标准开局开始');
+      const ids = Object.values(seats);
+      const system = new Set(this.db.all('SELECT id FROM characters WHERE system = 1').map((r) => r.id));
+      if (new Set(ids.filter((id) => !system.has(id))).size < ids.filter((id) => !system.has(id)).length) throw new HttpError(400, '排位赛里同一名选手不能占多个座位');
     }
-    if (humans.length && options.fen) {
-      // 允许玩家从任意局面开始娱乐赛
+    const seed = Number.isInteger(options.seed) ? options.seed : Math.floor(Math.random() * 2 ** 31);
+    let state;
+    try {
+      state = game.create({ players: n, seed, setup });
+    } catch (e) {
+      throw new HttpError(400, `开局参数不合法：${e.message}`);
     }
-    const state = game.create({ fen: options.fen });
-    const placement = mode === 'ranked' && Object.values(chars).some((c) => this.played(c.id, gameId) < PLACEMENT_GAMES);
+    const placement = mode === 'ranked' && Object.values(chars).some((c) => !c.system && this.played(c.id, gameId) < PLACEMENT_GAMES);
     const m = {
       id: newId('m'),
       game: gameId,
       mode: mode === 'ranked' ? (placement ? 'placement' : 'ranked') : 'casual',
       status: 'running',
-      start_fen: state.startFen,
+      start_fen: setup.fen || (game.fen ? game.fen(state) : null),
+      setup: { setup, seed, players: n },
       options: {
         showLegal: options.showLegal !== false,
         delayMs: Math.max(0, Math.min(10000, Number(options.delayMs ?? (mode === 'casual' ? 600 : 0)))),
         hideThoughts: options.hideThoughts ?? humans.length > 0,
+        ...(options.series ? { series: options.series } : {}),
       },
-      seats,
+      seats: Object.fromEntries(seatIds.map((s) => [s, seats[s]])),
       actions: [],
       challenge,
       conversations: {},
@@ -107,17 +118,20 @@ export class Arena {
     return this.db.get('SELECT played FROM ratings WHERE character_id = ? AND game = ?', characterId, gameId)?.played || 0;
   }
 
+  humanSeat(m) {
+    for (const [seat, cid] of Object.entries(m.seats)) {
+      if (this.db.get('SELECT kind FROM characters WHERE id = ?', cid)?.kind === 'human') return seat;
+    }
+    return null;
+  }
+
   // ---------- 运行 ----------
 
-  /** 启动或恢复一盘对局 */
   run(matchId) {
     if (this.live.has(matchId)) return;
     const m = this.db.get('SELECT * FROM matches WHERE id = ?', matchId);
     if (!m || m.status !== 'running') return;
-    const rt = {
-      paused: false, step: false, abort: new AbortController(), human: null,
-      partial: null, wake: null, evalChain: Promise.resolve(),
-    };
+    const rt = { paused: false, step: false, abort: new AbortController(), humans: {}, partials: {}, wake: null };
     this.live.set(matchId, rt);
     this.#loop(m, rt)
       .catch((err) => {
@@ -130,23 +144,38 @@ export class Arena {
       .finally(() => this.live.delete(matchId));
   }
 
+  /** 局面评估（有引擎的游戏）；返回 { raw, e0 }，e0 为第一个座位的期望得分 */
+  async #evaluate(game, state, seatIds) {
+    if (!game.evalSpec) return null;
+    const spec = game.evalSpec(state);
+    if (!spec) return null;
+    const ev = await this.evaluator.evaluate(spec).catch(() => null);
+    if (!ev) return null;
+    const e0 = spec.persp === seatIds[0] ? ev.e : 1 - ev.e;
+    return { raw: ev, e0, persp: spec.persp };
+  }
+
   async #loop(m, rt) {
     const game = getGame(m.game);
-    let state = game.replay(m.start_fen, m.actions);
+    const seatIds = Object.keys(m.seats);
+    let state = replay(game, recordOf(m));
     const channel = `match:${m.id}`;
-    // 起始局面评估（胜率条的第一个点）
-    if (!m.options.startEval) {
-      const ev = await this.evaluator.evaluate(game.fen(state)).catch(() => null);
+    const hidden = !!game.features?.hidden;
+    const human = this.humanSeat(m);
+    const publicView = () => (hidden && human ? null : game.view(state, null));
+
+    if (!m.options.startEval && game.evalSpec) {
+      const ev = await this.#evaluate(game, state, seatIds);
       if (ev) {
-        m.options.startEval = { e: ev.e, best: ev.best, source: ev.source, redE: state.pos.side === 'r' ? ev.e : 1 - ev.e };
+        m.options.startEval = { e: ev.raw.e, best: ev.raw.best, source: ev.raw.source, e0: ev.e0, redE: ev.e0 };
         this.db.update('matches', { id: m.id }, { options: m.options });
         this.hub.emit(channel, { type: 'eval', ply: 0, eval: m.options.startEval });
       }
     }
-    let prevEval = m.options.startEval || null;
-    if (m.actions.length) {
-      const last = this.db.get('SELECT eval FROM turns WHERE match_id = ? ORDER BY ply DESC LIMIT 1', m.id);
-      prevEval = last?.eval?.raw || prevEval;
+    let prevEval = null;
+    if (game.evalSpec) {
+      const last = m.actions.length ? this.db.get('SELECT eval FROM turns WHERE match_id = ? AND eval IS NOT NULL ORDER BY ply DESC LIMIT 1', m.id) : null;
+      prevEval = last?.eval ? { raw: last.eval.raw, persp: last.eval.persp } : m.options.startEval ? { raw: { e: m.options.startEval.e, best: m.options.startEval.best }, persp: game.evalSpec(state)?.persp } : null;
     }
 
     while (true) {
@@ -155,65 +184,72 @@ export class Arena {
       await this.#waitIfPaused(rt);
       if (rt.abort.signal.aborted) throw new Abort();
 
-      const seat = game.toMove(state);
-      const ch = getCharacter(this.db, m.seats[seat]);
-      const ply = m.actions.length + 1;
-      rt.partial = { ply, seat, characterId: ch.id, text: '', reasoning: '', attempts: [] };
-      this.hub.emit(channel, { type: 'turn_start', ply, seat, characterId: ch.id, kind: ch.kind });
-
-      const t0 = Date.now();
-      const offer = pendingOfferTo(m, seat);
-      const res = await this.#getMove({ m, rt, game, state, seat, ch, channel, offer });
-      const latency = Date.now() - t0;
-      if (res.acceptDraw && offer) {
-        offer.status = 'accepted';
-        offer.answerPly = ply;
-        this.db.update('matches', { id: m.id }, { options: m.options, conversations: m.conversations });
-        this.#saveTurn(m, { ply, seat, ch, res, latency, action: null, label: '接受和棋' });
-        this.hub.emit(channel, { type: 'draw', draw: m.options.draw });
-        const ranks = Object.fromEntries(game.seats.map((s2) => [s2, 1]));
-        return this.#finish(m, rt, { over: true, winner: null, ranks, reason: '双方同意和棋' });
-      }
-      if (res.forfeit) {
-        this.#saveTurn(m, { ply, seat, ch, res, latency, action: null });
-        return this.#finish(m, rt, game.forfeit(state, seat, res.forfeit));
-      }
-
-      const label = game.label(state, res.action);
-      const before = state;
-      state = game.apply(state, res.action);
-      m.actions.push(res.action);
-      let drawChanged = false;
-      if (offer) { offer.status = 'declined'; offer.answerPly = ply; drawChanged = true; }
-      if (res.offerDraw) {
-        drawState(m).offers.push({ ply, seat, status: canOffer(m, seat, ply) ? 'pending' : 'ignored' });
-        drawChanged = true;
-      }
-      if (drawChanged) this.db.update('matches', { id: m.id }, { options: m.options });
-      this.db.update('matches', { id: m.id }, { actions: m.actions, conversations: m.conversations });
-      this.#saveTurn(m, { ply, seat, ch, res, latency, action: res.action, label });
-      rt.partial = null;
-      this.hub.emit(channel, {
-        type: 'move', ply, seat, characterId: ch.id, action: res.action, label,
-        analysis: m.options.hideThoughts && ch.kind === 'model' ? null : res.text || null,
-        selfWinrate: m.options.hideThoughts && ch.kind === 'model' ? null : res.winrate ?? null, latency, usage: res.usage || null, view: game.view(state),
+      const pend = game.pending(state);
+      if (!pend.length) throw new Error('游戏没有结束，但没有座位需要行动');
+      const base = m.actions.length;
+      const jobs = pend.map((seat, i) => {
+        const ch = getCharacter(this.db, m.seats[seat]);
+        const ply = base + i + 1;
+        rt.partials[seat] = { ply, seat, characterId: ch.id, text: '', reasoning: '', attempts: [] };
+        this.hub.emit(channel, { type: 'turn_start', ply, seat, characterId: ch.id, kind: ch.kind, simultaneous: pend.length > 1 });
+        const offer = game.features?.draw ? pendingOfferTo(m, seat) : null;
+        const t0 = Date.now();
+        return this.#getMove({ m, rt, game, state, seat, ch, channel, offer, ply })
+          .then((res) => ({ seat, ch, ply, offer, res, latency: Date.now() - t0 }));
       });
-      if (drawChanged) this.hub.emit(channel, { type: 'draw', draw: m.options.draw });
+      const results = await Promise.all(jobs);
 
-      // 评估走后局面，计算这步棋的质量（异步，不挡住对局）
-      const evBefore = prevEval;
-      const fenAfter = game.fen(state);
-      const sideAfter = state.pos.side;
-      const evalP = this.evaluator.evaluate(fenAfter).then((after) => {
-        const q = evBefore ? moveQuality(evBefore, after, res.action) : null;
-        const ev = { raw: after, redE: sideAfter === 'r' ? after.e : 1 - after.e, source: after.source, ...(q ? { quality: q } : {}) };
-        this.db.update('turns', { match_id: m.id, ply }, { eval: ev });
-        this.hub.emit(channel, { type: 'eval', ply, eval: ev });
-        return after;
-      }).catch(() => null);
-      prevEval = await evalP; // 顺序评估，保证走前评估可用
-      void before;
+      for (const r of results) {
+        const { seat, ch, ply, offer, res, latency } = r;
+        if (res.acceptDraw && offer) {
+          offer.status = 'accepted';
+          offer.answerPly = ply;
+          this.db.update('matches', { id: m.id }, { options: m.options, conversations: m.conversations });
+          this.#saveTurn(m, { ply, seat, ch, res, latency, action: null, label: '接受和棋' });
+          this.hub.emit(channel, { type: 'draw', draw: m.options.draw });
+          return this.#finish(m, rt, { over: true, winner: null, ranks: Object.fromEntries(seatIds.map((s) => [s, 1])), reason: '双方同意和棋' });
+        }
+        if (res.forfeit) {
+          this.#saveTurn(m, { ply, seat, ch, res, latency, action: null });
+          return this.#finish(m, rt, game.forfeit(state, seat, res.forfeit));
+        }
+      }
 
+      for (const r of results) {
+        const { seat, ch, ply, offer, res, latency } = r;
+        const label = game.label(state, seat, res.action);
+        state = game.apply(state, seat, res.action);
+        m.actions.push({ seat, action: res.action });
+        let drawChanged = false;
+        if (offer) { offer.status = 'declined'; offer.answerPly = ply; drawChanged = true; }
+        if (res.offerDraw && game.features?.draw) {
+          drawState(m).offers.push({ ply, seat, status: canOffer(m, seat, ply) ? 'pending' : 'ignored' });
+          drawChanged = true;
+        }
+        this.db.update('matches', { id: m.id }, { actions: m.actions, conversations: m.conversations, options: m.options });
+        this.#saveTurn(m, { ply, seat, ch, res, latency, action: res.action, label });
+        delete rt.partials[seat];
+        const hideModel = m.options.hideThoughts && ch.kind === 'model';
+        this.hub.emit(channel, {
+          type: 'move', ply, seat, characterId: ch.id, action: res.action, label,
+          analysis: hideModel ? null : res.text || null,
+          selfWinrate: hideModel ? null : res.winrate ?? null, latency, usage: res.usage || null, view: publicView(),
+        });
+        if (drawChanged) this.hub.emit(channel, { type: 'draw', draw: m.options.draw });
+
+        // 评估走后局面、计算这步的质量（顺序执行，保证走前评估可用）
+        if (game.evalSpec) {
+          const after = await this.#evaluate(game, state, seatIds);
+          if (after) {
+            let quality = null;
+            if (prevEval?.raw && prevEval.persp === seat && after.persp !== seat) quality = moveQuality(prevEval.raw, after.raw, res.action);
+            const ev = { raw: after.raw, persp: after.persp, e0: after.e0, redE: after.e0, source: after.raw.source, ...(quality ? { quality } : {}) };
+            this.db.update('turns', { match_id: m.id, ply }, { eval: ev });
+            this.hub.emit(channel, { type: 'eval', ply, eval: ev });
+            prevEval = after;
+          }
+        }
+      }
       if (m.options.delayMs) await sleep(m.options.delayMs, rt);
     }
   }
@@ -238,26 +274,29 @@ export class Arena {
   // ---------- 各类玩家 ----------
 
   async #getMove(ctx) {
-    const { ch, game, state, offer } = ctx;
-    // 内置 AI 和引擎：局面评估里自己不占优（期望得分低于 55%）就接受和棋；随机走子不接受
-    if (offer && (ch.kind === 'builtin' || ch.kind === 'engine')) {
-      const ev = await this.evaluator.evaluate(game.fen(state)).catch(() => null);
-      if (ev && ev.e < 0.55) return { acceptDraw: true };
+    const { ch, game, state, seat, offer } = ctx;
+    // 内置 AI 和引擎：自己不占优（期望得分低于 55%）就接受和棋；随机走子不接受
+    if (offer && (ch.kind === 'builtin' || ch.kind === 'engine') && game.evalSpec) {
+      const spec = game.evalSpec(state);
+      const ev = spec ? await this.evaluator.evaluate(spec).catch(() => null) : null;
+      if (ev && (spec.persp === seat ? ev.e : 1 - ev.e) < 0.55) return { acceptDraw: true };
     }
     switch (ch.kind) {
       case 'human':
         return this.#humanMove(ctx);
       case 'random': {
-        const acts = game.actions(state);
-        return { action: acts[Math.floor(Math.random() * acts.length)].id };
+        const acts = game.actions(state, seat);
+        if (acts?.length) return { action: acts[Math.floor(Math.random() * acts.length)].id };
+        return { action: await game.builtinMove(state, seat, { level: 1, random: true }) };
       }
       case 'builtin': {
-        const r = await this.aiPool.run('move', game.fen(state), ch.level || 3);
-        return { action: r.move };
+        if (game.id === 'xiangqi') return { action: (await this.aiPool.run('move', game.fen(state), ch.level || 3)).move };
+        return { action: await game.builtinMove(state, seat, { level: ch.level || 2, depth: ch.level || 2 }) };
       }
       case 'engine': {
-        const best = await this.evaluator.bestMove(game.fen(state), ch.level || 200);
-        return { action: best };
+        const spec = game.evalSpec?.(state);
+        if (!spec) throw new Error(`${game.name}没有可用的引擎`);
+        return { action: await this.evaluator.bestMove(spec, ch.level || 200) };
       }
       case 'model':
         return this.#modelMove(ctx);
@@ -268,43 +307,50 @@ export class Arena {
 
   #humanMove({ m, rt, game, state, seat, offer }) {
     return new Promise((resolve, reject) => {
-      rt.human = { seat, offer: !!offer, resolve: (action, offerDraw = false) => {
-        if (!game.actions(state).some((a) => a.id === action)) throw new HttpError(400, `不合法的着法：${action}`);
-        rt.human = null;
-        resolve({ action, offerDraw });
-      }, acceptDraw: () => {
-        if (!offer) throw new HttpError(409, '对方没有提出和棋');
-        rt.human = null;
-        resolve({ acceptDraw: true });
-      }, resign: () => { rt.human = null; resolve({ forfeit: `${game.seatNames[seat]}认输` }); } };
+      rt.humans[seat] = {
+        seat, offer: !!offer,
+        resolve: (action, offerDraw = false) => {
+          const acts = game.actions(state, seat);
+          if (acts && !acts.some((a) => a.id === action)) throw new HttpError(400, `不合法的行动：${action}`);
+          if (!acts) game.apply(state, seat, action); // 自由文本：用 apply 校验，不合法会抛错
+          delete rt.humans[seat];
+          resolve({ action, offerDraw });
+        },
+        acceptDraw: () => {
+          if (!offer) throw new HttpError(409, '对方没有提出和棋');
+          delete rt.humans[seat];
+          resolve({ acceptDraw: true });
+        },
+        resign: () => { delete rt.humans[seat]; resolve({ forfeit: `${game.seatName(seat)}认输` }); },
+      };
+      this.hub.emit(`match:${m.id}`, { type: 'human_turn', seat });
       rt.abort.signal.addEventListener('abort', () => reject(new Abort()), { once: true });
-      void m;
     });
   }
 
-  /** 模型走棋：整局保持一段连续的对话（模型能看到自己整局的思考） */
+  /** 模型行动：整局保持一段连续的对话（模型能看到自己整局的思考） */
   async #modelMove({ m, rt, game, state, seat, ch, channel, offer }) {
+    const showLegal = !!ch.show_legal && m.options.showLegal;
     let conv = m.conversations[seat];
     if (!conv) {
       const notes = ch.memory
         ? this.db.all('SELECT text FROM notes WHERE character_id = ? ORDER BY created_at DESC LIMIT ?', ch.id, NOTES_IN_PROMPT).map((n) => n.text)
         : [];
-      let system = game.systemPrompt(seat, { style: ch.style, showLegal: !!ch.show_legal && m.options.showLegal });
-      system += `\n\n${DRAW_RULE}`;
+      let system = game.systemPrompt(seat, { style: ch.style, showLegal, players: Object.keys(m.seats).length, state });
+      if (game.features?.draw) system += `\n\n${DRAW_RULE}`;
       if (notes.length) system += `\n\n【你以前对局的复盘笔记】\n${notes.map((n, i) => `${i + 1}. ${n}`).join('\n')}`;
-      conv = m.conversations[seat] = { system, messages: [], drawRule: true };
+      conv = m.conversations[seat] = { system, messages: [], drawRule: !!game.features?.draw };
     }
-    let turn = game.turnPrompt(state, seat, { showLegal: !!ch.show_legal && m.options.showLegal });
-    // 提和规则加入之前开始的对局：在下一步提示里补充一次
-    if (!conv.drawRule && !conv.system.includes('求和')) { turn = `${DRAW_RULE}\n\n${turn}`; conv.drawRule = true; }
+    let turn = game.turnPrompt(state, seat, { showLegal });
+    if (game.features?.draw && !conv.drawRule && !conv.system.includes('求和')) { turn = `${DRAW_RULE}\n\n${turn}`; conv.drawRule = true; }
     if (offer) turn = `对方提出了和棋。接受就把着法那一行写成「着法：接受和棋」；不接受就照常走棋。\n\n${turn}`;
     conv.messages.push({ role: 'user', content: turn });
 
     const attempts = [];
     const usage = { input: 0, output: 0, cached: 0, reasoning: 0 };
     let served = null;
+    const partial = rt.partials[seat];
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-      const partial = rt.partial;
       partial.text = '';
       partial.reasoning = '';
       partial.attempt = attempt;
@@ -318,17 +364,17 @@ export class Arena {
       served = res.model;
       conv.messages.push(res.message);
       if (offer && ACCEPT_RE.test(res.text)) {
-        return { acceptDraw: true, text: res.text, reasoning: res.reasoning, winrate: game.parseReply(state, res.text).winrate, attempts, usage, model: served };
+        return { acceptDraw: true, text: res.text, reasoning: res.reasoning, winrate: game.parseReply(state, seat, res.text).winrate, attempts, usage, model: served };
       }
-      const parsed = game.parseReply(state, res.text);
-      if (parsed.action) {
+      const parsed = game.parseReply(state, seat, res.text);
+      if (parsed.action !== null && parsed.action !== undefined) {
         return { action: parsed.action, offerDraw: OFFER_RE.test(res.text), text: res.text, reasoning: res.reasoning, winrate: parsed.winrate, attempts, usage, model: served };
       }
       const error = res.text.trim() ? parsed.error : '只有思考、没有给出回答（可能用完了输出长度上限）';
       attempts.push({ text: res.text, reasoning: res.reasoning, error, attempted: parsed.attempted });
       this.hub.emit(channel, { type: 'illegal', ply: partial.ply, seat, attempt, error, attempted: parsed.attempted });
       if (attempt === MAX_RETRIES) {
-        return { forfeit: `${game.seatNames[seat]}连续 ${MAX_RETRIES + 1} 次给出无效着法，判负`, text: res.text, reasoning: res.reasoning, attempts, usage, model: served };
+        return { forfeit: `${game.seatName(seat)}连续 ${MAX_RETRIES + 1} 次给出无效${game.noun || '行动'}，判负`, text: res.text, reasoning: res.reasoning, attempts, usage, model: served };
       }
       conv.messages.push({ role: 'user', content: game.retryPrompt(error, attempt + 1, MAX_RETRIES) });
     }
@@ -338,15 +384,11 @@ export class Arena {
   // ---------- 结束 ----------
 
   #finish(m, rt, outcome, abortReason = null) {
-    const game = getGame(m.game);
     if (abortReason) {
       this.db.update('matches', { id: m.id }, { status: 'aborted', result: { over: true, aborted: true, reason: abortReason }, finished_at: now(), conversations: m.conversations });
     } else {
       let changes = null;
-      if (m.mode !== 'casual') {
-        const seats = Object.fromEntries(game.seats.map((s) => [s, m.seats[s]]));
-        changes = applyResult(this.db, m.game, m.id, seats, outcome.ranks);
-      }
+      if (m.mode !== 'casual') changes = applyResult(this.db, m.game, m.id, m.seats, outcome.ranks);
       this.db.update('matches', { id: m.id }, { status: 'finished', result: outcome, rating_changes: changes, finished_at: now(), conversations: m.conversations });
       this.#writeNotes(m, outcome).catch((e) => console.error('写复盘笔记失败：', e.message));
     }
@@ -358,13 +400,15 @@ export class Arena {
 
   /** 跨局记忆：对局结束后让开启记忆的选手写一条复盘笔记 */
   async #writeNotes(m, outcome) {
-    const game = getGame(m.game);
-    for (const seat of game.seats) {
+    const ranks = outcome.ranks || {};
+    const best = Math.min(...Object.values(ranks));
+    const allSame = Object.values(ranks).every((r) => r === best);
+    for (const seat of Object.keys(m.seats)) {
       const ch = getCharacter(this.db, m.seats[seat]);
       const conv = m.conversations[seat];
       if (ch.kind !== 'model' || !ch.memory || !conv) continue;
-      const res = outcome.winner === seat ? '你赢了' : outcome.winner ? '你输了' : '和棋';
-      const messages = [...conv.messages, { role: 'user', content: `对局结束：${res}（${outcome.reason}）。请用一句话（不超过 60 字）总结这盘棋最值得记住的教训，供你以后的对局参考。只输出这句话。` }];
+      const res = allSame ? '平局' : ranks[seat] === best ? '你赢了' : '你输了';
+      const messages = [...conv.messages, { role: 'user', content: `对局结束：${res}（${outcome.reason}）。请用一句话（不超过 60 字）总结这盘最值得记住的教训，供你以后的对局参考。只输出这句话。` }];
       const r = await callModel(this.db, ch, conv.system, messages);
       const text = r.text.trim().split('\n').filter(Boolean).pop()?.slice(0, 120);
       if (text) this.db.insert('notes', { character_id: ch.id, match_id: m.id, text, created_at: now() });
@@ -373,24 +417,30 @@ export class Arena {
 
   // ---------- 控制 ----------
 
+  #humanHandler(rt) {
+    const hs = Object.values(rt?.humans || {});
+    return hs[0] || null;
+  }
+
   humanMove(matchId, action, offerDraw = false) {
-    const rt = this.live.get(matchId);
-    if (!rt?.human) throw new HttpError(409, '现在不是你走棋');
-    rt.human.resolve(action, offerDraw);
+    const h = this.#humanHandler(this.live.get(matchId));
+    if (!h) throw new HttpError(409, '现在不是你行动');
+    h.resolve(action, offerDraw);
   }
 
   control(matchId, op) {
     const rt = this.live.get(matchId);
     if (!rt) throw new HttpError(409, '对局不在进行中');
+    const h = this.#humanHandler(rt);
     if (op === 'pause') rt.paused = true;
     else if (op === 'resume') { rt.paused = false; rt.wake?.(); }
     else if (op === 'step') { rt.step = true; rt.wake?.(); }
     else if (op === 'accept_draw') {
-      if (!rt.human) throw new HttpError(409, '只有轮到你走时才能接受和棋');
-      rt.human.acceptDraw();
+      if (!h) throw new HttpError(409, '只有轮到你走时才能接受和棋');
+      h.acceptDraw();
     } else if (op === 'resign') {
-      if (!rt.human) throw new HttpError(409, '只有轮到你走时才能认输');
-      rt.human.resign();
+      if (!h) throw new HttpError(409, '只有轮到你行动时才能认输');
+      h.resign();
     } else if (op === 'abort') {
       const m = this.db.get('SELECT mode FROM matches WHERE id = ?', matchId);
       if (m.mode !== 'casual') throw new HttpError(400, '排位赛不能中止');
@@ -402,7 +452,6 @@ export class Arena {
     return { paused: rt.paused };
   }
 
-  /** 服务启动时恢复未下完的对局 */
   resumeAll() {
     for (const m of this.db.all("SELECT id FROM matches WHERE status = 'running'")) this.run(m.id);
   }
@@ -410,36 +459,53 @@ export class Arena {
   // ---------- 查询 ----------
 
   summary(matchId) {
-    const m = this.db.get('SELECT id, game, mode, status, seats, result, rating_changes, challenge, created_at, finished_at, actions FROM matches WHERE id = ?', matchId);
+    const m = this.db.get('SELECT id, game, mode, status, seats, result, rating_changes, challenge, created_at, finished_at, actions, options FROM matches WHERE id = ?', matchId);
     if (!m) return null;
-    const names = {};
+    const players = {};
     for (const [seat, cid] of Object.entries(m.seats)) {
-      const c = this.db.get('SELECT id, name, avatar, kind, provider, model FROM characters WHERE id = ?', cid);
-      names[seat] = c;
+      players[seat] = this.db.get('SELECT id, name, avatar, kind, provider, model, level FROM characters WHERE id = ?', cid);
     }
-    return { ...m, plies: m.actions.length, actions: undefined, players: names, live: this.live.has(m.id) };
+    let game = null;
+    try { game = getGame(m.game); } catch { /* 游戏已下线 */ }
+    return {
+      ...m, options: undefined, series: m.options?.series || null, plies: m.actions.length, actions: undefined, players, live: this.live.has(m.id),
+      gameName: game?.name || m.game, seatNames: Object.fromEntries(Object.keys(m.seats).map((s) => [s, game?.seatName(s) || s])),
+    };
   }
 
-  detail(matchId) {
+  /** viewer：观看者的座位；有玩家本人且游戏有隐藏信息时，进行中只给玩家自己的视角 */
+  detail(matchId, viewer = null) {
     const m = this.db.get('SELECT * FROM matches WHERE id = ?', matchId);
     if (!m) throw new HttpError(404, '对局不存在');
     const game = getGame(m.game);
-    const state = game.replay(m.start_fen, m.actions);
+    const record = recordOf(m);
+    const state = replay(game, record);
+    const human = this.humanSeat(m);
+    const running = m.status === 'running';
+    let v = viewer && m.seats[viewer] ? viewer : null;
+    if (game.features?.hidden && human && running) v = human;
     const turns = this.db.all('SELECT * FROM turns WHERE match_id = ? ORDER BY ply', matchId);
     const rt = this.live.get(matchId);
-    const hide = m.options.hideThoughts && m.status === 'running';
+    const hide = m.options.hideThoughts && running;
     const sum = this.summary(matchId);
+    const partials = Object.values(rt?.partials || {}).map((p) => (hide ? { ...p, text: '', reasoning: '' } : p));
+    const humanH = this.#humanHandler(rt);
     return {
       ...sum,
       options: m.options,
+      record: { ...record, actions: (game.features?.hidden && human && running) ? null : record.actions },
       startFen: m.start_fen,
-      view: game.view(state),
+      viewer: v,
+      view: game.view(state, v),
       turns: turns.map((t) => (hide && t.character_id && this.#isModel(t.character_id) ? { ...t, analysis: null, reasoning: null, attempts: null, self_winrate: null } : t)),
-      partial: rt?.partial && !hide ? rt.partial : rt?.partial ? { ...rt.partial, text: '', reasoning: '' } : null,
+      partials,
+      partial: partials[0] || null,
       paused: rt?.paused || false,
-      waitingHuman: rt?.human ? rt.human.seat : null,
-      drawOfferToHuman: rt?.human?.offer || false,
-      seatNames: game.seatNames,
+      waitingHuman: humanH ? humanH.seat : null,
+      humanActions: humanH ? game.actions(state, humanH.seat) : null,
+      drawOfferToHuman: humanH?.offer || false,
+      seatOrder: Object.keys(m.seats),
+      features: game.features || {},
     };
   }
 
@@ -449,9 +515,9 @@ export class Arena {
 
   /** 今天某选手已下的盘数和 token 用量 */
   todayUsage(characterId) {
-    const t = today();
+    const t = localDate(new Date());
     const rows = this.db.all("SELECT id, seats, created_at FROM matches WHERE created_at >= ? AND status != 'aborted'", new Date(Date.now() - 2 * 864e5).toISOString())
-      .filter((r) => localDate(r.created_at) === t && Object.values(r.seats).includes(characterId));
+      .filter((r) => localDate(new Date(r.created_at)) === t && Object.values(r.seats).includes(characterId));
     let tokens = 0;
     for (const r of rows) {
       for (const u of this.db.all('SELECT usage FROM turns WHERE match_id = ? AND character_id = ?', r.id, characterId)) {

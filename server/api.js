@@ -1,6 +1,6 @@
 // HTTP 接口。
 
-import { gameList, getGame } from '../games/index.js';
+import { gameList, getGame, replay } from '../games/index.js';
 import { PUZZLES } from '../games/xiangqi/puzzles.js';
 import { presetList, EFFORTS } from './providers/presets.js';
 import { listModels, callModel } from './providers/index.js';
@@ -142,7 +142,7 @@ export function routes(router, { db, hub, arena, matchmaker, compare, evaluator,
 
   router.post('/api/matches', ({ body }) => ({ id: arena.createMatch(body) }));
 
-  router.get('/api/matches/:id', ({ params }) => arena.detail(params.id));
+  router.get('/api/matches/:id', ({ params, query }) => arena.detail(params.id, query.viewer || null));
 
   router.post('/api/matches/:id/move', ({ params, body }) => {
     arena.humanMove(params.id, String(body.action || ''), !!body.offerDraw);
@@ -153,6 +153,16 @@ export function routes(router, { db, hub, arena, matchmaker, compare, evaluator,
 
   router.get('/api/matches/:id/export', ({ params, res }) => {
     const d = arena.detail(params.id);
+    const full = arena.detail(params.id, null);
+    if (full.game !== 'xiangqi') {
+      const out = [`【对局】${full.id}（${full.gameName}）`, ...full.seatOrder.map((s) => `【${full.seatNames[s]}】${full.players[s]?.name}`), `【时间】${full.created_at}`, '',
+        ...full.turns.filter((t) => t.label).map((t) => `${String(t.ply).padStart(4)}. ${full.seatNames[t.seat]}：${t.label}`),
+        '', `【结果】${full.result ? full.result.reason : '进行中'}`];
+      res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8', 'Content-Disposition': `attachment; filename="${full.id}.txt"` });
+      res.end(out.join('
+'));
+      return;
+    }
     const lines = [
       `【对局】${d.id}`,
       `【红方】${d.players.r?.name}  【黑方】${d.players.b?.name}`,
@@ -172,7 +182,7 @@ export function routes(router, { db, hub, arena, matchmaker, compare, evaluator,
   // ---------- 同题对比 ----------
   router.get('/api/puzzles', () => PUZZLES.map((p) => {
     const g = getGame('xiangqi');
-    const s = p.fen ? g.create({ fen: p.fen }) : g.replay(undefined, p.moves);
+    const s = p.fen ? g.create({ players: 2, setup: { fen: p.fen } }) : replay(g, { players: 2, actions: p.moves });
     return { ...p, fen: g.fen(s) };
   }));
   router.get('/api/compares', () => compare.list());

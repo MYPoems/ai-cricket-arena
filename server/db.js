@@ -75,6 +75,7 @@ CREATE TABLE IF NOT EXISTS matches (
   mode TEXT NOT NULL,             -- ranked / casual / placement
   status TEXT NOT NULL,           -- waiting / running / finished / aborted
   start_fen TEXT,
+  setup TEXT,                     -- JSON { setup, seed, players }：重建对局用
   options TEXT NOT NULL,          -- JSON
   seats TEXT NOT NULL,            -- JSON { seat: characterId | null（玩家本人） }
   actions TEXT NOT NULL DEFAULT '[]',
@@ -157,13 +158,16 @@ export function openDb(file) {
   const db = new DatabaseSync(file);
   db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
   db.exec(SCHEMA);
+  // 旧库升级：补上后来新增的列
+  const cols = new Set(db.prepare('PRAGMA table_info(matches)').all().map((c) => c.name));
+  if (!cols.has('setup')) db.exec('ALTER TABLE matches ADD COLUMN setup TEXT');
   if (!db.prepare('SELECT 1 FROM users WHERE id = ?').get('local')) {
     db.prepare('INSERT INTO users (id, name, created_at) VALUES (?, ?, ?)').run('local', '我', now());
   }
   return wrap(db);
 }
 
-const JSON_COLS = new Set(['options', 'seats', 'actions', 'result', 'rating_changes', 'challenge', 'conversations', 'eval', 'attempts', 'usage']);
+const JSON_COLS = new Set(['setup', 'options', 'seats', 'actions', 'result', 'rating_changes', 'challenge', 'conversations', 'eval', 'attempts', 'usage']);
 
 function decode(row) {
   if (!row) return row;

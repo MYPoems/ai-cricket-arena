@@ -18,7 +18,7 @@ export class Compare {
     const game = getGame(gameId);
     let state;
     try {
-      state = game.create({ fen });
+      state = game.create({ players: 2, setup: { fen } });
     } catch (e) {
       throw new HttpError(400, `局面不合法：${e.message}`);
     }
@@ -36,8 +36,9 @@ export class Compare {
 
   async #run(id, game, state, chars) {
     const ch = `compare:${id}`;
-    const seat = game.toMove(state);
-    const before = await this.arena.evaluator.evaluate(game.fen(state)).catch(() => null);
+    const seat = game.pending(state)[0];
+    const spec = game.evalSpec?.(state);
+    const before = spec ? await this.arena.evaluator.evaluate(spec).catch(() => null) : null;
     this.arena.hub.emit(ch, { type: 'eval_before', eval: before });
     this.db.update('compares', { id }, { title: this.db.get('SELECT title FROM compares WHERE id = ?', id).title });
     await Promise.all(chars.map((c) => this.#answer(id, ch, game, state, seat, c, before)));
@@ -67,7 +68,7 @@ export class Compare {
           text = r.text;
           reasoning = r.reasoning;
           messages.push(r.message);
-          const p = game.parseReply(state, r.text);
+          const p = game.parseReply(state, seat, r.text);
           winrate = p.winrate;
           if (p.action) { action = p.action; error = null; break; }
           error = r.text.trim() ? p.error : '只有思考、没有给出回答（可能用完了输出长度上限）';
@@ -75,20 +76,21 @@ export class Compare {
           messages.push({ role: 'user', content: game.retryPrompt(error, attempt + 1, MAX_RETRIES) });
         }
       } else if (c.kind === 'builtin') {
-        action = (await this.arena.aiPool.run('move', game.fen(state), c.level || 3)).move;
+        action = game.id === 'xiangqi' ? (await this.arena.aiPool.run('move', game.fen(state), c.level || 3)).move : await game.builtinMove(state, seat, { level: c.level || 2, depth: c.level || 2 });
       } else if (c.kind === 'engine') {
-        action = await this.arena.evaluator.bestMove(game.fen(state), c.level || 200);
+        action = await this.arena.evaluator.bestMove(spec, c.level || 200);
       } else {
-        const acts = game.actions(state);
+        const acts = game.actions(state, seat);
         action = acts[Math.floor(Math.random() * acts.length)].id;
       }
       let ev = null;
       if (action && before) {
-        const after = await this.arena.evaluator.evaluate(game.fen(game.apply(state, action))).catch(() => null);
+        const afterSpec = game.evalSpec?.(game.apply(state, seat, action));
+        const after = afterSpec ? await this.arena.evaluator.evaluate(afterSpec).catch(() => null) : null;
         if (after) ev = moveQuality(before, after, action);
       }
       const row = {
-        status: action ? 'done' : 'failed', action, label: action ? game.label(state, action) : null,
+        status: action ? 'done' : 'failed', action, label: action ? game.label(state, seat, action) : null,
         analysis: text || null, reasoning: reasoning || null, self_winrate: winrate, eval: ev, usage,
         latency_ms: Date.now() - t0, error,
       };
@@ -108,7 +110,7 @@ export class Compare {
        JOIN characters c ON c.id = a.character_id WHERE a.compare_id = ?`, id,
     );
     const game = getGame(cmp.game);
-    return { ...cmp, view: game.view(game.create({ fen: cmp.fen })), answers };
+    return { ...cmp, view: game.view(game.create({ players: 2, setup: { fen: cmp.fen } }), null), answers };
   }
 
   list() {

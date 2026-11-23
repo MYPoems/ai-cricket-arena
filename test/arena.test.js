@@ -95,7 +95,7 @@ test('玩家本人走棋与认输', async () => {
   await new Promise((r) => setTimeout(r, 300));
   assert.throws(() => arena.humanMove(id, 'b0b5'), /不合法/);
   arena.humanMove(id, 'h2e2');
-  await new Promise((r) => { const iv = setInterval(() => { if (arena.live.get(id)?.human) { clearInterval(iv); r(); } }, 30); });
+  await new Promise((r) => { const iv = setInterval(() => { if (Object.keys(arena.live.get(id)?.humans || {}).length) { clearInterval(iv); r(); } }, 30); });
   arena.control(id, 'resign');
   const m = await waitEnd(id);
   assert.equal(m.result.winner, 'b');

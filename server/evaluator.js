@@ -107,58 +107,174 @@ class Pikafish {
   }
 }
 
+/** 找 Rapfi（五子棋引擎）：Windows 优先 avx2 版，Linux 用 clang-avx2 版 */
+export function findRapfi(dir) {
+  if (!existsSync(dir)) return null;
+  const want = process.platform === 'win32' ? /^pbrain-rapfi-windows-avx2.exe$/i : /^pbrain-rapfi-linux-clang-avx2$/i;
+  const found = [];
+  const walk = (d, depth) => {
+    for (const f of readdirSync(d)) {
+      const p = join(d, f);
+      if (statSync(p).isDirectory()) { if (depth < 3) walk(p, depth + 1); } else if (want.test(f)) found.push(p);
+    }
+  };
+  walk(dir, 0);
+  return found[0] || null;
+}
+
+/** Rapfi：Piskvork 协议。每次评估用 BOARD 摆整盘，读最后一行 Eval 和引擎给出的落点 */
+class Rapfi {
+  constructor(bin) {
+    this.bin = bin;
+    this.queue = Promise.resolve();
+    this.listeners = new Set();
+    this.dead = false;
+    this.size = null;
+  }
+
+  async start() {
+    this.proc = spawn(this.bin, [], { cwd: dirname(this.bin), stdio: ['pipe', 'pipe', 'ignore'], windowsHide: true });
+    this.proc.on('exit', () => { this.dead = true; });
+    this.proc.on('error', () => { this.dead = true; });
+    createInterface({ input: this.proc.stdout }).on('line', (line) => { for (const l of this.listeners) l(line.trim()); });
+  }
+
+  #send(s) { this.proc.stdin.write(`${s}
+`); }
+
+  #wait(done, timeoutMs, onLine) {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => { this.listeners.delete(fn); reject(new Error('Rapfi 响应超时')); }, timeoutMs);
+      const fn = (line) => {
+        onLine?.(line);
+        if (done(line)) { clearTimeout(timer); this.listeners.delete(fn); resolve(line); }
+      };
+      this.listeners.add(fn);
+    });
+  }
+
+  /** spec: { size, stones: [{ x, y, c }], toMove: 'b' | 'w' } */
+  evaluate(spec, movetime) {
+    const job = async () => {
+      if (this.dead) throw new Error('Rapfi 已退出');
+      if (this.size !== spec.size) {
+        const ok = this.#wait((l) => l === 'OK' || l.startsWith('ERROR'), 30000);
+        this.#send(`START ${spec.size}`);
+        const r = await ok;
+        if (r.startsWith('ERROR')) throw new Error(`Rapfi 不支持 ${spec.size} 路棋盘`);
+        this.#send('INFO rule 0'); // 无禁手：五连或长连都算赢
+        this.size = spec.size;
+      }
+      this.#send(`INFO timeout_turn ${movetime}`);
+      this.#send('INFO timeout_match 100000000');
+      let evalLine = null;
+      const reply = this.#wait((l) => /^d+,d+$/.test(l), movetime + 15000, (l) => { if (/| Eval /.test(l)) evalLine = l; });
+      this.#send('BOARD');
+      for (const s of spec.stones) this.#send(`${s.x},${s.y},${s.c === spec.toMove ? 1 : 2}`);
+      this.#send('DONE');
+      const [bx, by] = (await reply).split(',').map(Number);
+      const out = { best: `${bx},${by}`, source: 'rapfi' };
+      const ev = evalLine && /Eval (-?d+)/.exec(evalLine);
+      if (ev) out.cp = Number(ev[1]);
+      out.e = out.cp === undefined ? 0.5 : Math.abs(out.cp) >= 15000 ? (out.cp > 0 ? 1 : 0) : logistic(out.cp);
+      return out;
+    };
+    const p = this.queue.then(job, job);
+    this.queue = p.catch(() => {});
+    return p;
+  }
+
+  stop() {
+    try { this.#send('END'); } catch { /* 进程已退出 */ }
+    setTimeout(() => this.proc?.kill(), 500).unref();
+  }
+}
+
 export class Evaluator {
   constructor({ enginesDir, aiPool, movetime = 300 }) {
     this.enginesDir = enginesDir;
     this.aiPool = aiPool;
     this.movetime = movetime;
-    this.engine = null;
+    this.engine = null; // Pikafish（象棋）
+    this.rapfi = null; // Rapfi（五子棋）
     this.error = null;
   }
 
   async init() {
+    this.engine?.stop();
+    this.rapfi?.stop();
+    this.engine = null;
+    this.rapfi = null;
+    this.error = null;
     const bin = findPikafish(this.enginesDir);
-    if (!bin) { this.engine = null; return this.status(); }
-    try {
-      const e = new Pikafish(bin);
-      await e.start();
-      this.engine = e;
-      this.error = null;
-    } catch (err) {
-      this.engine = null;
-      this.error = err.message;
+    if (bin) {
+      try {
+        const e = new Pikafish(bin);
+        await e.start();
+        this.engine = e;
+      } catch (err) {
+        this.error = `Pikafish：${err.message}`;
+      }
+    }
+    const rbin = findRapfi(this.enginesDir);
+    if (rbin) {
+      try {
+        const r = new Rapfi(rbin);
+        await r.start();
+        this.rapfi = r;
+      } catch (err) {
+        this.error = `Rapfi：${err.message}`;
+      }
     }
     return this.status();
   }
 
   status() {
-    return { source: this.engine && !this.engine.dead ? 'pikafish' : 'builtin', error: this.error, movetime: this.movetime };
+    return {
+      source: this.engine && !this.engine.dead ? 'pikafish' : 'builtin',
+      engines: { pikafish: !!(this.engine && !this.engine.dead), rapfi: !!(this.rapfi && !this.rapfi.dead) },
+      error: this.error, movetime: this.movetime,
+    };
   }
 
-  /** 评估局面（走棋方视角） */
-  async evaluate(fen) {
+  /**
+   * 评估局面（走棋方视角）。spec：{ engine: 'pikafish', fen } 或 { engine: 'rapfi', size, stones, toMove, heuristic }
+   * 兼容旧调用：直接传象棋 FEN 字符串。
+   */
+  async evaluate(spec) {
+    if (typeof spec === 'string') spec = { engine: 'pikafish', fen: spec };
+    if (spec.engine === 'rapfi') {
+      if (this.rapfi && !this.rapfi.dead) {
+        try { return await this.rapfi.evaluate(spec, this.movetime); } catch (err) { this.error = err.message; }
+      }
+      return { e: spec.heuristic ?? 0.5, best: spec.heuristicBest || null, source: 'builtin' };
+    }
     if (this.engine && !this.engine.dead) {
       try {
-        return await this.engine.evaluate(fen, this.movetime);
+        return await this.engine.evaluate(spec.fen, this.movetime);
       } catch (err) {
         this.error = err.message;
       }
     }
-    const r = await this.aiPool.run('eval', fen, 2);
+    const r = await this.aiPool.run('eval', spec.fen, 2);
     const s = Math.max(-5000, Math.min(5000, r.score));
     return { e: r.score <= -90000 ? 0 : r.score >= 90000 ? 1 : logistic(s), cp: s, best: r.move, source: 'builtin' };
   }
 
   /** 引擎当选手走棋 */
-  async bestMove(fen, movetime) {
+  async bestMove(spec, movetime) {
+    if (typeof spec === 'string') spec = { engine: 'pikafish', fen: spec };
+    if (spec.engine === 'rapfi') {
+      if (!this.rapfi || this.rapfi.dead) throw new Error('没有可用的 Rapfi');
+      return (await this.rapfi.evaluate(spec, movetime || this.movetime)).best;
+    }
     if (!this.engine || this.engine.dead) throw new Error('没有可用的 Pikafish');
-    const saved = this.movetime;
-    const r = await this.engine.evaluate(fen, movetime || saved);
-    return r.best;
+    return (await this.engine.evaluate(spec.fen, movetime || this.movetime)).best;
   }
 
   stop() {
     this.engine?.stop();
+    this.rapfi?.stop();
   }
 }
 
