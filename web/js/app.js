@@ -41,7 +41,8 @@ async function route() {
   document.querySelectorAll('dialog[open]:not([data-keep])').forEach((d) => d.close());
   const parts = location.hash.replace(/^#\/?/, '').split('?')[0].split('/').filter(Boolean);
   const [page = 'lobby', id] = parts;
-  const navKey = { lobby: 'lobby', new: 'play', match: 'lobby', rooms: 'rooms', room: 'rooms', characters: 'characters', ladder: 'ladder', compare: 'history', history: 'history', settings: 'settings', account: 'settings', admin: 'admin', 'agent-guide': 'characters' }[page] || 'lobby';
+  // 对局页不属于任何一个栏目，导航不高亮
+  const navKey = { lobby: 'lobby', new: 'play', match: null, rooms: 'rooms', room: 'rooms', characters: 'characters', ladder: 'ladder', compare: 'history', history: 'history', settings: 'settings', account: 'settings', admin: 'admin', 'agent-guide': 'characters' }[page] ?? 'lobby';
   document.querySelectorAll('#nav a').forEach((a) => a.classList.toggle('on', a.dataset.r === navKey));
   document.body.dataset.page = page === 'match' && id ? 'match' : page;
   const loggedIn = !!session.user;
