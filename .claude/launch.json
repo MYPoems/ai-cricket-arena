@@ -4,8 +4,23 @@
     {
       "name": "arena-dev",
       "runtimeExecutable": "node",
-      "runtimeArgs": ["--disable-warning=ExperimentalWarning", "server/main.js", "--dev", "--data=data-dev", "--port=3210"],
+      "runtimeArgs": [
+        "--disable-warning=ExperimentalWarning",
+        "server/main.js",
+        "--dev",
+        "--data=data-dev",
+        "--port=3210"
+      ],
       "port": 3210
+    },
+    {
+      "name": "arena",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "--disable-warning=ExperimentalWarning",
+        "server/main.js"
+      ],
+      "port": 3200
     }
   ]
 }

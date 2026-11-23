@@ -97,6 +97,7 @@ export const PRESETS = {
     keyEnv: 'OPENAI_API_KEY',
     models: ['gpt-6.2-astra', 'gpt-6.2-sol', 'gpt-6-luna'],
     reasoningField: null, // Chat Completions 不返回思考内容
+    maxTokensField: 'max_completion_tokens', // OpenAI 推理模型不接受 max_tokens
     thinkingParams: withOff({ reasoning_effort: 'none' }, effortParam({ low: 'low', medium: 'medium', high: 'high' })),
     echoReasoning: false,
   },
@@ -130,6 +131,28 @@ export const PRESETS = {
     reasoningField: 'thinking',
     echoReasoning: true, // 思考块需要原样回传
   },
+  'claude-cli': {
+    name: 'Claude Code 订阅（本机）',
+    api: 'claude-cli',
+    baseURL: null,
+    keyEnv: null,
+    models: ['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-fable-5-2'],
+    reasoningField: 'thinking',
+    local: true, // 只能下娱乐赛
+    cli: true,
+    note: '调用本机已登录的 Claude Code，消耗你的订阅额度；只在本机使用，服务对外开放时自动关闭。',
+  },
+  'codex-cli': {
+    name: 'Codex 订阅（本机）',
+    api: 'codex-cli',
+    baseURL: null,
+    keyEnv: null,
+    models: ['gpt-6.2-sol', 'gpt-6.2-astra', 'gpt-6-luna'],
+    reasoningField: 'reasoning',
+    local: true,
+    cli: true,
+    note: '调用本机已登录的 Codex，消耗你的订阅额度；只在本机使用，服务对外开放时自动关闭。每步结束后整段显示，不逐字流式。',
+  },
   custom: {
     name: '自定义 OpenAI 兼容接口',
     api: 'openai',
@@ -143,6 +166,14 @@ export const PRESETS = {
   },
 };
 
+import { cliAllowed, findClaudeCli, findCodexCli } from './cli.js';
+
+/** 本机订阅通道是否可用：服务只对本机开放，且找到了对应命令行 */
+export function cliAvailable(api) {
+  if (!cliAllowed()) return false;
+  return api === 'claude-cli' ? !!findClaudeCli() : !!findCodexCli();
+}
+
 /** 排位赛只允许平台列出的云端模型；本地 Ollama 和自定义接口只能下娱乐赛 */
 export const rankedAllowed = (providerId) => {
   const p = PRESETS[providerId];
@@ -150,7 +181,7 @@ export const rankedAllowed = (providerId) => {
 };
 
 export function presetList() {
-  return Object.entries(PRESETS).map(([id, p]) => ({
+  return Object.entries(PRESETS).filter(([, p]) => !p.cli || cliAvailable(p.api)).map(([id, p]) => ({
     id, name: p.name, api: p.api, baseURL: p.baseURL, models: p.models,
     needsKey: !!p.keyEnv || p.custom, ranked: rankedAllowed(id), note: p.note || '',
     showsReasoning: !!p.reasoningField,

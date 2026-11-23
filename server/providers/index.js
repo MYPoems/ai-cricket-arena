@@ -3,6 +3,8 @@
 import { PRESETS } from './presets.js';
 import { streamOpenAI, listOpenAIModels } from './openai-compat.js';
 import { streamAnthropic } from './anthropic.js';
+import { streamClaudeCli, streamCodexCli } from './cli.js';
+import { cliAvailable } from './presets.js';
 import { getKey } from '../secrets.js';
 
 /** 选手配置 → 适配器参数 */
@@ -21,6 +23,10 @@ export function confFor(db, ch) {
 export async function callModel(db, ch, system, messages, onDelta = () => {}, signal) {
   if (ch.provider === 'mock') return mockCall(system, messages, onDelta, signal);
   const conf = confFor(db, ch);
+  if (conf.preset.cli) {
+    if (!cliAvailable(conf.preset.api)) throw new Error(`${conf.preset.name} 不可用（只在服务只对本机开放、且装了对应命令行时可用）`);
+    return conf.preset.api === 'claude-cli' ? streamClaudeCli(conf, system, messages, onDelta, signal) : streamCodexCli(conf, system, messages, onDelta, signal);
+  }
   if (conf.preset.api === 'anthropic') return streamAnthropic(conf, system, messages, onDelta, signal);
   return streamOpenAI(conf, system, messages, onDelta, signal);
 }
@@ -28,7 +34,7 @@ export async function callModel(db, ch, system, messages, onDelta = () => {}, si
 export async function listModels(db, ownerId, provider, baseURL) {
   const preset = PRESETS[provider];
   if (!preset) throw new Error(`未知平台：${provider}`);
-  if (preset.api === 'anthropic') return preset.models;
+  if (preset.api !== 'openai') return preset.models;
   const apiKey = getKey(db, ownerId, provider);
   return listOpenAIModels({ preset, apiKey, baseURL: baseURL || preset.baseURL });
 }

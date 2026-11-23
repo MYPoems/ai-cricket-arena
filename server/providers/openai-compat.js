@@ -40,7 +40,7 @@ export async function streamOpenAI(conf, system, messages, onDelta, signal) {
     messages: msgs,
     stream: true,
     stream_options: { include_usage: true },
-    max_tokens: maxTokens,
+    [preset.maxTokensField || 'max_tokens']: maxTokens,
     ...(preset.thinkingParams ? preset.thinkingParams(conf.effort || 'default') : {}),
   };
 

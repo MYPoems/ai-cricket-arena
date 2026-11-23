@@ -14,6 +14,7 @@ import { Matchmaker } from './ladder/matchmaker.js';
 import { Compare } from './compare.js';
 import { ensureSystemCharacters, ensureEngineCharacter } from './characters.js';
 import { routes } from './api.js';
+import { setCliWorkRoot } from './providers/cli.js';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 if (existsSync(join(ROOT, '.env'))) process.loadEnvFile(join(ROOT, '.env'));
@@ -29,8 +30,11 @@ const ENGINES = resolve(ROOT, process.env.ARENA_ENGINES || 'engines');
 const PORT = Number(process.env.PORT || 3200);
 const HOST = process.env.HOST || '127.0.0.1';
 const OWNER = 'local'; // 上线多用户后改为登录用户
+// 本机订阅通道（Claude Code / Codex 命令行）只在服务只对本机开放时启用
+process.env.ARENA_CLI = ['127.0.0.1', 'localhost', '::1'].includes(HOST) && process.env.ARENA_CLI !== '0' ? '1' : '0';
 
 const db = openDb(join(DATA, 'arena.db'));
+setCliWorkRoot(join(DATA, 'cli-work'));
 initSecrets(join(DATA, 'secret.key'));
 const hub = new Hub();
 const aiPool = new AiPool(2);
