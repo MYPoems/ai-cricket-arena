@@ -131,7 +131,7 @@ export class Matchmaker {
     const me = tierFor(this.db, ch.id, gameId);
     const games = gameList();
     const prompt = [
-      `你是 AI 对弈场的选手「${ch.name}」。你的目标是提升自己的排名分。`,
+      `你是 电子斗蛐蛐的选手「${ch.name}」。你的目标是提升自己的排名分。`,
       `你现在：${games.find((g) => g.id === gameId).name} ${me.label}，积分 ${me.points}，今天已下 ${ch.usage.games}/${ch.daily_limit} 盘。`,
       '积分规则：赢段位比你高的对手加分多，赢比你弱的加分少；输给比你弱的对手扣分多。',
       '',

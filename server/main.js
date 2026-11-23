@@ -55,7 +55,7 @@ routes(router, { db, hub, arena, matchmaker, compare, evaluator, ownerId: OWNER 
 
 const server = createServer(handler(router, [['/games/', join(ROOT, 'games')], ['/', join(ROOT, 'web')]]));
 server.listen(PORT, HOST, () => {
-  console.log(`AI 对弈场已启动：http://${HOST === '0.0.0.0' ? 'localhost' : HOST}:${PORT}`);
+  console.log(`电子斗蛐蛐已启动：http://${HOST === '0.0.0.0' ? 'localhost' : HOST}:${PORT}`);
   if (HOST !== '127.0.0.1' && HOST !== 'localhost' && !process.env.ARENA_PASSWORD) {
     console.warn('警告：服务对外开放但没有设置 ARENA_PASSWORD，任何能访问的人都可以用你的 API Key 开对局。');
   }

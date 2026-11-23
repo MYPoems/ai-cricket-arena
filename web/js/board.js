@@ -41,7 +41,22 @@ export class Board {
       svg('marker', { id: 'arrowhead', viewBox: '0 0 10 10', refX: '5', refY: '5', markerWidth: '3.2', markerHeight: '3.2', orient: 'auto-start-reverse' },
         svg('path', { d: 'M 0 0 L 10 5 L 0 10 z', fill: 'currentColor', style: 'fill: var(--accent-2)' })),
     );
-    this.el.append(defs, svg('rect', { class: 'bg', x: 0, y: 0, width: W, height: H, rx: 14 }));
+    // 木纹：底色渐变 + 几道浅色纹理
+    defs.append(
+      svg('linearGradient', { id: 'wood', x1: '0', y1: '0', x2: '1', y2: '1' },
+        svg('stop', { offset: '0', style: 'stop-color: var(--wood-1)' }),
+        svg('stop', { offset: '1', style: 'stop-color: var(--wood-2)' })),
+      svg('radialGradient', { id: 'disc', cx: '0.4', cy: '0.35', r: '0.7' },
+        svg('stop', { offset: '0', style: 'stop-color: var(--piece-hi)' }),
+        svg('stop', { offset: '1', style: 'stop-color: var(--piece)' })),
+    );
+    this.el.append(defs, svg('rect', { class: 'bg', x: 0, y: 0, width: W, height: H, rx: 16, fill: 'url(#wood)' }));
+    const grain = svg('g', { class: 'grain' });
+    for (let i = 0; i < 9; i++) {
+      const y = 30 + i * 72 + (i % 3) * 9;
+      grain.append(svg('path', { d: `M 0 ${y} C ${W * 0.3} ${y - 14}, ${W * 0.6} ${y + 16}, ${W} ${y - 4}` }));
+    }
+    this.el.append(grain);
     g.append(svg('rect', { class: 'frame', x: M - 6, y: M - 6, width: S * 8 + 12, height: S * 9 + 12 }));
     for (let r = 0; r < 10; r++) g.append(svg('line', { x1: M, y1: M + r * S, x2: M + 8 * S, y2: M + r * S }));
     for (let f = 0; f < 9; f++) {
@@ -105,9 +120,12 @@ export class Board {
 
     this.marks.replaceChildren();
     if (last) {
-      for (const s of [last.from, last.to]) {
-        this.marks.append(svg('rect', { class: 'last', x: this.x(fileOf(s)) - 29, y: this.y(rankOf(s)) - 29, width: 58, height: 58, rx: 10 }));
-      }
+      // 起点：空位上的小圆点；落点：棋子外的四角括弧。两者形状不同、范围都在本格之内，相邻时不会重叠
+      this.marks.append(svg('circle', { class: 'last-from', cx: this.x(fileOf(last.from)), cy: this.y(rankOf(last.from)), r: 7 }));
+      const cx = this.x(fileOf(last.to)), cy = this.y(rankOf(last.to)), e = 27, l = 8;
+      const d = [[-1, -1], [1, -1], [-1, 1], [1, 1]].map(([sx, sy]) =>
+        `M ${cx + sx * e} ${cy + sy * (e - l)} V ${cy + sy * e} H ${cx + sx * (e - l)}`).join(' ');
+      this.marks.append(svg('path', { class: 'last-to', d }));
     }
 
     this.pieces.replaceChildren();
@@ -117,8 +135,10 @@ export class Board {
       if (!p) continue;
       const side = sideOf(p);
       const g = svg('g', { class: `piece ${side}${s === this.selected ? ' sel' : ''}${s === kingInCheck ? ' check' : ''}`, 'data-sq': s });
-      g.append(svg('circle', { class: 'disc', r: 26 }), svg('circle', { class: 'ring', r: 21.5 }));
-      g.append(svg('text', { y: 1 }, document.createTextNode(CHARS[p])));
+      const inner = svg('g', { class: 'body' });
+      inner.append(svg('circle', { class: 'disc', r: 25.5, fill: 'url(#disc)' }), svg('circle', { class: 'ring', r: 21 }));
+      inner.append(svg('text', { y: 1 }, document.createTextNode(CHARS[p])));
+      g.append(inner);
       const tx = this.x(fileOf(s)), ty = this.y(rankOf(s));
       if (animate && last && last.to === s && prev.board?.[last.from] === p) {
         g.style.transition = 'none';

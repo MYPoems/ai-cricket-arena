@@ -1,4 +1,4 @@
-// 中国象棋的游戏定义，实现对弈场的通用游戏接口（见 games/index.js）。
+// 中国象棋的游戏定义，实现电子斗蛐蛐的通用游戏接口（见 games/index.js）。
 
 import * as R from './rules.js';
 import { moveToChinese, legalMoveList } from './notation.js';

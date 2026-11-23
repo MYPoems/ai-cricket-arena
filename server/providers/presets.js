@@ -1,7 +1,7 @@
 // 各平台预置模板。模型 ID、参数名都来自 2026-11-22 查阅的各家官方文档；
 // 平台更新后可以在界面上直接改模型 ID，或用「获取模型列表」从接口拉取。
 //
-// effort：对弈场统一的推理强度三档 low / medium / high，default 表示不传参数（用平台默认）。
+// effort：电子斗蛐蛐统一的推理强度三档 low / medium / high，default 表示不传参数（用平台默认）。
 // thinkingParams(effort) 返回要合并进请求体的平台专有参数。
 
 export const EFFORTS = { default: '平台默认', off: '关闭思考', low: '低', medium: '中', high: '高' };

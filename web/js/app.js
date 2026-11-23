@@ -26,6 +26,7 @@ async function route() {
   const [page = 'play', id] = parts;
   const navKey = { match: 'play', characters: 'characters', ladder: 'ladder', compare: 'compare', history: 'history', settings: 'settings' }[page] || 'play';
   document.querySelectorAll('#nav a').forEach((a) => a.classList.toggle('on', a.dataset.r === navKey));
+  document.body.dataset.page = page === 'match' && id ? 'match' : page;
   try {
     const characters = ['play', 'match', 'compare'].includes(page) ? await api('/characters') : [];
     const ctx = { meta, characters, go, reloadMeta };

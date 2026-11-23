@@ -1,6 +1,6 @@
 // 本机订阅通道：调用本机已登录的 Claude Code / Codex 命令行，用你自己的订阅下棋。
 //
-// - 登录由命令行自己处理，对弈场不读取、不保存任何订阅凭据。
+// - 登录由命令行自己处理，电子斗蛐蛐不读取、不保存任何订阅凭据。
 // - 只适合本机自用：服务对外开放（HOST 不是本机地址）时自动关闭。
 // - 一盘棋保持一个命令行会话（Claude 用 --resume，Codex 用 exec resume），模型能看到整局自己的思考。
 // - Claude Code 用 --safe-mode 跳过 CLAUDE.md、钩子、插件和 MCP，--tools "" 关闭全部工具，并替换系统提示词。
@@ -180,6 +180,8 @@ export async function streamCodexCli(conf, system, messages, onDelta, signal) {
   const bin = findCodexCli();
   if (!bin) throw new Error('没有找到 Codex 命令行');
   const { session, prompt } = splitConversation(messages);
+  // Codex 续接会话时报告的是整个会话的累计用量，记下累计值，本步用量 = 本次累计 − 上次累计
+  const prevTotal = [...messages].reverse().find((m) => m.role === 'assistant' && m.cliUsageTotal)?.cliUsageTotal || null;
   const cwd = workDir('codex');
   const cfg = [
     '-c', 'model_reasoning_summary="detailed"',
@@ -220,9 +222,12 @@ export async function streamCodexCli(conf, system, messages, onDelta, signal) {
     },
   });
   if (failed) throw new Error(`Codex 出错：${String(failed).slice(0, 300)}`);
+  const total = { input: usage?.input_tokens || 0, output: usage?.output_tokens || 0, cached: usage?.cached_input_tokens || 0, reasoning: usage?.reasoning_output_tokens || 0 };
+  const step = {};
+  for (const k of Object.keys(total)) step[k] = Math.max(0, total[k] - (session && prevTotal ? prevTotal[k] || 0 : 0));
   return {
     text, reasoning, model: conf.model,
-    usage: { input: usage?.input_tokens || 0, output: usage?.output_tokens || 0, cached: usage?.cached_input_tokens || 0, reasoning: usage?.reasoning_output_tokens || 0 },
-    message: { role: 'assistant', content: text, reasoning, cliSession: thread },
+    usage: step,
+    message: { role: 'assistant', content: text, reasoning, cliSession: thread, cliUsageTotal: total },
   };
 }

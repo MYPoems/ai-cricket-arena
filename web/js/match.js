@@ -1,10 +1,12 @@
-// 对局页：实时观战、玩家走棋、思考面板、胜率条与曲线、着法列表与复盘。
+// 对局页：一屏三栏。左右两栏是红黑双方的选手卡和思考，中间是棋盘、胜率条、走势和着法。
 
 import { h, api, post, listen, toast, guard, tierBadge, avatar, fmtMs, fmtTokens, pct, MODE_NAMES, resultText } from './ui.js';
 import { Board } from './board.js';
 import { newGame, play } from '/games/xiangqi/rules.js';
 
 const LINE_KEYS = ['判断', '威胁', '理由'];
+const SEAT_NAME = { r: '红方', b: '黑方' };
+const QUALITY_CLASS = { 最佳: 'good', 好棋: 'good', 缓着: 'warn', 失误: 'warn', 大漏着: 'bad' };
 
 function parseAnalysis(text) {
   if (!text) return null;
@@ -18,11 +20,11 @@ function parseAnalysis(text) {
 
 function qualityChip(q) {
   if (!q) return null;
-  const cls = { 最佳: 'good', 好棋: 'good', 缓着: 'warn', 失误: 'warn', 大漏着: 'bad' }[q.tag] || '';
-  return h('span', { class: `chip ${cls}`, title: `比引擎最佳着法少 ${Math.round(q.loss * 100)} 个胜率百分点` }, q.tag, q.loss >= 0.05 ? ` −${Math.round(q.loss * 100)}%` : '');
+  return h('span', { class: `chip ${QUALITY_CLASS[q.tag] || ''}`, title: `比引擎最佳着法少 ${Math.round(q.loss * 100)} 个胜率百分点` },
+    q.tag, q.loss >= 0.05 ? ` −${Math.round(q.loss * 100)}%` : '');
 }
 
-export async function matchView(root, id, { meta, characters }) {
+export async function matchView(root, id, { characters }) {
   let d = await api(`/matches/${id}`);
   const chars = new Map(characters.map((c) => [c.id, c]));
   const turns = new Map(d.turns.map((t) => [t.ply, t]));
@@ -30,11 +32,10 @@ export async function matchView(root, id, { meta, characters }) {
   let viewPly = null; // null 表示跟随最新局面
   let paused = d.paused;
   let waitingHuman = d.waitingHuman;
-  let flipped = false;
 
   const seatChar = (seat) => chars.get(d.seats[seat]) || d.players[seat];
-  const humanSeat = ['r', 'b'].find((s) => seatChar(s)?.kind === 'human' && !(seatChar(s === 'r' ? 'b' : 'r')?.kind === 'human'));
-  if (humanSeat === 'b') flipped = true;
+  const humanSeat = ['r', 'b'].find((s) => seatChar(s)?.kind === 'human' && seatChar(s === 'r' ? 'b' : 'r')?.kind !== 'human');
+  let flipped = humanSeat === 'b';
 
   const board = new Board({
     onMove: guard(async (iccs) => {
@@ -45,30 +46,29 @@ export async function matchView(root, id, { meta, characters }) {
   board.setFlipped(flipped);
 
   // ---------- 布局 ----------
-  const playersEl = h('div', { class: 'card players' });
-  const controls = h('div', { class: 'row' });
-  const banner = h('div');
+  const camp = (seat) => {
+    const head = h('div', { class: 'camp-head' });
+    const list = h('div', { class: 'camp-thoughts' });
+    return { head, list, el: h('section', { class: `camp ${seat}` }, head, list) };
+  };
+  const camps = { r: camp('r'), b: camp('b') };
+  const statusBar = h('div', { class: 'stage-bar' });
   const winbar = h('div', { class: 'winbar' }, h('div', { class: 'red' }), h('div', { class: 'mid' }), h('span', { class: 't' }), h('span', { class: 'b' }));
-  const curve = h('div', { class: 'card', style: { padding: '8px 10px' } });
-  const moves = h('div', { class: 'card movelist' });
-  const thoughts = h('div', { class: 'thoughts' });
+  const curve = h('div', { class: 'stage-curve' });
+  const moves = h('div', { class: 'stage-moves' });
 
-  root.replaceChildren(
-    h('div', { class: 'col' },
-      playersEl,
-      h('div', { class: 'match' },
-        h('div', { class: 'col' },
-          h('div', { class: 'board-area' }, winbar, h('div', { class: 'board-wrap' }, board.el)),
-          curve,
-          moves,
-          controls,
-        ),
-        h('div', { class: 'col' }, banner, thoughts),
-      ),
+  root.replaceChildren(h('div', { class: 'arena' },
+    camps.r.el,
+    h('section', { class: 'stage' },
+      statusBar,
+      h('div', { class: 'stage-board' }, winbar, h('div', { class: 'board-wrap' }, board.el)),
+      curve,
+      moves,
     ),
-  );
+    camps.b.el,
+  ));
 
-  // ---------- 渲染 ----------
+  // ---------- 数据 ----------
   const actions = () => d.view.moves.map((m) => m.iccs);
 
   function stateAt(ply) {
@@ -83,27 +83,87 @@ export async function matchView(root, id, { meta, characters }) {
     return turns.get(ply)?.eval?.redE ?? null;
   }
 
-  function renderPlayers() {
-    const total = d.view.moves.length;
-    const toMove = d.view.side;
-    const status = d.status === 'running'
-      ? (paused ? '已暂停' : waitingHuman ? '轮到你走' : live ? `${seatChar(live.seat)?.name || ''} 思考中` : '…')
-      : resultText(d, d.seatNames);
-    const side = (seat, right) => {
-      const c = seatChar(seat);
-      return h('div', { class: `player${right ? ' right' : ''}${d.status === 'running' && toMove === seat ? ' on' : ''}` },
-        avatar(c),
-        h('div', { style: { minWidth: 0 } },
-          h('div', { class: 'row', style: { gap: '6px', justifyContent: right ? 'flex-end' : 'flex-start', flexWrap: 'nowrap' } },
-            h('span', { class: `side-mark ${seat}` }), h('span', { class: 'name' }, c?.name || '？'), c?.tier ? tierBadge(c.tier) : null),
+  function seatStats(seat) {
+    const ts = [...turns.values()].filter((t) => t.seat === seat && t.label);
+    const tags = { 失误: 0, 大漏着: 0 };
+    let lat = 0, tok = 0, illegal = 0, last = null;
+    for (const t of ts) {
+      lat += t.latency_ms || 0;
+      tok += (t.usage?.input || 0) + (t.usage?.output || 0);
+      if (t.attempts?.length) illegal += t.attempts.length;
+      const tag = t.eval?.quality?.tag;
+      if (tag in tags) tags[tag]++;
+      if (!last || t.ply > last.ply) last = t;
+    }
+    return { n: ts.length, avg: ts.length ? lat / ts.length : 0, tok, illegal, tags, last };
+  }
+
+  // ---------- 渲染 ----------
+  function renderCamp(seat) {
+    const c = seatChar(seat);
+    const s = seatStats(seat);
+    const thinking = d.status === 'running' && (live?.seat === seat || waitingHuman === seat);
+    const change = d.rating_changes?.[d.seats[seat]];
+    const won = d.status === 'finished' && d.result?.winner === seat;
+    const lastQ = s.last?.eval?.quality;
+    const challenger = d.challenge?.by === d.seats[seat] && d.challenge.text;
+    camps[seat].el.classList.toggle('active', thinking);
+    camps[seat].head.replaceChildren(
+      h('div', { class: 'camp-id' },
+        h('div', { class: 'camp-avatar' }, c?.avatar || '？', thinking ? h('i', { class: 'pulse' }) : null),
+        h('div', { class: 'camp-name' },
+          h('div', { class: 'row', style: { gap: '6px', flexWrap: 'nowrap' } },
+            h('span', { class: `side-tag ${seat}` }, SEAT_NAME[seat]),
+            h('b', {}, c?.name || '？'),
+            won ? h('span', { class: 'chip good' }, '胜') : null),
           h('div', { class: 'sub' }, c?.kind === 'model' ? `${c.providerName || c.provider} · ${c.model}` : c?.kind === 'human' ? '玩家' : c?.name),
-        ),
-      );
-    };
-    playersEl.replaceChildren(
-      side('r', false),
-      h('div', { class: 'vs' }, h('span', { class: 'chip' }, MODE_NAMES[d.mode]), h('span', { class: 'state' }, status), h('span', { class: 'muted small' }, `第 ${total} 步`)),
-      side('b', true),
+          h('div', { class: 'row', style: { gap: '6px', marginTop: '4px' } },
+            c?.tier ? tierBadge(c.tier) : null,
+            change ? h('span', { class: change.delta >= 0 ? 'delta-up' : 'delta-down' }, `${change.before} → ${change.after}（${change.delta >= 0 ? '+' : ''}${change.delta}）`) : null)),
+      ),
+      h('div', { class: 'camp-stats' },
+        stat('步数', s.n),
+        stat('平均用时', s.n ? fmtMs(Math.round(s.avg)) : '—'),
+        stat('tokens', fmtTokens(s.tok)),
+        stat('失误', s.tags.失误 + s.tags.大漏着, s.tags.大漏着 ? `其中大漏着 ${s.tags.大漏着}` : ''),
+        stat('无效着法', s.illegal)),
+      s.last?.self_winrate !== null && s.last?.self_winrate !== undefined
+        ? h('div', { class: 'camp-gauge', title: '最近一步：模型自评胜率 / 引擎评估（走棋前）' },
+          h('span', {}, '自评'), bar(s.last.self_winrate / 100, 'self'), h('b', {}, `${s.last.self_winrate}%`),
+          h('span', {}, '引擎'), bar(lastQ ? lastQ.before : null, 'engine'), h('b', {}, lastQ ? pct(lastQ.before) : '—'))
+        : null,
+      challenger ? h('div', { class: 'camp-quote' }, `「${d.challenge.text}」`) : null,
+    );
+  }
+
+  const stat = (label, value, title = '') => h('div', { class: 'cs', title }, h('b', {}, value), h('small', {}, label));
+  const bar = (v, cls) => h('span', { class: `gbar ${cls}` }, h('i', { style: { width: `${v === null ? 0 : Math.round(v * 100)}%` } }));
+
+  function renderStatus() {
+    const running = d.status === 'running';
+    const n = d.view.moves.length;
+    const status = running
+      ? (paused ? '已暂停' : waitingHuman ? '轮到你走' : live ? `${SEAT_NAME[live.seat]}思考中` : '…')
+      : resultText(d, d.seatNames);
+    const btn = (label, title, fn, extra = '') => h('button', { class: `icon-btn ${extra}`, title, onclick: guard(fn) }, label);
+    statusBar.replaceChildren(
+      h('div', { class: 'row', style: { gap: '8px', flexWrap: 'nowrap', minWidth: 0 } },
+        h('span', { class: 'chip' }, MODE_NAMES[d.mode]),
+        h('span', { class: `stage-state${running ? '' : ' done'}` }, status),
+        h('span', { class: 'muted small' }, viewPly === null ? `已走 ${n} 步` : `复盘 ${viewPly}/${n}`)),
+      h('div', { class: 'row', style: { gap: '4px', flexWrap: 'nowrap' } },
+        viewPly !== null ? [
+          btn('◀', '上一步', () => goto(Math.max(0, viewPly - 1))),
+          btn('▶', '下一步', () => goto(Math.min(n, viewPly + 1))),
+          btn('⟳', '回到最新', () => goto(null)),
+        ] : null,
+        running && !humanSeat ? btn(paused ? '▶' : '⏸', paused ? '继续' : '暂停', () => post(`/matches/${id}/control`, { op: paused ? 'resume' : 'pause' })) : null,
+        running && paused ? btn('⏭', '单步', () => post(`/matches/${id}/control`, { op: 'step' })) : null,
+        running && waitingHuman ? btn('🏳', '认输', async () => { if (confirm('确定认输？')) await post(`/matches/${id}/control`, { op: 'resign' }); }) : null,
+        running && d.mode === 'casual' ? btn('■', '中止对局', async () => { if (confirm('中止这盘棋？')) await post(`/matches/${id}/control`, { op: 'abort' }); }) : null,
+        btn('⇅', '翻转棋盘', () => { flipped = !flipped; board.setFlipped(flipped); renderBoard(false); }),
+        h('a', { class: 'icon-btn', title: '导出棋谱', href: `/api/matches/${id}/export` }, '⤓'),
+      ),
     );
   }
 
@@ -116,26 +176,26 @@ export async function matchView(root, id, { meta, characters }) {
     const lastMove = ply > 0 ? d.view.moves[ply - 1].iccs : null;
     const inCheck = latest ? d.view.inCheck : ply > 0 && d.view.moves[ply - 1].check;
     const arrows = [];
-    if (!latest && ply < d.view.moves.length) {
-      const best = (ply === 0 ? d.options?.startEval?.best : turns.get(ply)?.eval?.raw?.best);
-      if (best && d.status !== 'running') arrows.push({ iccs: best, kind: 'best' });
+    if (!latest && ply < d.view.moves.length && d.status !== 'running') {
+      const best = ply === 0 ? d.options?.startEval?.best : turns.get(ply)?.eval?.raw?.best;
+      if (best) arrows.push({ iccs: best, kind: 'best' });
     }
     const movable = latest && d.status === 'running' && waitingHuman && !paused ? waitingHuman : null;
     board.render({ board: boardArr, side, lastMove, inCheck, movable, arrows }, { animate });
-    // 胜率条（红方期望得分）
+    // 胜率条：红方期望得分
     let e = null;
     for (let p = ply; p >= 0 && e === null; p--) e = redEAt(p);
     const red = e ?? 0.5;
     winbar.classList.toggle('flip', flipped);
     winbar.querySelector('.red').style.height = `${red * 100}%`;
-    winbar.querySelector('.t').textContent = `黑 ${Math.round((1 - red) * 100)}`;
-    winbar.querySelector('.b').textContent = `红 ${Math.round(red * 100)}`;
-    winbar.title = `胜率评估：${d.options?.startEval?.source === 'pikafish' ? 'Pikafish' : '内置 AI（粗略）'}`;
+    winbar.querySelector('.t').textContent = Math.round((1 - red) * 100);
+    winbar.querySelector('.b').textContent = Math.round(red * 100);
+    winbar.title = `红方胜率 ${Math.round(red * 100)}%（${d.options?.startEval?.source === 'pikafish' ? 'Pikafish' : '内置 AI 粗略'}评估）`;
   }
 
   function renderCurve() {
     const n = d.view.moves.length;
-    const W = 500, H = 70;
+    const W = 600, H = 60;
     const pts = [];
     for (let p = 0; p <= n; p++) {
       const e = redEAt(p);
@@ -157,6 +217,7 @@ export async function matchView(root, id, { meta, characters }) {
     svgEl.setAttribute('preserveAspectRatio', 'none');
     const cur = viewPly ?? n;
     svgEl.innerHTML = `
+      <rect class="bk" x="0" y="0" width="${W}" height="${H / 2}"/>
       <line class="mid" x1="0" y1="${H / 2}" x2="${W}" y2="${H / 2}"/>
       ${pts.length > 1 ? `<path class="area-r" d="${path(pts)} L ${X(pts[pts.length - 1][0])} ${H} L ${X(pts[0][0])} ${H} Z"/><path class="line" d="${path(pts)}"/>` : ''}
       ${self.length > 1 ? `<path class="self" d="${path(self)}"/>` : ''}
@@ -167,12 +228,8 @@ export async function matchView(root, id, { meta, characters }) {
       goto(Math.round(((e.clientX - r.left) / r.width) * n));
     });
     curve.replaceChildren(
-      h('div', { class: 'row small muted', style: { justifyContent: 'space-between', marginBottom: '2px' } },
-        h('span', {}, '红方胜率走势'),
-        h('span', { class: 'row', style: { gap: '10px' } },
-          h('span', {}, h('span', { style: { color: 'var(--red)' } }, '━'), ' 引擎'),
-          h('span', {}, h('span', { style: { color: 'var(--accent-2)' } }, '┅'), ' 模型自评'))),
       svgEl,
+      h('div', { class: 'curve-legend' }, h('span', { class: 'lg-engine' }, '引擎'), h('span', { class: 'lg-self' }, '自评')),
     );
   }
 
@@ -181,16 +238,15 @@ export async function matchView(root, id, { meta, characters }) {
     const cur = viewPly ?? mv.length;
     const items = [];
     for (let i = 0; i < mv.length; i += 2) {
-      items.push(h('div', { class: 'n' }, `${i / 2 + 1}.`));
-      for (const j of [i, i + 1]) {
-        if (j >= mv.length) { items.push(h('div')); continue; }
+      const cell = (j) => {
+        if (j >= mv.length) return null;
         const q = turns.get(j + 1)?.eval?.quality;
-        items.push(h('div', { class: `mv${cur === j + 1 ? ' on' : ''}`, onclick: () => goto(j + 1) },
-          q ? h('span', { class: `q q-${q.tag}`, title: q.tag }) : null, mv[j].cn));
-      }
+        return h('span', { class: `mv ${j % 2 ? 'b' : 'r'}${cur === j + 1 ? ' on' : ''}`, onclick: () => goto(j + 1), title: q ? q.tag : '' },
+          q ? h('i', { class: `q q-${q.tag}` }) : null, mv[j].cn);
+      };
+      items.push(h('span', { class: 'mvpair' }, h('em', {}, i / 2 + 1), cell(i), cell(i + 1)));
     }
-    moves.replaceChildren(...(items.length ? items : [h('div', { class: 'muted small', style: { gridColumn: '1 / -1' } }, '还没有走棋')]));
-    // 只滚动列表本身，不带动整个页面
+    moves.replaceChildren(...(items.length ? items : [h('span', { class: 'muted small' }, '还没有走棋')]));
     if (viewPly === null) moves.scrollTop = moves.scrollHeight;
     else {
       const on = moves.querySelector('.mv.on');
@@ -198,85 +254,55 @@ export async function matchView(root, id, { meta, characters }) {
     }
   }
 
-  function renderControls() {
-    const running = d.status === 'running';
-    const hasHuman = !!humanSeat;
-    controls.replaceChildren(
-      running && !hasHuman ? h('button', { class: 'btn', onclick: guard(async () => { await post(`/matches/${id}/control`, { op: paused ? 'resume' : 'pause' }); }) }, paused ? '▶ 继续' : '⏸ 暂停') : null,
-      running && paused ? h('button', { class: 'btn', onclick: guard(() => post(`/matches/${id}/control`, { op: 'step' })) }, '⏭ 单步') : null,
-      running && waitingHuman ? h('button', { class: 'btn', onclick: guard(async () => { if (confirm('确定认输？')) await post(`/matches/${id}/control`, { op: 'resign' }); }) }, '🏳 认输') : null,
-      running && d.mode === 'casual' ? h('button', { class: 'btn', onclick: guard(async () => { if (confirm('中止这盘棋？')) await post(`/matches/${id}/control`, { op: 'abort' }); }) }, '中止') : null,
-      h('button', { class: 'btn', onclick: () => { flipped = !flipped; board.setFlipped(flipped); renderBoard(false); } }, '⇅ 翻转'),
-      viewPly !== null ? h('button', { class: 'btn', onclick: () => goto(null) }, '回到最新') : null,
-      h('span', { class: 'grow' }),
-      viewPly !== null ? h('span', { class: 'row', style: { gap: '4px' } },
-        h('button', { class: 'btn sm', onclick: () => goto(Math.max(0, viewPly - 1)) }, '◀'),
-        h('span', { class: 'small muted' }, `${viewPly}/${d.view.moves.length}`),
-        h('button', { class: 'btn sm', onclick: () => goto(Math.min(d.view.moves.length, viewPly + 1)) }, '▶')) : null,
-      h('a', { class: 'btn sm', href: `/api/matches/${id}/export` }, '导出棋谱'),
-    );
-  }
-
-  function renderBanner() {
-    if (d.status === 'running') {
-      banner.replaceChildren(d.challenge?.text ? h('div', { class: 'result-banner' }, h('b', {}, `${chars.get(d.challenge.by)?.name || ''} 的挑战宣言：`), d.challenge.text) : '');
-      return;
-    }
-    const ch = d.rating_changes || {};
-    banner.replaceChildren(h('div', { class: 'result-banner col', style: { gap: '6px' } },
-      h('b', {}, resultText(d, d.seatNames)),
-      Object.keys(ch).length ? h('div', { class: 'row small' }, ...Object.entries(ch).map(([cid, c]) => h('span', {},
-        `${chars.get(cid)?.name || Object.values(d.players).find((p) => p?.id === cid)?.name || ''}：${c.before} → ${c.after} `,
-        h('span', { class: c.delta >= 0 ? 'delta-up' : 'delta-down' }, c.delta >= 0 ? `+${c.delta}` : c.delta)))) : null,
-      d.challenge?.text ? h('div', { class: 'small muted' }, `挑战宣言：${d.challenge.text}`) : null,
-    ));
-  }
-
   function thoughtCard(t, isLive = false) {
     const c = chars.get(t.character_id ?? t.characterId) || seatChar(t.seat);
     const a = parseAnalysis(t.analysis ?? t.text);
     const q = t.eval?.quality;
-    const engineE = q ? q.before : null;
-    const meta = h('div', { class: 'meta' },
-      t.self_winrate !== null && t.self_winrate !== undefined ? h('span', { class: 'chip', title: '模型自评胜率 / 引擎评估的胜率（走棋前）' }, `自评 ${t.self_winrate}%`, engineE !== null ? ` · 引擎 ${pct(engineE)}` : '') : null,
-      qualityChip(q),
-      t.latency_ms ? h('span', { class: 'chip' }, fmtMs(t.latency_ms)) : null,
-      t.usage && (t.usage.input || t.usage.output) ? h('span', { class: 'chip', title: `输入 ${t.usage.input}（缓存 ${t.usage.cached}）/ 输出 ${t.usage.output}` }, `${fmtTokens(t.usage.input + t.usage.output)} tok`) : null,
-    );
     const body = [];
     if (isLive) {
-      if (d.options?.hideThoughts && c?.kind === 'model') body.push(h('div', { class: 'stream muted' }, '思考中…（对局结束后公开）'));
+      if (d.options?.hideThoughts && c?.kind === 'model') body.push(h('div', { class: 'stream muted' }, '思考中，对局结束后公开'));
       else {
-        if (t.reasoning) body.push(h('details', { open: !t.text }, h('summary', {}, `原生推理（${t.reasoning.length} 字）`), h('div', { class: 'reasoning' }, t.reasoning)));
-        body.push(h('div', { class: 'stream typing' }, t.text || (c?.kind === 'model' ? '' : '思考中…')));
+        if (t.reasoning) body.push(h('details', { open: !t.text }, h('summary', {}, `原生推理 · ${t.reasoning.length} 字`), h('div', { class: 'reasoning' }, t.reasoning)));
+        body.push(h('div', { class: 'stream typing' }, t.text || (c?.kind === 'model' ? '' : '思考中')));
       }
     } else if (a) {
       body.push(h('div', { class: 'lines' }, ...LINE_KEYS.filter((k) => a[k]).flatMap((k) => [h('b', {}, k), h('span', {}, a[k])])));
     } else if (t.analysis) {
       body.push(h('div', { class: 'stream' }, t.analysis));
     }
-    if (!isLive && t.reasoning) body.push(h('details', {}, h('summary', {}, `原生推理（${t.reasoning.length} 字）`), h('div', { class: 'reasoning' }, t.reasoning)));
+    if (!isLive && t.reasoning) body.push(h('details', {}, h('summary', {}, `原生推理 · ${t.reasoning.length} 字`), h('div', { class: 'reasoning' }, t.reasoning)));
     for (const at of t.attempts || []) body.push(h('div', { class: 'illegal' }, `✗ ${at.attempted || '无着法'}：${at.error}`));
-    const moveLabel = t.label || (isLive ? '' : '（判负）');
-    return h('div', { class: `thought ${t.seat}${isLive ? ' live' : ''}`, 'data-ply': t.ply },
-      h('div', { class: 'head' },
-        h('span', { class: 'muted small' }, `#${t.ply}`), avatar(c, 'sm'), h('b', {}, c?.name || ''),
-        moveLabel ? h('span', { class: 'move' }, moveLabel) : null,
-        meta),
+    const meta = [
+      t.self_winrate !== null && t.self_winrate !== undefined ? `自评 ${t.self_winrate}%${q ? ` · 引擎 ${pct(q.before)}` : ''}` : null,
+      t.latency_ms ? fmtMs(t.latency_ms) : null,
+      t.usage && (t.usage.input || t.usage.output) ? `${fmtTokens(t.usage.input + t.usage.output)} tokens` : null,
+    ].filter(Boolean).join(' · ');
+    return h('article', { class: `thought${isLive ? ' live' : ''}`, 'data-ply': t.ply },
+      h('header', {},
+        h('span', { class: 'ply' }, `#${t.ply}`),
+        h('span', { class: 'move' }, t.label || (isLive ? (d.options?.hideThoughts && c?.kind === 'model' ? '' : '思考中') : '判负')),
+        h('span', { class: 'grow' }),
+        qualityChip(q)),
+      meta ? h('div', { class: 'meta' }, meta) : null,
       ...body);
   }
 
   function renderThoughts() {
-    const cards = [];
-    if (live && d.status === 'running') cards.push(thoughtCard(live, true));
-    const plies = [...turns.keys()].sort((a, b) => b - a);
-    for (const p of plies) cards.push(thoughtCard(turns.get(p)));
-    if (!cards.length) cards.push(h('div', { class: 'empty card' }, '等待第一步…'));
-    thoughts.replaceChildren(...cards);
-    if (viewPly !== null) {
-      const el = thoughts.querySelector(`[data-ply="${viewPly}"]`);
-      el?.classList.add('focus');
-      if (el) thoughts.scrollTo({ top: el.offsetTop - 8, behavior: 'smooth' });
+    for (const seat of ['r', 'b']) {
+      const cards = [];
+      if (live && live.seat === seat && d.status === 'running') cards.push(thoughtCard(live, true));
+      const plies = [...turns.keys()].filter((p) => turns.get(p).seat === seat).sort((a, b) => b - a);
+      for (const p of plies) cards.push(thoughtCard(turns.get(p)));
+      if (!cards.length) cards.push(h('div', { class: 'camp-empty' }, d.status === 'running' ? '等待出手' : '没有记录'));
+      const list = camps[seat].list;
+      list.replaceChildren(...cards);
+      if (viewPly !== null) {
+        const el = list.querySelector(`[data-ply="${viewPly}"]`);
+        if (el) {
+          el.classList.add('focus');
+          list.scrollTo({ top: el.offsetTop - 6, behavior: 'smooth' });
+        }
+      } else list.scrollTop = 0;
     }
   }
 
@@ -284,42 +310,42 @@ export async function matchView(root, id, { meta, characters }) {
     const n = d.view.moves.length;
     if (ply === null || (ply >= n && d.status === 'running')) viewPly = null;
     else viewPly = Math.max(0, Math.min(n, ply));
+    renderStatus();
     renderBoard(false);
     renderMoves();
     renderCurve();
-    renderControls();
     renderThoughts();
   }
 
   function renderAll() {
-    renderPlayers();
+    renderCamp('r');
+    renderCamp('b');
+    renderStatus();
     renderBoard();
     renderCurve();
     renderMoves();
-    renderControls();
-    renderBanner();
     renderThoughts();
   }
 
-  // 只更新正在思考的卡片，避免每个字都重绘整个面板
+  // 只更新正在思考的卡片，避免每个字都重绘整栏
   let liveTimer = null;
   function updateLive() {
     if (liveTimer) return;
     liveTimer = requestAnimationFrame(() => {
       liveTimer = null;
-      const old = thoughts.querySelector('.thought.live');
-      const fresh = live ? thoughtCard(live, true) : null;
-      if (old && fresh) {
-        const det = old.querySelector('details');
-        const wasOpen = det?.open;
-        const oldReason = old.querySelector('.reasoning');
-        const keepScroll = oldReason ? oldReason.scrollHeight - oldReason.scrollTop - oldReason.clientHeight < 30 : true;
-        old.replaceWith(fresh);
-        const nd = fresh.querySelector('details');
-        if (nd && det) nd.open = wasOpen;
-        const nr = fresh.querySelector('.reasoning');
-        if (nr && keepScroll) nr.scrollTop = nr.scrollHeight;
-      } else renderThoughts();
+      if (!live) return;
+      const list = camps[live.seat].list;
+      const old = list.querySelector('.thought.live');
+      const fresh = thoughtCard(live, true);
+      if (!old) { renderThoughts(); return; }
+      const det = old.querySelector('details');
+      const oldReason = old.querySelector('.reasoning');
+      const keepBottom = oldReason ? oldReason.scrollHeight - oldReason.scrollTop - oldReason.clientHeight < 30 : true;
+      old.replaceWith(fresh);
+      const nd = fresh.querySelector('details');
+      if (nd && det) nd.open = det.open;
+      const nr = fresh.querySelector('.reasoning');
+      if (nr && keepBottom) nr.scrollTop = nr.scrollHeight;
     });
   }
 
@@ -332,10 +358,11 @@ export async function matchView(root, id, { meta, characters }) {
       case 'turn_start':
         live = { ply: e.ply, seat: e.seat, characterId: e.characterId, character_id: e.characterId, text: '', reasoning: '', attempts: [] };
         if (seatChar(e.seat)?.kind === 'human') { waitingHuman = e.seat; live = null; }
-        renderPlayers();
+        renderCamp('r');
+        renderCamp('b');
+        renderStatus();
         renderThoughts();
         renderBoard(false);
-        renderControls();
         break;
       case 'delta':
         if (!live || live.ply !== e.ply) return;
@@ -360,23 +387,24 @@ export async function matchView(root, id, { meta, characters }) {
         renderAll();
         break;
       }
-      case 'eval':
+      case 'eval': {
         if (e.ply === 0) d.options.startEval = e.eval;
         else if (turns.has(e.ply)) turns.get(e.ply).eval = e.eval;
         else turns.set(e.ply, { ply: e.ply, eval: e.eval });
         renderBoard(false);
         renderCurve();
         renderMoves();
-        if (!live) renderThoughts();
-        else {
-          const card = thoughts.querySelector(`.thought[data-ply="${e.ply}"]`);
-          if (card && turns.get(e.ply)?.seat) card.replaceWith(thoughtCard(turns.get(e.ply)));
+        const t = turns.get(e.ply);
+        if (t?.seat) {
+          renderCamp(t.seat);
+          const card = camps[t.seat].list.querySelector(`.thought[data-ply="${e.ply}"]`);
+          if (card) card.replaceWith(thoughtCard(t));
         }
         break;
+      }
       case 'control':
         paused = e.paused;
-        renderPlayers();
-        renderControls();
+        renderStatus();
         renderBoard(false);
         break;
       case 'end':
@@ -392,6 +420,5 @@ export async function matchView(root, id, { meta, characters }) {
         break;
     }
   });
-  void meta;
   return () => stop();
 }

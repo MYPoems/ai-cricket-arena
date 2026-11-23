@@ -1,4 +1,4 @@
-// 对弈场核心：创建对局、轮流向各座位的玩家要着法、推送实时事件、结算积分。
+// 电子斗蛐蛐核心：创建对局、轮流向各座位的玩家要着法、推送实时事件、结算积分。
 
 import { getGame } from '../games/index.js';
 import { newId, now } from './db.js';
