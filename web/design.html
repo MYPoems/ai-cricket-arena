@@ -27,6 +27,10 @@
     .ds-type > div { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 16px; align-items: baseline; }
     .ds-arena { display: grid; grid-template-columns: minmax(0, 320px) minmax(0, 1fr) minmax(0, 320px); gap: 18px; align-items: stretch; }
     .ds-arena .camp { height: 600px; }
+    .ds-duo { display: grid; grid-template-columns: minmax(0, 300px) minmax(0, 1fr) minmax(0, 300px); gap: 18px; height: 660px; }
+    .ds-duo.three { height: 560px; }
+    .ds-duo .stage { gap: 12px; }
+    @media (max-width: 1100px) { .ds-duo, .ds-duo.three { grid-template-columns: minmax(0, 1fr); height: auto; } .ds-duo .seats { flex-direction: row; flex-wrap: wrap; } .ds-duo .seat { flex: 1 1 260px; max-height: none; } .ds-duo .stage > .focus { overflow: visible; } }
     .ds-stage { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
     .ds-board { flex: 1; min-height: 260px; display: flex; gap: 10px; }
     .ds-board .winbar { width: 22px; flex: none; }
@@ -54,6 +58,7 @@
       <a href="#tokens2">头像印章</a>
       <a href="#lobby">大厅</a>
       <a href="#arena">对局</a>
+      <a href="#duo">多人</a>
       <a href="#rules">材质规则<span class="badge">7</span></a>
     </nav>
     <div class="top-right">
@@ -114,8 +119,8 @@
     <section class="ds-sec" id="panels">
       <div class="section-title"><h2>面板与装饰</h2><span class="label">SURFACES</span></div>
       <div class="ds-grid">
-        <div class="ds-demo"><div class="card pad"><h3>漆板 .card</h3><p class="muted small" style="margin:.5em 0 0">描金渐变边、左上反光、顶边亮线、底边压暗，板下露出 2px 侧壁，再落两层影。</p></div><span class="ds-cap">.card / .panel · 海棠抹角</span></div>
-        <div class="ds-demo"><div class="card framed"><h3>重点面板 .framed</h3><p class="muted small" style="margin:.5em 0 0">外框之内 5px 处再嵌一道细金线。内容离边 22px，线和内容之间留白。</p></div><span class="ds-cap">.card.framed · 双线描金</span></div>
+        <div class="ds-demo"><div class="card pad"><h3>漆板 .card</h3><p class="muted small" style="margin:.5em 0 0">金边有明暗和两处反光；漆面上沿一道弧形反光，中间透出朱红，往下压暗；板下露出铜色侧壁，再落两层影。</p></div><span class="ds-cap">.card / .panel · 圆角 12，大面板 16</span></div>
+        <div class="ds-demo"><div class="card framed"><h3>重点面板 .framed</h3><p class="muted small" style="margin:.5em 0 0">外框之内 6px 处再嵌一道细金线，和外框同心。内容离边 22px。</p></div><span class="ds-cap">.card.framed · 双线描金</span></div>
         <div class="ds-demo"><div class="card ds-wmbox"><span class="wm" aria-hidden="true">胜</span><h3>大字水印 .wm</h3><p class="muted small" style="margin:.5em 0 0;max-width:15em">压在角落的留白里，在内容层之下，被面板裁掉一半。</p></div><span class="ds-cap">.wm · 只放一个字</span></div>
         <div class="ds-demo"><div class="card pad" style="display:grid;gap:10px"><div class="stat-grid"><div class="stat"><b>37</b><small>胜</small></div><div class="stat"><b>12</b><small>负</small></div><div class="stat"><b>5</b><small>和</small></div></div><div class="well pad small muted">.well：往下陷的面，顶边有内阴影，底沿有反光。</div></div><span class="ds-cap">.well / .stat · 凹槽</span></div>
         <div class="ds-demo"><div class="card pad" style="display:grid;gap:14px"><div class="paper pad"><div class="brush" style="font-size:24px;color:#b4241a">宣纸 .paper</div><div class="small" style="font-family:var(--serif)">有纤维，底下是一沓纸的边，搁在漆板上有影子。</div></div></div><span class="ds-cap">.paper · 宣纸卡</span></div>
@@ -273,8 +278,8 @@
 
         <div class="ds-stage">
           <div class="stage-bar"><div class="bar-info"><span class="gname">中国象棋</span><span class="chip">排位赛</span><span class="stage-state">红方思考中</span><span class="muted small" style="white-space:nowrap">已走 38 步</span></div>
-            <div class="bar-ctrl"><button class="icon-btn" title="从头回放">⏵</button><select class="speed"><option>1×</option><option>2×</option></select><button class="icon-btn" title="上一步">◀</button><button class="icon-btn" title="下一步">▶</button><button class="icon-btn" title="翻转">⇅</button><a class="icon-btn" title="导出记录" href="#">⤓</a><span class="grow"></span><button class="btn sm">提和</button></div></div>
-          <div class="ds-board"><div class="winbar"><div class="red" style="height:54%"></div><div class="mid"></div><span class="t">46</span><span class="b">54</span></div>
+            <div class="bar-ctrl"><button class="icon-btn" title="从头回放">⏵</button><select class="speed"><option>1×</option><option>2×</option></select><button class="icon-btn" title="上一步">◀</button><button class="icon-btn" title="下一步">▶</button><button class="icon-btn" title="翻转">⇅</button><a class="icon-btn" title="导出记录" href="#">⤓</a><span class="grow"></span><button class="btn sm">提和</button></div><div class="tug"><span>54%</span><div class="bar"><i class="l" style="width:54%"></i><i class="r"></i><span class="knot" style="left:54%"></span></div><span>46%</span></div></div>
+          <div class="ds-board">
             <div class="mthumb"><svg viewBox="0 0 400 300" preserveAspectRatio="xMidYMid slice"><rect width="400" height="300" fill="url(#wd)"/><g stroke="#6b3512" stroke-width="1.2" fill="none"><path d="M40 30h320M40 70h320M40 110h320M40 150h320M40 190h320M40 230h320M40 270h320M40 30v240M80 30v240M120 30v240M160 30v240M200 30v240M240 30v240M280 30v240M320 30v240M360 30v240"/></g><g font-family="serif" font-weight="900" font-size="20" text-anchor="middle"><circle cx="160" cy="70" r="17" fill="#f6e9c8" stroke="#8a2a14" stroke-width="1.4"/><text x="160" y="77" fill="#b3221a">车</text><circle cx="240" cy="150" r="17" fill="#f6e9c8" stroke="#3a2214" stroke-width="1.4"/><text x="240" y="157" fill="#1e1310">马</text><circle cx="200" cy="230" r="17" fill="#f6e9c8" stroke="#8a2a14" stroke-width="1.4"/><text x="200" y="237" fill="#b3221a">帅</text><circle cx="200" cy="30" r="17" fill="#f6e9c8" stroke="#3a2214" stroke-width="1.4"/><text x="200" y="37" fill="#1e1310">将</text></g></svg></div></div>
           <div class="stage-curve"><svg class="curve" viewBox="0 0 600 60" preserveAspectRatio="none"><rect class="bk" x="0" y="0" width="600" height="30"/><line class="mid" x1="0" y1="30" x2="600" y2="30"/><path class="area-r" d="M0 30 L80 28 L160 34 L240 24 L320 30 L400 20 L480 26 L600 27 L600 60 L0 60 Z"/><path class="line" d="M0 30 L80 28 L160 34 L240 24 L320 30 L400 20 L480 26 L600 27"/><path class="self" d="M0 26 L120 22 L260 18 L400 21 L600 23"/><line class="cursor" x1="600" y1="0" x2="600" y2="60"/></svg><div class="curve-legend"><span class="lg-engine">红方胜率</span><span class="lg-self">自评</span></div></div>
           <div class="stage-moves"><span class="mvpair"><em>17</em><span class="mv" style="color:#e2523d"><i class="q q-好棋"></i>兵三进一</span><span class="mv">马8进7</span></span><span class="mvpair"><em>18</em><span class="mv" style="color:#e2523d"><i class="q q-缓着"></i>炮八平五</span><span class="mv"><i class="q q-失误"></i>象3进5</span></span><span class="mvpair"><em>19</em><span class="mv on" style="color:#e2523d"><i class="q q-最佳"></i>车二进六</span><span class="mv"><i class="q q-大漏着"></i>将5平4</span></span></div>
@@ -295,6 +300,70 @@
       </div>
     </section>
 
+    <!-- ============ 对局页 · 多人 ============ -->
+    <section class="ds-sec" id="duo">
+      <div class="section-title"><h2>对局页 · 多人（狼人杀）</h2><span class="label">ARENA · DUO</span></div>
+      <div class="ds-cap">白天发言 · 8 人局（每列 4 人）</div>
+      <div class="ds-duo">
+        <div class="seats">
+          <div class="seat speaking"><span class="no">1</span><span class="coin">🦗</span><div class="info"><b class="nm">铁头将军</b><div class="md">deepseek-chat</div><div class="note">我是预言家，昨晚验了 5 号，是狼。</div></div><div class="side"><span class="role" style="--rc:#3a5a96">预言家</span><span class="wave"><i></i><i></i><i></i><i></i></span></div></div>
+          <div class="seat"><span class="no">2</span><span class="coin">🐉</span><div class="info"><b class="nm">青龙</b><div class="md">kimi-k2</div><div class="note">1 号跳得太急，我先保留意见。</div></div><div class="side"><span class="role" style="--rc:#a8281c">狼人</span><span class="votes">1 票</span></div></div>
+          <div class="seat"><span class="no">3</span><span class="coin">🦊</span><div class="info"><b class="nm">赤狐</b><div class="md">qwen-max</div><div class="note">昨晚是平安夜，女巫应该救了人。</div></div><div class="side"><span class="role" style="--rc:#3a5a96">女巫</span></div></div>
+          <div class="seat dead"><span class="no">4</span><span class="coin">🐼<span class="dead-mark">亡</span></span><div class="info"><b class="nm">墨团</b><div class="md">claude</div></div><div class="side"><span class="role" style="--rc:#2f7a68">平民</span></div></div>
+        </div>
+        <section class="stage">
+          <div class="stage-bar"><div class="bar-info"><span class="gname">狼人杀</span><span class="chip">娱乐赛</span><span class="stage-state">1 号发言中</span><span class="muted small" style="white-space:nowrap">第 2 天</span></div>
+            <div class="bar-ctrl"><button class="icon-btn" title="从头回放">⏵</button><select class="speed"><option>1×</option></select><button class="icon-btn" title="上一步">◀</button><button class="icon-btn" title="下一步">▶</button><a class="icon-btn" title="导出记录" href="#">⤓</a></div></div>
+          <div class="scene day"><b class="t">第二天 · 白天</b><span class="s">依次发言 · 然后投票</span></div>
+          <div class="focus">
+            <div class="who"><span class="coin lg">🦗</span><b>1 号 铁头将军</b><small>预言家</small></div>
+            <div class="paper said"><span class="lab">说的</span>我是预言家。昨晚我验了 5 号，他是狼人。今天请大家把票集中到 5 号，女巫如果还有毒药，今晚可以留着。</div>
+            <div class="well thought2"><span class="lab">想的</span>5 号发言一直在带节奏保 2 号，两人很可能是同伴。先报查验结果，逼 5 号对跳，看 2 号的反应。</div>
+          </div>
+          <div class="panels">
+            <div class="panel"><div class="label">票型</div>
+              <div class="vrow"><span>5 号</span><div class="vb"><i style="width:75%"></i></div><div class="voters"><span>1</span><span>3</span><span>6</span></div></div>
+              <div class="vrow"><span>1 号</span><div class="vb"><i class="g" style="width:25%"></i></div><div class="voters"><span>5</span></div></div></div>
+            <div class="panel"><div class="label">昨夜</div>
+              <div class="act"><b>狼人</b><span class="muted">刀 4 号</span><span class="chip bad">出局</span></div>
+              <div class="act"><b>预言家</b><span class="muted">验 5 号</span><span class="chip">狼人</span></div></div>
+          </div>
+        </section>
+        <div class="seats">
+          <div class="seat mir"><span class="no">5</span><span class="coin">🦉</span><div class="info"><b class="nm">夜枭</b><div class="md">gpt</div><div class="note">1 号才是悍跳狼，我是真预言家。</div></div><div class="side"><span class="role" style="--rc:#a8281c">狼人</span><span class="votes">3 票</span></div></div>
+          <div class="seat mir"><span class="no">6</span><span class="coin">🐯</span><div class="info"><b class="nm">山君</b><div class="md">gemini</div><div class="note">我站 1 号这边。</div></div><div class="side"><span class="role" style="--rc:#3a5a96">猎人</span></div></div>
+          <div class="seat mir"><span class="no">7</span><span class="coin">🐰</span><div class="info"><b class="nm">玉兔</b><div class="md">glm</div></div><div class="side"><span class="role" style="--rc:#2f7a68">平民</span></div></div>
+          <div class="seat mir"><span class="no">8</span><span class="coin">🤖</span><div class="info"><b class="nm">内置 AI · 中级</b><div class="md">内置 AI</div></div><div class="side"><span class="role" style="--rc:#a8281c">狼人</span></div></div>
+        </div>
+      </div>
+      <div class="ds-cap" style="margin-top:18px">夜晚行动 · 谁是卧底 6 人局（每列 3 人）的座位，配狼人杀的夜晚场景</div>
+      <div class="ds-duo three">
+        <div class="seats">
+          <div class="seat dim"><span class="no">1</span><span class="coin">🦗</span><div class="info"><b class="nm">铁头将军</b><div class="md">deepseek-chat</div></div><div class="side"><span class="word">饺子</span></div></div>
+          <div class="seat lit speaking"><span class="no">2</span><span class="coin">🐉</span><div class="info"><b class="nm">青龙</b><div class="md">kimi-k2</div><div class="note">今晚刀 3 号，她像女巫。</div></div><div class="side"><span class="role" style="--rc:#a8281c">狼人</span><span class="wave"><i></i><i></i><i></i><i></i></span></div></div>
+          <div class="seat dim"><span class="no">3</span><span class="coin">🦊</span><div class="info"><b class="nm">赤狐</b><div class="md">qwen-max</div></div><div class="side"><span class="word">饺子</span></div></div>
+        </div>
+        <section class="stage">
+          <div class="scene night"><b class="t">第二夜 · 狼人睁眼</b><span class="s">狼人商量今晚的目标</span></div>
+          <div class="focus">
+            <div class="who"><span class="coin lg">🐉</span><b>2 号 青龙</b><small>狼人</small></div>
+            <div class="well thought2"><span class="lab">想的</span>3 号白天说「女巫应该救了人」，像是知道内情。今晚刀她，明天再把票带到 1 号身上。</div>
+          </div>
+          <div class="panels">
+            <div class="panel"><div class="label">今晚</div>
+              <div class="act"><b>狼人</b><span class="muted">正在商量</span><span class="chip gold">行动中</span></div>
+              <div class="act"><b>女巫</b><span class="muted">解药已用 · 毒药 1</span><span class="chip">等待</span></div></div>
+            <div class="panel"><div class="label">词卡</div><div class="row" style="margin-top:8px;gap:14px"><span class="wordcard">饺子</span><span class="wordcard spy">馄饨</span></div></div>
+          </div>
+        </section>
+        <div class="seats">
+          <div class="seat mir lit"><span class="no">4</span><span class="coin">🦉</span><div class="info"><b class="nm">夜枭</b><div class="md">gpt</div></div><div class="side"><span class="role" style="--rc:#a8281c">狼人</span><span class="word spy">馄饨</span></div></div>
+          <div class="seat mir dim"><span class="no">5</span><span class="coin">🐯</span><div class="info"><b class="nm">山君</b><div class="md">gemini</div></div><div class="side"><span class="word">饺子</span></div></div>
+          <div class="seat mir dead"><span class="no">6</span><span class="coin">🐼<span class="dead-mark">亡</span></span><div class="info"><b class="nm">墨团</b><div class="md">claude</div></div><div class="side"><span class="role" style="--rc:#2f7a68">平民</span></div></div>
+        </div>
+      </div>
+    </section>
+
     <!-- ============ 材质规则 ============ -->
     <section class="ds-sec" id="rules">
       <div class="section-title"><h2>材质规则</h2><span class="label">RULES</span></div>
@@ -302,11 +371,11 @@
         <ol>
           <li><b>一盏灯。</b>光从正上方偏左来。凸起的东西顶边亮、底边暗、下面有侧壁和影子；凹下去的东西顶边有内阴影、底沿有反光。新组件先决定它是凸的还是凹的，再套对应的令牌。</li>
           <li><b>三种面。</b>漆板（<code>.card</code>）承载内容，用 <code>--surface</code> + <code>--hi</code> + 一级高度；凹槽（<code>.well</code>、输入框、数据格、时间轴）承载数字和可填可选的东西，用 <code>--well-bg</code> + <code>--well-sh</code>；宣纸（<code>.paper</code>、最新一步的结论卡）只给「此刻最该读的一段话」，一屏最多两张。</li>
-          <li><b>四级高度，三层影。</b><code>--e1</code> 贴面小件（转播条、牌子），<code>--e2</code> 面板，<code>--e3</code> 鼠标移上去或登录卡，<code>--e4</code> 弹窗和提示。每一级都是「侧壁 + 贴地硬影 + 远处柔影」三层，不要自己再叠第四层；面板不嵌套面板，面板里只放凹槽和宣纸。</li>
+          <li><b>四级高度，三层影。</b><code>--e1</code> 贴面小件（转播条、牌子），<code>--e2</code> 面板，<code>--e3</code> 鼠标移上去或登录卡，<code>--e4</code> 弹窗和提示。每一级都是「铜色侧壁 + 贴地硬影 + 远处柔影」，不要自己再叠第四层；面板不嵌套面板，面板里只放凹槽和宣纸。</li>
           <li><b>金是金属，分三档。</b>金线（<code>--edge</code>，所有面板的边）、亮金线（<code>--edge-hi</code>，只给正在发生的事：轮到的一方、高光对局、鼠标移上去、弹窗）、金块（<code>--gold-metal</code>，只给「当前选中」：分段键、筛选、当前这一步、今日擂台牌）。金箔字（<code>.gold-text</code>）只用在书法标题、选手名字和大数字上，正文不用。金色一律用渐变令牌，不写平涂的黄色。</li>
           <li><b>红只有两处是饱和的。</b>朱泥印章（<code>.seal</code>、<code>.stamp-fx</code>）是全站唯一的饱和红块；朱砂按钮（<code>.btn.primary</code>）每个视图只放一个，给最主要的那个动作。其余的红（阵营色、大漏着、座位号）都压暗一档。</li>
           <li><b>按钮有行程。</b>朱砂按钮是漆木块，描金按钮是包金边的漆块，都靠 <code>--d</code> 露出侧壁，按下时整块下沉 <code>--d</code>。放按钮的容器底部留出 4px，别让侧壁被裁掉。</li>
-          <li><b>装饰只有七种，都不碰内容。</b>海棠抹角、双线描金（<code>.framed</code>，内容离边 22px）、月洞圆（<code>.moon</code>）、大字水印（<code>.wm</code>，一块面板一个字，放在角落留白里、内容层之下）、朱泥印章、回纹细带（<code>.fret</code>，只作分隔线）、直棂细格（<code>.lattice</code>，只在大厅顶部）。一块面板上最多用两种。</li>
+          <li><b>装饰只有六种，都不碰内容。</b>面板一律圆角（牌子 4、小件 6、卡片 12、大面板 16、弹窗 18），内框半径 = 外框半径 − 间距。双线描金（<code>.framed</code>，内容离边 22px）、月洞圆（<code>.moon</code>）、大字水印（<code>.wm</code>，一块面板一个字，放在角落留白里、内容层之下）、朱泥印章、回纹细带（<code>.fret</code>，只作分隔线）、直棂细格（<code>.lattice</code>，只在大厅顶部）。一块面板上最多用两种。</li>
         </ol>
       </div>
     </section>

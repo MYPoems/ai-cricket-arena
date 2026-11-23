@@ -95,9 +95,9 @@ export async function matchView(root, id, { characters }) {
   const focusEl = h('div', { class: 'focus' });
   if (duo) {
     root.replaceChildren(h('div', { class: `arena duo no-winbar${recordMode ? ' recording' : ''}` },
-      h('div', { class: 'camp-col seats-col' }, ...leftSeats.map((s) => seatEls[s])),
+      h('div', { class: 'seats' }, ...leftSeats.map((s) => seatEls[s])),
       h('section', { class: 'stage' }, statusBar, sceneEl, focusEl, h('div', { class: 'duo-stage' }, stage.el), moves),
-      h('div', { class: 'camp-col seats-col' }, ...rightSeats.map((s) => seatEls[s])),
+      h('div', { class: 'seats' }, ...rightSeats.map((s) => seatEls[s])),
     ));
   } else {
     root.replaceChildren(h('div', { class: `arena${winbarOn ? '' : ' no-winbar'}${recordMode ? ' recording' : ''}`, style: { '--aw': aw, '--ah': ah } },
@@ -235,12 +235,12 @@ export async function matchView(root, id, { characters }) {
         : a ? LINE_KEYS.filter((k) => a[k] && k !== '发言' && k !== '投票').map((k) => `${k}：${a[k]}`).join('\n') || t?.analysis || ''
           : t?.analysis || t?.reasoning || '';
     focusEl.replaceChildren(
+      // 结构按设计系统：.focus 的直接子元素依次是头像区、说的、想的
       h('div', { class: 'who' }, h('span', { class: 'coin lg' }, c?.avatar || '？'), h('b', { class: 'gold-text' }, `${seats.indexOf(seat) + 1} 号 · ${c?.name || '？'}`), h('small', {}, modelLine(c)),
-        info.role ? h('span', { class: 'role', style: { '--rc': info.role.color || 'var(--jade)' } }, info.role.text) : null),
-      h('div', { class: 'words' },
-        h('div', { class: 'paper said' }, h('span', { class: 'lab' }, live ? '正在想' : '说的 · 公开'), t?.label ? t.label : live ? '…' : '还没有开口'),
-        thoughtText ? h('div', { class: `well thought2${live ? ' typing' : ''}` }, h('span', { class: 'lab' }, hidden ? '想的' : '想的 · 只有上帝视角能看到'), thoughtText) : null,
-        focusSeat ? h('button', { class: 'btn sm ghost', onclick: () => { focusSeat = null; seats.forEach(renderSeat); renderFocus(); } }, '跟随当前行动的人') : h('div', { class: 'small muted' }, '点左右的座位，看其他人的发言和想法')));
+        info.role ? h('span', { class: 'role', style: { '--rc': info.role.color || 'var(--jade)' } }, info.role.text) : null,
+        focusSeat ? h('button', { class: 'btn sm ghost', onclick: () => { focusSeat = null; seats.forEach(renderSeat); renderFocus(); } }, '跟随当前') : null),
+      h('div', { class: 'paper said' }, h('span', { class: 'lab' }, live ? '正在想' : '说的'), t?.label ? t.label : live ? '…' : '还没有开口'),
+      h('div', { class: `well thought2${live ? ' typing' : ''}` }, h('span', { class: 'lab' }, hidden ? '想的' : '想的 · 上帝视角'), thoughtText || '（点左右的座位，看其他人的发言和想法）'));
   }
 
   function renderCamp(seat) {
