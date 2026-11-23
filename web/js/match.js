@@ -191,12 +191,18 @@ export async function matchView(root, id, { characters }) {
     const info = duoInfo.seats?.[seat] || {};
     const st = String(info.state || '');
     const thinking = d.status === 'running' && viewPly === null && (partials.has(seat) || waitingHuman === seat);
-    const speaking = st.includes('speaking') || thinking;
+    // 多人同时思考（投票）时不让所有座位一起闪，只标单人行动
+    const speaking = st.includes('speaking') || (thinking && partials.size <= 1);
     const cls = ['seat', rightSeats.includes(seat) ? 'mir' : '', st.replace('speaking', ''), speaking ? 'speaking' : '', focusOf() === seat ? 'focused' : '', info.pick ? 'pickable' : ''].filter(Boolean).join(' ');
     const el = h('div', {
       class: cls, role: 'button', tabindex: 0, title: info.pick ? info.pickTitle || '选这个人' : '看这个人的想法',
       onclick: () => {
-        if (info.pick) { doAction(info.pick); return; }
+        if (info.pick) {
+          // 毒药不可撤回，先确认一次
+          if (String(info.pick).startsWith('poison:') && !confirm(`${info.pickTitle || '用毒药'}？毒药只有一瓶，用了不能撤回。`)) return;
+          doAction(info.pick);
+          return;
+        }
         focusSeat = focusSeat === seat ? null : seat;
         seats.forEach(renderSeat);
         renderFocus();
@@ -207,7 +213,7 @@ export async function matchView(root, id, { characters }) {
     h('div', { class: 'info' }, h('b', { class: 'nm' }, c?.name || '？'), h('div', { class: 'md' }, modelLine(c)), info.note ? h('div', { class: 'note' }, info.note) : null),
     h('div', { class: 'side' },
       info.role ? h('span', { class: 'role', style: { '--rc': info.role.color || 'var(--jade)' } }, info.role.text) : null,
-      info.word ? h('span', { class: `word${info.word.back ? ' back' : ''}` }, info.word.back ? '' : info.word.text) : null,
+      info.word ? h('span', { class: `word${info.word.back ? ' back' : ''}${info.word.spy ? ' spy' : ''}` }, info.word.back ? '' : info.word.text) : null,
       info.votes ? h('span', { class: 'votes' }, `${info.votes} 票`) : null,
       speaking && !st.includes('dead') ? h('span', { class: 'wave' }, h('i'), h('i'), h('i'), h('i')) : null));
     seatEls[seat].replaceWith(el);
@@ -240,7 +246,7 @@ export async function matchView(root, id, { characters }) {
         info.role ? h('span', { class: 'role', style: { '--rc': info.role.color || 'var(--jade)' } }, info.role.text) : null,
         focusSeat ? h('button', { class: 'btn sm ghost', onclick: () => { focusSeat = null; seats.forEach(renderSeat); renderFocus(); } }, '跟随当前') : null),
       h('div', { class: 'paper said' }, h('span', { class: 'lab' }, live ? '正在想' : '说的'), t?.label ? t.label : live ? '…' : '还没有开口'),
-      h('div', { class: `well thought2${live ? ' typing' : ''}` }, h('span', { class: 'lab' }, hidden ? '想的' : '想的 · 上帝视角'), thoughtText || '（点左右的座位，看其他人的发言和想法）'));
+      h('div', { class: `well thought2${live ? ' typing' : ''}` }, h('span', { class: 'lab' }, hidden || d.viewer ? '想的' : '想的 · 上帝视角'), thoughtText || '（点左右的座位，看其他人的发言和想法）'));
   }
 
   function renderCamp(seat) {

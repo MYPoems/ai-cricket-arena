@@ -1,171 +1,263 @@
-// 谁是卧底画面：圆桌，座位围成一圈；每人显示头像位、座位号、出局标记、最近一句发言气泡；
-// 投票时显示「→3号」和得票数；上帝视角显示每人的词和身份（卧底朱红），中间显示轮次、阶段和本局词对。
-// 玩家本人：描述阶段在桌面中间输入一句话发言；投票阶段点选其他存活玩家的头像投票。
+// 谁是卧底画面（左右对称座位版式）。座位卡由对局页按 duoView 画在左右两列，这里只画中间舞台：
+// 上帝视角顶部是两个词（玩家视角只有自己的词）；本轮发言顺序、投票票型（小铜钱是投票人）、历史（每轮谁出局、身份）。
+// 玩家本人：描述阶段在舞台上方输入一句话；投票阶段点左右的座位卡投票（duoView 给座位的 pick）。
+// 隐藏信息：只用 view 里有的东西（view 已按视角裁剪过），玩家视角不会出现别人的词和身份（出局者身份公开）。
 
-const NS = 'http://www.w3.org/2000/svg';
-const W = 1600, H = 1000, CX = 800, CY = 500;
-const RX = 640, RY = 372; // 座位所在的椭圆
-const AV = 46; // 头像半径
-const FS = 22; // 气泡字号
-const LINE_UNITS = 13; // 气泡每行最多的字宽（汉字 = 1）
-// 座位色：不用朱红，朱红留给卧底和出局标记
+// 座位色：不用朱红，朱红留给卧底和出局
 const COLORS = ['var(--black-side)', '#3559b5', '#9a5d24', '#2f7a70', '#7d3c98', '#a17a12', '#6b6b6b', '#4f6b2f'];
+const ROLE_COLOR = { 卧底: '#b4241a', 平民: '#5d6b4e' };
 const PHASE = { speak: '描述', vote: '投票', tiespeak: '平票发言', revote: '平票重投', over: '结束' };
 
+// 布局用的少量样式；面板、凹槽、票型行（.vrow .vb .voters）、行动行（.act）、两栏（.panels）、词卡（.wordcard）都用设计系统的类
 const CSS = `
-.uc-stage { position: relative; width: 100%; height: 100%; container-type: size; }
-.uc-stage > svg { width: 100%; height: 100%; display: block; user-select: none; }
-.uc-table { fill: var(--panel-2); stroke: var(--line); stroke-width: 2.5; }
-.uc-table-in { fill: none; stroke: var(--rule); stroke-width: 1.5; }
-.uc-phase { font: 600 24px var(--mono); letter-spacing: .12em; fill: var(--muted); text-anchor: middle; }
-.uc-words { font: 600 36px var(--serif); fill: var(--text); text-anchor: middle; }
-.uc-words .k { font: 500 20px var(--mono); fill: var(--muted); letter-spacing: .08em; }
-.uc-words .spy { fill: var(--red); }
-.uc-note { font: 400 22px var(--serif); fill: var(--muted); text-anchor: middle; }
-.uc-note.win { fill: var(--red); font-weight: 600; }
-.uc-seat .av { fill: var(--panel); stroke: var(--line); stroke-width: 2.5; }
-.uc-seat .fig { opacity: .85; }
-.uc-seat .tag-bg { stroke: none; }
-.uc-seat .tag { font: 600 20px var(--mono); letter-spacing: .06em; fill: var(--bg); text-anchor: middle; dominant-baseline: central; }
-.uc-seat .id { font: 500 21px var(--serif); fill: var(--muted); text-anchor: middle; }
-.uc-seat .id.spy { fill: var(--red); font-weight: 700; }
-.uc-seat.spy .av { stroke: var(--red); stroke-width: 4; }
-.uc-seat.out .av, .uc-seat.out .fig { opacity: .35; }
-.uc-seat .stamp rect { fill: none; stroke: var(--red); stroke-width: 3; }
-.uc-seat .stamp text { font: 700 24px var(--serif); fill: var(--red); text-anchor: middle; dominant-baseline: central; letter-spacing: .1em; }
-.uc-seat .ring { fill: none; stroke: var(--red); stroke-width: 3; stroke-dasharray: 9 6; animation: uc-spin 6s linear infinite; transform-box: fill-box; transform-origin: center; }
-.uc-seat .to { font: 600 22px var(--mono); fill: var(--text); text-anchor: middle; }
-.uc-seat .to.wait { fill: var(--muted); font-weight: 400; }
-.uc-seat .cnt rect { fill: var(--red); }
-.uc-seat .cnt text { font: 700 20px var(--mono); fill: var(--paper); text-anchor: middle; dominant-baseline: central; }
-.uc-seat.pick { cursor: pointer; }
-.uc-seat.pick .av { stroke-dasharray: 6 5; }
-.uc-seat.pick:hover .av { stroke: var(--red); stroke-width: 5; stroke-dasharray: none; }
-.uc-seat.me .av { stroke-width: 4.5; }
-.uc-bubble .b { fill: var(--panel); stroke: var(--line); stroke-width: 1.6; }
-.uc-bubble text { font: 400 ${FS}px var(--serif); fill: var(--text); }
-.uc-bubble.old { opacity: .42; }
-.uc-bubble.tie .b { stroke: var(--red); }
-@keyframes uc-spin { to { transform: rotate(360deg); } }
-.uc-form { position: absolute; left: 30%; width: 40%; top: 59%; display: flex; gap: .8cqw; align-items: stretch; font-size: 1.55cqw; }
-.uc-form[hidden] { display: none; }
-.uc-form input { flex: 1; min-width: 0; font: inherit; font-family: var(--serif); padding: .45em .7em; border: 1.5px solid var(--line); border-radius: 0; background: var(--panel); color: var(--text); outline: none; }
-.uc-form input:focus { border-color: var(--red); }
-.uc-form .n { align-self: center; font: 500 .8em var(--mono); color: var(--muted); min-width: 3.2em; text-align: right; }
-.uc-form .n.bad { color: var(--red); }
-.uc-form button { font: 600 1em var(--serif); padding: 0 1.1em; border: 1.5px solid var(--line); border-radius: 0; background: var(--text); color: var(--bg); cursor: pointer; }
-.uc-form button:hover:not(:disabled) { background: var(--red); border-color: var(--red); color: var(--paper); }
-.uc-form button:disabled { opacity: .4; cursor: not-allowed; }
+.uc-stage { display: flex; flex-direction: column; gap: 10px; min-height: 0; }
+.uc-body { display: flex; flex-direction: column; gap: 10px; min-height: 0; }
+.uc-stage .panels { padding-bottom: 0; }
+.uc-stage .panel > .label { display: flex; align-items: center; gap: 8px; margin-bottom: 2px; }
+.uc-stage .act > span { min-width: 0; }
+.uc-stage .act > span.line { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.uc-stage .act.todo > b, .uc-stage .act.todo > span { color: var(--faint); }
+.uc-stage .act.now > span { color: var(--gold-2); }
+.uc-stage .vrow > span:first-child { white-space: nowrap; }
+.uc-stage .vrow.out > span:first-child { color: var(--zhu-2); font-weight: 700; }
+.uc-stage .voters { flex-wrap: wrap; }
+.uc-list { max-height: 176px; overflow-y: auto; scrollbar-width: thin; }
+.uc-strip { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 8px 18px; padding: 9px 14px; font-size: 13.5px; }
+.uc-strip > span { display: inline-flex; align-items: center; gap: 8px; }
+.uc-strip.hist { justify-content: flex-start; gap: 6px 16px; }
+.uc-res { margin-top: 8px; font-weight: 700; color: var(--gold-2); font-size: 13.5px; }
+.uc-res.hot { color: var(--zhu-2); }
+.uc-sub { margin-top: 10px; font-size: 12px; color: var(--muted); }
+.uc-empty { color: var(--faint); font-size: var(--fs-sm); padding: 8px 0 2px; }
+.uc-role { color: color-mix(in srgb, var(--rc) 55%, var(--text)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--rc) 75%, transparent); }
+.uc-ctrl { display: flex; flex-direction: column; gap: 8px; padding: 10px 14px 12px; }
+.uc-ctrl[hidden], .uc-form[hidden] { display: none; }
+.uc-ctrl .head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.uc-ctrl .hint { color: var(--gold-2); font-weight: 600; }
+.uc-form { display: flex; gap: 8px; align-items: center; }
+.uc-form input { flex: 1; min-width: 0; }
+.uc-form .n { font: 500 12px/1 var(--num); color: var(--muted); min-width: 3.4em; text-align: right; }
+.uc-form .n.bad { color: var(--zhu-2); }
 `;
 
 function injectStyle() {
-  if (document.getElementById('uc-style')) return;
+  if (typeof document === 'undefined' || document.getElementById('uc-style')) return;
   const st = document.createElement('style');
   st.id = 'uc-style';
   st.textContent = CSS;
   document.head.append(st);
 }
 
-const svg = (tag, attrs = {}, text = null) => {
-  const el = document.createElementNS(NS, tag);
-  for (const [k, v] of Object.entries(attrs)) if (v !== null && v !== undefined) el.setAttribute(k, v);
-  if (text !== null) el.textContent = text;
-  return el;
-};
+/** 建 DOM：el('div', { class, title, onclick }, ...子节点 / 文字) */
+function el(tag, attrs = {}, ...kids) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (v === null || v === undefined || v === false) continue;
+    if (k.startsWith('on')) e.addEventListener(k.slice(2), v);
+    else if (k === 'class') e.className = v;
+    else e.setAttribute(k, v);
+  }
+  for (const c of kids.flat()) if (c !== null && c !== undefined && c !== false) e.append(c);
+  return e;
+}
+
 const no = (seat) => Number(String(seat).slice(1));
-const unitOf = (ch) => (/[\u0000-ÿ]/.test(ch) ? 0.55 : 1);
+const nums = (seats) => seats.map((s) => `${no(s)} 号`).join('、');
+const clip = (t, n = 36) => { const a = [...String(t || '')]; return a.length > n ? `${a.slice(0, n - 1).join('')}…` : a.join(''); };
+const coin = (seat, title = null) => el('span', { class: 'coin sm', title: title || `${no(seat)} 号` }, String(no(seat)));
+const chip = (text, cls = '') => el('span', { class: `chip${cls ? ` ${cls}` : ''}` }, text);
+const roleChip = (name) => el('span', { class: 'chip uc-role', style: `--rc:${ROLE_COLOR[name] || 'var(--gold)'}` }, name);
+const act = (head, body, tag = null, cls = '') => el('div', { class: `act${cls ? ` ${cls}` : ''}` }, el('b', {}, head), body, tag);
+const panel = (title, ...kids) => el('div', { class: 'panel' }, el('div', { class: 'label' }, title), ...kids);
+const isVoting = (view) => view.phase === 'vote' || view.phase === 'revote';
 
-/** 按字宽折行，最多 3 行 */
-function wrap(text, max = LINE_UNITS) {
-  const lines = [];
-  let cur = '', u = 0;
-  for (const ch of text) {
-    const w = unitOf(ch);
-    if (u + w > max) { lines.push(cur); cur = ''; u = 0; }
-    cur += ch; u += w;
+function countVotes(votes) {
+  const c = {};
+  for (const t of Object.values(votes || {})) c[t] = (c[t] || 0) + 1;
+  return c;
+}
+
+/** 座位卡上的得票：投票中（上帝视角）显示当前票；刚计完票、还没有新发言时显示上一次计票；玩家视角投票中别人的票没公开 */
+function seatCounts(view) {
+  if (isVoting(view)) return view.god ? countVotes(view.votes) : {};
+  const last = (view.voteLog || []).at(-1);
+  if (!last) return {};
+  if (last.after === (view.speeches || []).length || (view.phase === 'tiespeak' && last.round === view.round)) return last.counts || {};
+  return {};
+}
+
+function voteOutcome(v) {
+  if (v.out) return `${no(v.out)} 号出局（${v.role || '？'}）`;
+  if (v.next === 'tie') return `${nums(v.tied || [])}平票，平票者加赛`;
+  return v.stage === 'revote' ? '再次平票，本轮无人出局' : '所有人平票，本轮无人出局';
+}
+
+/** 本轮发言顺序：从本轮先发言的人起按座位轮转的存活者 */
+function speakOrder(view) {
+  const i = Math.max(0, view.seats.indexOf(view.starter));
+  const alive = new Set(view.alive || []);
+  return [...view.seats.slice(i), ...view.seats.slice(0, i)].filter((s) => alive.has(s));
+}
+
+function sceneSub(view) {
+  if (view.phase === 'over') return view.result?.reason || '';
+  const parts = [];
+  const last = (view.voteLog || []).at(-1);
+  if (view.phase === 'speak' && last && last.round === view.round - 1) parts.push(`上轮${last.out ? ` ${no(last.out)} 号出局（${last.role}）` : '无人出局'}`);
+  if (view.phase === 'speak') {
+    const done = (view.speeches || []).filter((x) => x.round === view.round && !x.tie).length;
+    parts.push(`描述 ${Math.min(done + 1, view.alive.length)}/${view.alive.length}`);
+  } else if (isVoting(view)) {
+    const total = (view.voters || []).length;
+    parts.push(`已投 ${total - (view.pending || []).length}/${total}`);
+  } else if (view.phase === 'tiespeak') parts.push(`${nums(view.tied || [])}平票 · 加赛发言`);
+  return parts.join(' · ');
+}
+
+// ---------- 中间舞台的各块 ----------
+
+/** 词：上帝视角两个词都有；玩家视角只有自己的词 */
+function wordsBlock(view) {
+  if (view.pair) {
+    return el('div', { class: 'well uc-strip' },
+      el('span', {}, el('span', { class: 'label' }, '平民词'), el('span', { class: 'wordcard' }, view.pair.civ)),
+      el('span', {}, el('span', { class: 'label' }, '卧底词'), el('span', { class: 'wordcard spy' }, view.pair.spy)));
   }
-  if (cur) lines.push(cur);
-  if (lines.length > 3) { lines.length = 3; lines[2] = `${lines[2].slice(0, -1)}…`; }
-  const width = Math.max(...lines.map((l) => [...l].reduce((a, c) => a + unitOf(c), 0)));
-  return { lines, width };
+  if (view.myWord) return el('div', { class: 'well uc-strip' }, el('span', {}, el('span', { class: 'label' }, '你的词'), el('span', { class: 'wordcard' }, view.myWord)));
+  return null;
 }
 
-/** 座位在椭圆上的位置：1 号在正上方，顺时针排列 */
-function seatPos(i, n) {
-  const a = -Math.PI / 2 + (i * 2 * Math.PI) / n;
-  return { x: CX + RX * Math.cos(a), y: CY + RY * Math.sin(a) };
+/** 本轮发言：说过的话按顺序列出（单行，全文在提示里），后面是还没轮到的人 */
+function speechPanel(view) {
+  const mine = (view.speeches || []).filter((x) => x.round === view.round);
+  const rows = mine.map((sp) => act(`${no(sp.seat)} 号`, el('span', { class: 'line', title: sp.text }, sp.text), sp.tie ? chip('加赛', 'warn') : null));
+  let todo = [];
+  if (view.phase === 'speak') {
+    const spoke = new Set(mine.filter((x) => !x.tie).map((x) => x.seat));
+    todo = speakOrder(view).filter((s) => !spoke.has(s));
+  } else if (view.phase === 'tiespeak') {
+    const spoke = new Set(mine.filter((x) => x.tie).map((x) => x.seat));
+    todo = speakOrder(view).filter((s) => (view.tied || []).includes(s) && !spoke.has(s));
+  }
+  const now = todo.includes(view.speaker) ? act(`${no(view.speaker)} 号`, el('span', { class: 'line' }, '描述中…'), chip(view.phase === 'tiespeak' ? '加赛' : '描述', 'gold'), 'now') : null;
+  const rest = todo.filter((s) => s !== view.speaker);
+  const wait = rest.length ? el('div', { class: 'act todo' }, el('b', {}, '待发言'), el('div', { class: 'voters' }, rest.map((s) => el('span', {}, String(no(s)))))) : null;
+  return panel(`第 ${view.round} 轮发言`, rows.length ? el('div', { class: 'uc-list' }, rows) : now || wait ? null : el('div', { class: 'uc-empty' }, '还没有人发言'), now, wait);
 }
 
-// 座位本身占的区域（相对座位中心）：上方投票标签，下方座位号和身份
-const SEAT_BOX = { l: -92, r: 92, t: -AV - 48, b: AV + 76 };
-const seatBox = (p) => ({ l: p.x + SEAT_BOX.l, r: p.x + SEAT_BOX.r, t: p.y + SEAT_BOX.t, b: p.y + SEAT_BOX.b });
-const area = (a, b) => Math.max(0, Math.min(a.r, b.r) - Math.max(a.l, b.l)) * Math.max(0, Math.min(a.b, b.b) - Math.max(a.t, b.t));
+/** 票型：每个被投的人一行（得票条 + 投票人的小铜钱） */
+function tally(votes, { out = null, total = 0 } = {}) {
+  const by = {};
+  for (const [voter, t] of Object.entries(votes || {})) (by[t] ||= []).push(voter);
+  const n = total || Object.keys(votes || {}).length || 1;
+  const order = Object.keys(by).sort((a, b) => by[b].length - by[a].length || no(a) - no(b));
+  const top = order.length ? by[order[0]].length : 0;
+  return order.map((t) => el('div', { class: `vrow${t === out ? ' out' : ''}`, title: `${no(t)} 号 ${by[t].length} 票` },
+    el('span', {}, `${no(t)} 号 · ${by[t].length}`),
+    el('div', { class: 'vb' }, el('i', { class: t === out || (!out && by[t].length === top) ? null : 'g', style: `width:${Math.round((by[t].length / n) * 100)}%` })),
+    el('div', { class: 'voters' }, by[t].sort((a, b) => no(a) - no(b)).map((v) => el('span', { title: `${no(v)} 号投 ${no(t)} 号` }, String(no(v)))))));
+}
 
-/**
- * 气泡位置：从座位出发，沿朝向桌子中心及左右偏转的几个方向推开，直到不压住座位本身；
- * 在这些候选里选和其他座位、已放好的气泡、中间文字重叠最少、离座位最近的一个。
- */
-function bubbleBox(p, w, h, obstacles) {
-  const base = Math.atan2(CY - p.y, CX - p.x);
-  const own = seatBox(p);
-  let best = null;
-  for (const off of [0, -0.5, 0.5, -1, 1, -1.4, 1.4, -1.8, 1.8]) {
-    const a = base + off;
-    for (let t = 40; t < 560; t += 8) {
-      const cx = p.x + Math.cos(a) * t, cy = p.y + Math.sin(a) * t;
-      const box = { l: cx - w / 2 - 8, r: cx + w / 2 + 8, t: cy - h / 2 - 8, b: cy + h / 2 + 8 };
-      if (area(box, own) > 0) continue;
-      let cost = t + Math.abs(off) * 60;
-      for (const o of obstacles) cost += area(box, o) * 0.5;
-      cost += (Math.max(0, -box.l) + Math.max(0, box.r - W) + Math.max(0, -box.t) + Math.max(0, box.b - H)) * 50;
-      if (!best || cost < best.cost) best = { cx, cy, cost, box };
-      break;
+function votePanel(view) {
+  const kids = [];
+  let entries = (view.voteLog || []).filter((v) => v.round === view.round);
+  let label = '投票';
+  // 新一轮还没投票时，显示上一轮的票型
+  if (!entries.length && !isVoting(view)) {
+    entries = (view.voteLog || []).filter((v) => v.round === view.round - 1);
+    if (entries.length) label = `投票 · 第 ${view.round - 1} 轮`;
+  }
+  for (const v of entries) {
+    if (entries.length > 1 || v.stage === 'revote') kids.push(el('div', { class: 'uc-sub' }, v.stage === 'revote' ? '平票重投' : '投票'));
+    kids.push(...tally(v.votes, { out: v.out }), el('div', { class: `uc-res${v.out ? ' hot' : ''}` }, voteOutcome(v)));
+  }
+  if (isVoting(view)) {
+    if (entries.length) kids.push(el('div', { class: 'uc-sub' }, PHASE[view.phase]));
+    const votes = view.votes || {};
+    if (view.god) kids.push(...tally(votes, { total: (view.voters || []).length }));
+    else if (view.viewer && votes[view.viewer]) kids.push(act('你', el('span', {}, `投 ${no(votes[view.viewer])} 号`)));
+    const pend = view.pending || [];
+    if (pend.length) {
+      kids.push(el('div', { class: 'vrow' }, el('span', { class: 'muted' }, `未投 · ${pend.length}`), el('div', { class: 'vb' }),
+        el('div', { class: 'voters' }, pend.map((s) => el('span', {}, String(no(s)))))));
     }
+    if (!view.god) kids.push(el('div', { class: 'uc-empty' }, '计票后公开票型'));
   }
-  return best || { cx: CX, cy: CY, box: { l: CX, r: CX, t: CY, b: CY } };
+  if (!kids.length) kids.push(el('div', { class: 'uc-empty' }, '描述结束后投票'));
+  return panel(label, el('div', { class: 'uc-list' }, kids));
+}
+
+/** 历史：每轮的结果（出局者和身份，或无人出局） */
+function historyBlock(view) {
+  const ends = (view.voteLog || []).filter((v) => v.next !== 'tie');
+  if (!ends.length) return null;
+  return el('div', { class: 'well uc-strip hist' }, el('span', { class: 'label' }, '历史'),
+    ends.map((v) => el('span', {}, el('span', { class: 'muted' }, `第 ${v.round} 轮`),
+      v.out ? [coin(v.out), roleChip(v.role)] : el('span', {}, '无人出局'))));
 }
 
 export default {
   aspect: [16, 10],
   seatColor: (seat, index) => COLORS[(index ?? no(seat) - 1) % COLORS.length],
 
+  /** 对称座位版式：场景条和每个座位卡的内容 */
+  duoView(view, { movable = null, actions = null } = {}) {
+    if (!view || !view.seats) return { scene: null, seats: {} };
+    const over = view.phase === 'over';
+    const alive = new Set(view.alive || []);
+    const counts = seatCounts(view);
+    const picks = {};
+    for (const a of movable && Array.isArray(actions) ? actions : []) {
+      if (/^p\d$/.test(a.id)) picks[a.id] = `${view.phase === 'revote' ? '重投' : '投票'}放逐 ${no(a.id)} 号`;
+    }
+    const lastSpeech = {};
+    for (const sp of view.speeches || []) lastSpeech[sp.seat] = sp;
+    const outRound = Object.fromEntries((view.outInfo || []).map((o) => [o.seat, o.round]));
+    const seats = {};
+    for (const s of view.seats) {
+      const st = [];
+      if (!over && view.speaker === s) st.push('speaking');
+      if (!alive.has(s)) st.push('dead');
+      // 身份：view.identity 只含本视角能知道的（上帝视角全部；玩家视角是出局者，自己出局后也有）
+      const r = view.identity?.[s];
+      // 词：上帝视角全部；玩家视角只有自己的，别人的扣着
+      const w = view.words?.[s];
+      const sp = lastSpeech[s];
+      seats[s] = {
+        note: sp ? clip(sp.text) : s in outRound ? `第 ${outRound[s]} 轮出局` : '',
+        state: st.join(' '),
+        role: r ? { text: r, color: ROLE_COLOR[r] || null } : null,
+        word: w ? { text: w, back: false, spy: r === '卧底' } : { back: true }, // spy：已知是卧底的词（对局页可用 .word.spy 标红）
+        votes: counts[s] || 0,
+        pick: picks[s] ? s : null,
+        pickTitle: picks[s],
+      };
+    }
+    const title = over ? `对局结束 · ${view.result?.team || ''}胜` : `第 ${view.round} 轮 · ${PHASE[view.phase] || ''}`;
+    return { scene: { kind: 'day', title, sub: sceneSub(view) }, seats };
+  },
+
   createStage({ onAction }) {
     injectStyle();
-    const root = document.createElement('div');
-    root.className = 'uc-stage';
-    const el = svg('svg', { viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': '谁是卧底圆桌' });
-    const table = svg('g');
-    table.append(
-      svg('ellipse', { class: 'uc-table', cx: CX, cy: CY, rx: 430, ry: 232 }),
-      svg('ellipse', { class: 'uc-table-in', cx: CX, cy: CY, rx: 404, ry: 208 }),
-    );
-    const center = svg('g');
-    const bubbles = svg('g');
-    const seatsG = svg('g');
-    el.append(table, center, seatsG, bubbles);
+    const root = el('div', { class: 'uc-stage' });
 
-    // 发言输入框（玩家本人描述阶段）
-    const form = document.createElement('form');
-    form.className = 'uc-form';
-    form.hidden = true;
-    const input = document.createElement('input');
-    input.type = 'text';
-    input.maxLength = 60;
-    input.placeholder = '一句话描述你的词';
-    input.autocomplete = 'off';
-    const count = document.createElement('span');
-    count.className = 'n';
-    const send = document.createElement('button');
-    send.type = 'submit';
-    send.textContent = '发言';
-    form.append(input, count, send);
-    root.append(el, form);
+    // 操作区：常驻节点，输入框不随每次重画丢失内容和焦点
+    const ctrlHead = el('div', { class: 'head' });
+    const input = el('input', { type: 'text', maxlength: 60, autocomplete: 'off', placeholder: '一句话描述你的词' });
+    const count = el('span', { class: 'n' });
+    const send = el('button', { type: 'submit', class: 'btn primary sm' }, '发言');
+    const form = el('form', { class: 'uc-form' }, input, count, send);
+    const ctrl = el('div', { class: 'panel uc-ctrl' }, ctrlHead, form);
+    ctrl.hidden = true;
+    const body = el('div', { class: 'uc-body' });
+    root.append(ctrl, body);
 
     let ctx = { maxLen: 30, word: null, key: null };
+    const clean = (t) => t.replace(/[\r\n]+/g, '').trim();
     const tooMany = (t) => [...t].length > ctx.maxLen;
     const hasWord = (t) => !!ctx.word && [...new Set(ctx.word)].every((c) => t.includes(c));
     const refreshCount = () => {
-      const t = input.value.replace(/[\r\n]+/g, '').trim();
+      const t = clean(input.value);
       const n = [...t].length;
       count.textContent = `${n}/${ctx.maxLen}`;
       const bad = tooMany(t) || hasWord(t);
@@ -176,7 +268,7 @@ export default {
     input.addEventListener('input', refreshCount);
     form.addEventListener('submit', (e) => {
       e.preventDefault();
-      const t = input.value.replace(/[\r\n]+/g, '').trim();
+      const t = clean(input.value);
       if (!t || tooMany(t) || hasWord(t)) return;
       onAction(t);
     });
@@ -185,139 +277,30 @@ export default {
       el: root,
       render(view, { movable = null, actions = null } = {}) {
         if (!view || !view.seats) return;
-        const n = view.seats.length;
-        const pos = Object.fromEntries(view.seats.map((s, i) => [s, seatPos(i, n)]));
-        const alive = new Set(view.alive || []);
-        const outInfo = Object.fromEntries((view.outInfo || []).map((o) => [o.seat, o]));
-        const pickable = new Set(movable && Array.isArray(actions) ? actions.map((a) => a.id) : []);
-        const speaking = movable && (view.phase === 'speak' || view.phase === 'tiespeak') && view.speaker === movable;
+        const speaking = !!movable && (view.phase === 'speak' || view.phase === 'tiespeak') && view.speaker === movable;
+        const voting = !!movable && Array.isArray(actions) && actions.length > 0;
 
-        // 本次要显示的投票：投票阶段显示当前票；刚计完票、还没有新发言时显示上一次的结果
-        let shown = null;
-        const voting = view.phase === 'vote' || view.phase === 'revote';
-        const lastLog = (view.voteLog || []).at(-1);
-        if (voting && Object.keys(view.votes || {}).length) shown = { votes: view.votes, counts: null };
-        else if (!voting && lastLog && (lastLog.after === view.speeches.length || (view.phase === 'tiespeak' && lastLog.round === view.round))) shown = { votes: lastLog.votes, counts: lastLog.counts };
-        if (shown && !shown.counts) {
-          shown.counts = {};
-          for (const t of Object.values(shown.votes)) shown.counts[t] = (shown.counts[t] || 0) + 1;
+        // ---------- 操作区 ----------
+        ctrlHead.replaceChildren();
+        if (speaking || voting) {
+          ctrlHead.append(el('span', { class: 'label' }, '你的行动'), el('b', {}, PHASE[view.phase] || ''));
+          if (voting) ctrlHead.append(el('span', { class: 'hint' }, view.phase === 'revote' ? '点座位卡，在平票者中重投' : '点座位卡投票'));
         }
-        const waiting = new Set(voting ? view.pending || [] : []);
-
-        // ---------- 中间：轮次、阶段、词对 ----------
-        center.replaceChildren();
-        center.append(svg('text', { class: 'uc-phase', x: CX, y: CY - 78 }, `第 ${view.round} 轮 · ${PHASE[view.phase] || ''}`));
-        const words = svg('text', { class: 'uc-words', x: CX, y: CY - 14 });
-        if (view.pair) {
-          words.append(svg('tspan', { class: 'k' }, '平民 '), svg('tspan', {}, view.pair.civ), svg('tspan', { class: 'k', dx: 34 }, '卧底 '), svg('tspan', { class: 'spy' }, view.pair.spy));
-        } else if (view.myWord) {
-          words.append(svg('tspan', { class: 'k' }, '你的词 '), svg('tspan', {}, view.myWord));
-        } else {
-          words.append(svg('tspan', { class: 'k' }, '词对未公开'));
-        }
-        center.append(words);
-        let note = '';
-        let win = false;
-        if (view.result) { note = `${view.result.team}胜`; win = true; }
-        else if (view.phase === 'tiespeak' || view.phase === 'revote') note = `平票：${(view.tied || []).map((s) => `${no(s)} 号`).join('、')}`;
-        else if (lastLog && lastLog.round === view.round - 1 && view.phase === 'speak') {
-          note = lastLog.out ? `上轮 ${no(lastLog.out)} 号出局（${lastLog.role}）` : '上轮无人出局';
-        }
-        if (note && !speaking) center.append(svg('text', { class: `uc-note${win ? ' win' : ''}`, x: CX, y: CY + 38 }, note));
-
-        // ---------- 座位 ----------
-        seatsG.replaceChildren();
-        bubbles.replaceChildren();
-        const toPlace = [];
-        view.seats.forEach((s, i) => {
-          const p = pos[s];
-          const isOut = !alive.has(s);
-          const ident = view.identity?.[s];
-          const g = svg('g', { class: 'uc-seat', 'data-seat': s });
-          g.classList.toggle('out', isOut);
-          g.classList.toggle('spy', ident === '卧底');
-          g.classList.toggle('me', s === view.viewer);
-          if (pickable.has(s)) {
-            g.classList.add('pick');
-            g.addEventListener('click', () => onAction(s));
-          }
-          // 头像位：圆框里一个半身剪影
-          g.append(svg('circle', { class: 'av', cx: p.x, cy: p.y, r: AV }));
-          const fig = svg('g', { class: 'fig', fill: COLORS[i % COLORS.length] });
-          fig.append(
-            svg('circle', { cx: p.x, cy: p.y - 11, r: 15 }),
-            svg('path', { d: `M ${p.x - 27} ${p.y + 31} Q ${p.x - 27} ${p.y + 8} ${p.x} ${p.y + 8} Q ${p.x + 27} ${p.y + 8} ${p.x + 27} ${p.y + 31} Z` }),
-          );
-          g.append(fig);
-          if (view.speaker === s && view.phase !== 'over') g.append(svg('circle', { class: 'ring', cx: p.x, cy: p.y, r: AV + 9 }));
-          // 座位号
-          const tagText = `${no(s)} 号${s === view.viewer ? ' · 你' : ''}`;
-          const tw = s === view.viewer ? 124 : 64;
-          g.append(svg('rect', { class: 'tag-bg', x: p.x - tw / 2, y: p.y + AV + 8, width: tw, height: 28, fill: COLORS[i % COLORS.length] }));
-          g.append(svg('text', { class: 'tag', x: p.x, y: p.y + AV + 23 }, tagText));
-          // 身份和词
-          const role = view.roles?.[s];
-          if (role) g.append(svg('text', { class: `id${ident === '卧底' ? ' spy' : ''}`, x: p.x, y: p.y + AV + 62 }, role));
-          // 出局印章
-          if (isOut) {
-            const st = svg('g', { class: 'stamp', transform: `rotate(-14 ${p.x} ${p.y})` });
-            st.append(svg('rect', { x: p.x - 42, y: p.y - 18, width: 84, height: 36 }), svg('text', { x: p.x, y: p.y + 1 }, '出局'));
-            g.append(st);
-            const info = outInfo[s];
-            if (info && !role) g.append(svg('text', { class: 'id', x: p.x, y: p.y + AV + 62 }, `第 ${info.round} 轮出局`));
-          }
-          // 投给谁、得票数
-          if (shown?.votes?.[s]) g.append(svg('text', { class: 'to', x: p.x, y: p.y - AV - 14 }, `→${no(shown.votes[s])}号`));
-          else if (waiting.has(s)) g.append(svg('text', { class: 'to wait', x: p.x, y: p.y - AV - 14 }, '投票中'));
-          const c = shown?.counts?.[s];
-          if (c) {
-            const cnt = svg('g', { class: 'cnt' });
-            cnt.append(svg('rect', { x: p.x + AV * 0.55, y: p.y - AV - 2, width: 58, height: 32 }), svg('text', { x: p.x + AV * 0.55 + 29, y: p.y - AV + 15 }, `${c} 票`));
-            g.append(cnt);
-          }
-          seatsG.append(g);
-
-          // 发言气泡：这一轮说过的话；还没说的显示上一句（淡）
-          if (isOut && view.phase !== 'over') return;
-          const mine = (view.speeches || []).filter((x) => x.seat === s);
-          const last = mine.at(-1);
-          if (!last) return;
-          const old = last.round !== view.round;
-          if (old && isOut) return;
-          const { lines, width } = wrap(last.text);
-          toPlace.push({ p, lines, old, tie: last.tie, w: width * FS + 28, h: lines.length * (FS + 8) + 18 });
-        });
-
-        // 气泡：先放本轮的，再放旧的；避开其他座位、中间文字和输入框
-        const obstacles = [{ l: CX - 240, r: CX + 240, t: CY - 112, b: CY + (note && !speaking ? 52 : 4) }];
-        if (speaking) obstacles.push({ l: W * 0.3, r: W * 0.7, t: H * 0.59 - 10, b: H * 0.59 + 80 });
-        toPlace.sort((a, b) => Number(a.old) - Number(b.old));
-        for (const bb of toPlace) {
-          const others = Object.values(pos).filter((q) => q !== bb.p).map(seatBox);
-          const { cx, cy, box } = bubbleBox(bb.p, bb.w, bb.h, [...obstacles, ...others]);
-          obstacles.push(box);
-          const { p, w: bw, h: bh } = bb;
-          const bg = svg('g', { class: `uc-bubble${bb.old ? ' old' : ''}${bb.tie ? ' tie' : ''}` });
-          // 尾巴指向座位
-          const dx = p.x - cx, dy = p.y - cy, len = Math.hypot(dx, dy) || 1;
-          const ux = dx / len, uy = dy / len;
-          const edge = Math.min(Math.abs((bw / 2) / (ux || 1e-6)), Math.abs((bh / 2) / (uy || 1e-6)));
-          const ex = cx + ux * edge, ey = cy + uy * edge;
-          bg.append(svg('path', { class: 'b', d: `M ${ex - uy * 10} ${ey + ux * 10} L ${ex + ux * 22} ${ey + uy * 22} L ${ex + uy * 10} ${ey - ux * 10} Z` }));
-          bg.append(svg('rect', { class: 'b', x: cx - bw / 2, y: cy - bh / 2, width: bw, height: bh }));
-          bb.lines.forEach((l, k) => bg.append(svg('text', { x: cx - bw / 2 + 14, y: cy - bh / 2 + 9 + FS + k * (FS + 8) - 3 }, l)));
-          bubbles.append(bg);
-        }
-
-        // ---------- 发言输入 ----------
         const key = speaking ? `${view.round}-${view.phase}-${(view.speeches || []).length}` : null;
-        if (key !== ctx.key && key) input.value = '';
+        if (key && key !== ctx.key) input.value = '';
         ctx = { maxLen: view.maxLen || 30, word: view.myWord, key };
         form.hidden = !speaking;
-        if (speaking) {
-          refreshCount();
-          if (document.activeElement !== input) input.focus({ preventScroll: true });
-        }
+        if (speaking) refreshCount();
+        ctrl.hidden = !speaking && !voting;
+        if (speaking && document.activeElement !== input) input.focus({ preventScroll: true });
+
+        // ---------- 舞台 ----------
+        body.replaceChildren(...[
+          wordsBlock(view),
+          el('div', { class: 'panels' }, speechPanel(view), votePanel(view)),
+          historyBlock(view),
+        ].filter(Boolean));
+        for (const l of body.querySelectorAll('.uc-list')) l.scrollTop = l.scrollHeight; // 最新的在下面
       },
     };
   },
