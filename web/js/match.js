@@ -2,7 +2,7 @@
 // 回放：从对局记录在浏览器里重建每一步，可以播放、调速、拖动进度。
 // 录制版式：地址带 ?record=1 时隐藏导航、自动从头播放，播完设置 window.__replayDone = true（供服务端录成视频）。
 
-import { h, api, post, listen, toast, guard, tierBadge, fmtMs, fmtTokens, pct, MODE_NAMES, resultText } from './ui.js';
+import { h, api, post, listen, toast, guard, tierBadge, fmtMs, fmtTokens, pct, MODE_NAMES, resultText, modelLine } from './ui.js';
 import { loadRenderer, PALETTE } from '../stage/index.js';
 
 const LINE_KEYS = ['判断', '威胁', '理由', '推断', '计划'];
@@ -58,13 +58,16 @@ export async function matchView(root, id, { characters }) {
   const pendingOffer = () => { const o = offers().at(-1); return o?.status === 'pending' ? o : null; };
   const canReview = () => Array.isArray(d.record?.actions);
 
-  const stage = renderer.createStage({
-    onAction: guard(async (action) => {
-      await post(`/matches/${id}/move`, { action, offerDraw: offerNext });
-      offerNext = false;
-      waitingHuman = null;
-    }),
+  const doAction = guard(async (action) => {
+    await post(`/matches/${id}/move`, { action, offerDraw: offerNext });
+    offerNext = false;
+    waitingHuman = null;
   });
+  const stage = renderer.createStage({ onAction: doAction });
+  // 对称座位版式（狼人杀、谁是卧底）：游戏模块提供 duoView(view)，返回场景和每个座位的状态
+  const duo = typeof renderer.duoView === 'function';
+  let duoInfo = { scene: null, seats: {} };
+  let focusSeat = null; // 点座位卡切换焦点；null 表示跟随当前行动者
   stage.setFlipped?.(flipped);
 
   // ---------- 布局 ----------
@@ -80,23 +83,57 @@ export async function matchView(root, id, { characters }) {
   const rightSeats = seats.slice(half);
   const statusBar = h('div', { class: 'stage-bar' });
   const winbarOn = !!(d.features?.winbar && two);
-  const winbar = h('div', { class: 'winbar', style: { background: color(seats[1] || seats[0]) } },
-    h('div', { class: 'red', style: { background: color(seats[0]) } }), h('div', { class: 'mid' }), h('span', { class: 't' }), h('span', { class: 'b' }));
+  // 拔河胜率条：放在转播条里，左边是第一个座位
+  const tugL = h('span'), tugR = h('span'), tugFill = h('i', { class: 'l' }), tugKnot = h('span', { class: 'knot' });
+  const tug = h('div', { class: 'tug' }, tugL, h('div', { class: 'bar' }, tugFill, h('i', { class: 'r' }), tugKnot), tugR);
   const curve = h('div', { class: 'stage-curve' });
   const moves = h('div', { class: 'stage-moves' });
   const [aw, ah] = renderer.aspect || [1, 1];
 
-  root.replaceChildren(h('div', { class: `arena${winbarOn ? '' : ' no-winbar'}${recordMode ? ' recording' : ''}`, style: { '--aw': aw, '--ah': ah } },
-    h('div', { class: 'camp-col' }, ...leftSeats.map((s) => camps[s].el)),
-    h('section', { class: 'stage' },
-      statusBar,
-      h('div', { class: 'stage-board' }, winbarOn ? winbar : null, h('div', { class: 'board-wrap' }, stage.el)),
-      winbarOn ? curve : null,
-      moves,
-    ),
-    h('div', { class: 'camp-col' }, ...rightSeats.map((s) => camps[s].el)),
-  ));
+  const seatEls = Object.fromEntries(seats.map((s) => [s, h('div', { class: 'seat' })]));
+  const sceneEl = h('div', { class: 'scene' });
+  const focusEl = h('div', { class: 'focus' });
+  if (duo) {
+    root.replaceChildren(h('div', { class: `arena duo no-winbar${recordMode ? ' recording' : ''}` },
+      h('div', { class: 'camp-col seats-col' }, ...leftSeats.map((s) => seatEls[s])),
+      h('section', { class: 'stage' }, statusBar, sceneEl, focusEl, h('div', { class: 'duo-stage' }, stage.el), moves),
+      h('div', { class: 'camp-col seats-col' }, ...rightSeats.map((s) => seatEls[s])),
+    ));
+  } else {
+    root.replaceChildren(h('div', { class: `arena${winbarOn ? '' : ' no-winbar'}${recordMode ? ' recording' : ''}`, style: { '--aw': aw, '--ah': ah } },
+      h('div', { class: 'camp-col' }, ...leftSeats.map((s) => camps[s].el)),
+      h('section', { class: 'stage' },
+        statusBar,
+        h('div', { class: 'stage-board' }, h('div', { class: 'board-wrap' }, stage.el)),
+        winbarOn ? curve : null,
+        moves,
+      ),
+      h('div', { class: 'camp-col' }, ...rightSeats.map((s) => camps[s].el)),
+    ));
+  }
   if (recordMode) document.body.classList.add('record-mode');
+
+  // ---------- 高光大印 ----------
+  // 将军、绝杀、炸弹、全下等时刻盖一枚朱印，1.6 秒后自己消失；短时间内只盖一次，不挡操作
+  let lastStamp = 0;
+  function stampFx(text, force = false) {
+    if (!text || (!force && Date.now() - lastStamp < 1200)) return;
+    lastStamp = Date.now();
+    const el = h('div', { class: 'stamp-fx', 'aria-hidden': 'true' }, text);
+    el.addEventListener('animationend', () => el.remove());
+    document.body.append(el);
+    setTimeout(() => el.remove(), 2500);
+  }
+  function stampFor(label = '', view = null) {
+    const t = String(label || '');
+    if (/王炸/.test(t)) return '王炸';
+    if (/炸弹/.test(t)) return '炸';
+    if (/全下/i.test(t)) return '全下';
+    if (/春天/.test(t)) return '春天';
+    if (/#$/.test(t)) return '杀';
+    if (/[+]$/.test(t) || view?.inCheck) return '将';
+    return null;
+  }
 
   // ---------- 数据 ----------
   const viewCache = new Map();
@@ -136,7 +173,78 @@ export async function matchView(root, id, { characters }) {
   const stat = (label, value, title = '') => h('div', { class: 'cs', title }, h('b', {}, value), h('small', {}, label));
   const bar = (v, cls) => h('span', { class: `gbar ${cls}` }, h('i', { style: { width: `${v === null ? 0 : Math.round(v * 100)}%` } }));
 
+  // ---------- 对称座位版式 ----------
+  /** 当前焦点：点过的座位，否则是正在行动的人，再否则是最近一步的人 */
+  function focusOf() {
+    if (focusSeat) return focusSeat;
+    if (viewPly === null && d.status === 'running') {
+      const live = [...partials.keys()][0] || waitingHuman;
+      if (live) return live;
+    }
+    const limit = viewPly ?? Infinity;
+    const last = [...turns.values()].filter((t) => t.seat && t.label && t.ply <= limit).sort((a, b) => b.ply - a.ply)[0];
+    return last?.seat || seats[0];
+  }
+
+  function renderSeat(seat) {
+    const c = seatChar(seat);
+    const info = duoInfo.seats?.[seat] || {};
+    const st = String(info.state || '');
+    const thinking = d.status === 'running' && viewPly === null && (partials.has(seat) || waitingHuman === seat);
+    const speaking = st.includes('speaking') || thinking;
+    const cls = ['seat', rightSeats.includes(seat) ? 'mir' : '', st.replace('speaking', ''), speaking ? 'speaking' : '', focusOf() === seat ? 'focused' : '', info.pick ? 'pickable' : ''].filter(Boolean).join(' ');
+    const el = h('div', {
+      class: cls, role: 'button', tabindex: 0, title: info.pick ? info.pickTitle || '选这个人' : '看这个人的想法',
+      onclick: () => {
+        if (info.pick) { doAction(info.pick); return; }
+        focusSeat = focusSeat === seat ? null : seat;
+        seats.forEach(renderSeat);
+        renderFocus();
+      },
+    },
+    h('span', { class: 'no' }, seats.indexOf(seat) + 1),
+    h('span', { class: 'coin' }, c?.avatar || '？', st.includes('dead') ? h('span', { class: 'dead-mark' }, '亡') : null),
+    h('div', { class: 'info' }, h('b', { class: 'nm' }, c?.name || '？'), h('div', { class: 'md' }, modelLine(c)), info.note ? h('div', { class: 'note' }, info.note) : null),
+    h('div', { class: 'side' },
+      info.role ? h('span', { class: 'role', style: { '--rc': info.role.color || 'var(--jade)' } }, info.role.text) : null,
+      info.word ? h('span', { class: `word${info.word.back ? ' back' : ''}` }, info.word.back ? '' : info.word.text) : null,
+      info.votes ? h('span', { class: 'votes' }, `${info.votes} 票`) : null,
+      speaking && !st.includes('dead') ? h('span', { class: 'wave' }, h('i'), h('i'), h('i'), h('i')) : null));
+    seatEls[seat].replaceWith(el);
+    seatEls[seat] = el;
+  }
+
+  function renderScene() {
+    const sc = duoInfo.scene;
+    sceneEl.className = `scene ${sc?.kind || 'day'}`;
+    sceneEl.replaceChildren(sc ? h('div', {}, h('b', { class: 't' }, sc.title), sc.sub ? h('span', { class: 's' }, sc.sub) : null) : null);
+  }
+
+  /** 焦点区：大头像 +「说的」（公开发言、投票）+「想的」（AI 的推理，上帝视角或对局结束后才有） */
+  function renderFocus() {
+    const seat = focusOf();
+    const c = seatChar(seat);
+    const info = duoInfo.seats?.[seat] || {};
+    const limit = viewPly ?? Infinity;
+    const live = viewPly === null && d.status === 'running' ? partials.get(seat) : null;
+    const t = live || [...turns.values()].filter((x) => x.seat === seat && x.ply <= limit).sort((a, b) => b.ply - a.ply)[0];
+    const hidden = d.options?.hideThoughts && d.status === 'running' && (c?.kind === 'model' || c?.kind === 'agent');
+    const a = t && !live ? parseAnalysis(t.analysis) : null;
+    const thoughtText = hidden ? '对局结束后公开'
+      : live ? (live.text || live.reasoning || '思考中…')
+        : a ? LINE_KEYS.filter((k) => a[k] && k !== '发言' && k !== '投票').map((k) => `${k}：${a[k]}`).join('\n') || t?.analysis || ''
+          : t?.analysis || t?.reasoning || '';
+    focusEl.replaceChildren(
+      h('div', { class: 'who' }, h('span', { class: 'coin lg' }, c?.avatar || '？'), h('b', { class: 'gold-text' }, `${seats.indexOf(seat) + 1} 号 · ${c?.name || '？'}`), h('small', {}, modelLine(c)),
+        info.role ? h('span', { class: 'role', style: { '--rc': info.role.color || 'var(--jade)' } }, info.role.text) : null),
+      h('div', { class: 'words' },
+        h('div', { class: 'paper said' }, h('span', { class: 'lab' }, live ? '正在想' : '说的 · 公开'), t?.label ? t.label : live ? '…' : '还没有开口'),
+        thoughtText ? h('div', { class: `well thought2${live ? ' typing' : ''}` }, h('span', { class: 'lab' }, hidden ? '想的' : '想的 · 只有上帝视角能看到'), thoughtText) : null,
+        focusSeat ? h('button', { class: 'btn sm ghost', onclick: () => { focusSeat = null; seats.forEach(renderSeat); renderFocus(); } }, '跟随当前行动的人') : h('div', { class: 'small muted' }, '点左右的座位，看其他人的发言和想法')));
+  }
+
   function renderCamp(seat) {
+    if (duo) { renderSeat(seat); return; }
     const c = seatChar(seat);
     const s = seatStats(seat);
     const thinking = d.status === 'running' && (partials.has(seat) || waitingHuman === seat);
@@ -189,7 +297,7 @@ export async function matchView(root, id, { characters }) {
     const reviewing = viewPly !== null;
     statusBar.replaceChildren(
       h('div', { class: 'bar-info' },
-        h('span', { class: 'chip' }, d.gameName || ''),
+        h('span', { class: 'gname' }, d.gameName || ''),
         h('span', { class: 'chip' }, MODE_NAMES[d.mode]),
         h('span', { class: `stage-state${running ? '' : ' done'}` }, status),
         h('span', { class: 'muted small', style: { whiteSpace: 'nowrap' } }, reviewing ? `${replaying ? '回放' : '复盘'} ${viewPly}/${n}` : `已走 ${n} 步`)),
@@ -213,6 +321,7 @@ export async function matchView(root, id, { characters }) {
         h('a', { class: 'icon-btn', title: '导出记录', href: `/api/matches/${id}/export` }, '⤓'),
       ),
     );
+    if (winbarOn) statusBar.append(tug);
     if (reviewing && canReview() && n) {
       statusBar.append(h('input', { class: 'scrub', type: 'range', min: 0, max: n, value: viewPly, oninput: (e) => { stopReplay(); goto(Number(e.target.value)); } }));
     }
@@ -229,15 +338,20 @@ export async function matchView(root, id, { characters }) {
     }
     const movable = latest && d.status === 'running' && waitingHuman && !paused ? waitingHuman : null;
     stage.render(view, { movable, actions: movable ? d.humanActions : null, arrows, animate, replay: !!replaying, viewer: d.viewer });
+    if (duo) {
+      try { duoInfo = renderer.duoView(view, { movable, actions: movable ? d.humanActions : null, viewer: d.viewer }) || duoInfo; } catch (err) { console.error(err); }
+      renderScene();
+      seats.forEach(renderSeat);
+    }
     if (winbarOn) {
       let e = null;
       for (let p = ply; p >= 0 && e === null; p--) e = e0At(p);
       const v = e ?? 0.5;
-      winbar.classList.toggle('flip', flipped);
-      winbar.querySelector('.red').style.height = `${v * 100}%`;
-      winbar.querySelector('.t').textContent = Math.round((1 - v) * 100);
-      winbar.querySelector('.b').textContent = Math.round(v * 100);
-      winbar.title = `${seatName(seats[0])}胜率 ${Math.round(v * 100)}%（${d.options?.startEval?.source === 'builtin' ? '内置粗略' : '引擎'}评估）`;
+      tugFill.style.width = `${v * 100}%`;
+      tugKnot.style.left = `${v * 100}%`;
+      tugL.textContent = `${seatName(seats[0])} ${Math.round(v * 100)}%`;
+      tugR.textContent = `${Math.round((1 - v) * 100)}% ${seatName(seats[1])}`;
+      tug.title = `${seatName(seats[0])}胜率 ${Math.round(v * 100)}%（${d.options?.startEval?.source === 'builtin' ? '内置粗略' : '引擎'}评估）`;
     }
   }
 
@@ -352,6 +466,7 @@ export async function matchView(root, id, { characters }) {
   }
 
   function renderThoughts() {
+    if (duo) { renderFocus(); return; }
     for (const seat of seats) {
       const cards = [];
       const p = partials.get(seat);
@@ -408,6 +523,7 @@ export async function matchView(root, id, { characters }) {
       }
       goto(viewPly + 1);
       const t = turns.get(viewPly);
+      stampFx(stampFor(t?.label, viewAt(viewPly)));
       const base = Math.min(5000, Math.max(900, (t?.latency_ms || 900) * 0.6 + (t?.analysis ? 600 : 0)));
       replaying.timer = setTimeout(step, base / speed);
     };
@@ -428,6 +544,7 @@ export async function matchView(root, id, { characters }) {
   const liveTimers = new Map();
   function updateLive(seat) {
     if (liveTimers.has(seat) || viewPly !== null) return;
+    if (duo) { liveTimers.set(seat, requestAnimationFrame(() => { liveTimers.delete(seat); if (focusOf() === seat) renderFocus(); })); return; }
     liveTimers.set(seat, requestAnimationFrame(() => {
       liveTimers.delete(seat);
       const p = partials.get(seat);
@@ -500,7 +617,7 @@ export async function matchView(root, id, { characters }) {
         if (Array.isArray(d.record?.actions)) d.record.actions.push({ seat: e.seat, action: e.action });
         if (e.view) d.view = e.view;
         else await refresh();
-        if (viewPly === null) renderAll();
+        if (viewPly === null) { renderAll(); stampFx(stampFor(e.label, d.view)); }
         else { seats.forEach(renderCamp); renderStatus(); renderMoves(); }
         break;
       }
@@ -537,6 +654,7 @@ export async function matchView(root, id, { characters }) {
         renderAll();
         if (!recordMode && canReview()) goto(totalPlies());
         if (!recordMode) toast(resultText(d, d.seatNames));
+        if (d.status === 'finished') stampFx(d.result?.ranks && Object.values(d.result.ranks).every((r) => r === 1) ? '和' : '终', true);
         break;
     }
   });
