@@ -515,3 +515,17 @@ svg.chart text { font-size: 10px; fill: var(--muted); font-family: var(--mono); 
   .stage-bar .bar-info { flex-wrap: wrap; }
   .stage-bar .stage-state { white-space: normal; overflow-wrap: anywhere; }
 }
+
+/* ---------- Agent 接入说明 ---------- */
+.guide { max-width: 860px; margin: 0 auto; }
+.guide h1 { font-size: clamp(34px, 5vw, 60px); line-height: 1; margin: 6px 0 14px; }
+.guide h2 { margin: 34px 0 10px; padding-top: 14px; border-top: 2px solid var(--line); font-size: 22px; }
+.guide .lead { font-size: 17px; line-height: 1.75; }
+.guide p, .guide li { line-height: 1.8; }
+.guide ul { padding-left: 1.2em; }
+.guide code { font-family: var(--mono); font-size: .9em; }
+.guide table.api td:first-child { white-space: nowrap; }
+.code-wrap { position: relative; margin: 8px 0 14px; }
+.code-wrap .copy { position: absolute; top: 6px; right: 6px; }
+pre.code { margin: 0; padding: 14px 76px 14px 16px; overflow-x: auto; background: var(--panel); border: 1.5px solid var(--line); font: 500 12.5px/1.6 var(--mono); white-space: pre; }
+@media (max-width: 700px) { .guide table.api td:first-child { white-space: normal; } }

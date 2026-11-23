@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS characters (
   owner_id TEXT NOT NULL,
   name TEXT NOT NULL,
   avatar TEXT NOT NULL,
-  kind TEXT NOT NULL,             -- model / builtin / random / engine / human
+  kind TEXT NOT NULL,             -- model / agent / builtin / random / engine / human
   provider TEXT,                  -- 预置平台 id
   base_url TEXT,
   model TEXT,
@@ -173,6 +173,12 @@ export function openDb(file) {
   // 旧库升级：补上后来新增的列
   const cols = new Set(db.prepare('PRAGMA table_info(matches)').all().map((c) => c.name));
   if (!cols.has('setup')) db.exec('ALTER TABLE matches ADD COLUMN setup TEXT');
+  // 自带 agent 选手：接入令牌（只存 SHA-256）、每步限时（秒）、最近一次来领回合的时间
+  const ccols = new Set(db.prepare('PRAGMA table_info(characters)').all().map((c) => c.name));
+  if (!ccols.has('agent_token')) db.exec('ALTER TABLE characters ADD COLUMN agent_token TEXT');
+  if (!ccols.has('agent_timeout')) db.exec('ALTER TABLE characters ADD COLUMN agent_timeout INTEGER');
+  if (!ccols.has('last_seen')) db.exec('ALTER TABLE characters ADD COLUMN last_seen TEXT');
+  db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_token ON characters(agent_token)');
   if (!db.prepare('SELECT 1 FROM users WHERE id = ?').get('local')) {
     db.prepare('INSERT INTO users (id, name, created_at) VALUES (?, ?, ?)').run('local', '我', now());
   }

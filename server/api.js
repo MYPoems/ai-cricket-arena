@@ -5,8 +5,8 @@ import { PUZZLES } from '../games/xiangqi/puzzles.js';
 import { presetList, presetOf, EFFORTS } from './providers/presets.js';
 import { listModels, callModel } from './providers/index.js';
 import { keyStatus, setKey } from './secrets.js';
-import { createCharacter, updateCharacter, getCharacter, publicCharacter, LOCKED, MAX_DAILY_LIMIT } from './characters.js';
-import { leaderboard, tierFor } from './ladder/rating.js';
+import { createCharacter, updateCharacter, getCharacter, publicCharacter, issueAgentToken, LOCKED, MAX_DAILY_LIMIT } from './characters.js';
+import { leaderboard, tierFor, poolKey } from './ladder/rating.js';
 import { characterProfile, modelBoard } from './stats.js';
 import { HttpError } from './http.js';
 
@@ -71,10 +71,17 @@ export function routes(router, { db, hub, arena, matchmaker, compare, evaluator,
   router.get('/api/characters', ({ query }) => {
     const rows = db.all('SELECT * FROM characters WHERE archived = ? ORDER BY system, created_at', query.archived === '1' ? 1 : 0);
     const game = query.game || 'xiangqi';
-    return rows.map((c) => ({ ...publicCharacter(db, c), tier: tierFor(db, c.id, game), today: arena.todayUsage(c.id) }));
+    return rows.map((c) => ({ ...publicCharacter(db, c), tier: tierFor(db, c.id, poolKey(game, c.kind)), today: arena.todayUsage(c.id) }));
   });
 
-  router.post('/api/characters', ({ body }) => publicCharacter(db, createCharacter(db, ownerId, body)));
+  router.post('/api/characters', ({ body }) => {
+    const c = createCharacter(db, ownerId, body);
+    // 自带 agent：创建时生成接入令牌，明文只在这次响应里出现
+    const token = c.kind === 'agent' ? issueAgentToken(db, c.id) : undefined;
+    return { ...publicCharacter(db, getCharacter(db, c.id)), ...(token ? { agentToken: token } : {}) };
+  });
+  // 重新生成接入令牌（旧令牌立即失效）
+  router.post('/api/characters/:id/agent-token', ({ params }) => ({ agentToken: issueAgentToken(db, params.id) }));
 
   router.get('/api/characters/:id', ({ params }) => {
     const c = getCharacter(db, params.id);
@@ -121,6 +128,7 @@ export function routes(router, { db, hub, arena, matchmaker, compare, evaluator,
     const game = query.game || 'xiangqi';
     getGame(game);
     if (query.view === 'models') return modelBoard(db, game);
+    if (query.view === 'agents') return leaderboard(db, poolKey(game, 'agent')); // 单独的 Agent 天梯
     return leaderboard(db, game);
   });
 

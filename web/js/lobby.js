@@ -17,7 +17,7 @@ function ago(iso) {
   return `开局 ${Math.floor(s / 3600)} 小时 ${Math.floor((s % 3600) / 60)} 分`;
 }
 
-const who = (p) => (p?.kind === 'model' ? p.model : p?.kind === 'human' ? '玩家' : p?.kind === 'builtin' ? '内置 AI' : p?.kind === 'engine' ? ({ pikafish: 'Pikafish', rapfi: 'Rapfi', stockfish: 'Stockfish' }[p.provider || 'pikafish'] || '引擎') : '随机走子');
+const who = (p) => (p?.kind === 'model' ? p.model : p?.kind === 'agent' ? 'Agent' : p?.kind === 'human' ? '玩家' : p?.kind === 'builtin' ? '内置 AI' : p?.kind === 'engine' ? ({ pikafish: 'Pikafish', rapfi: 'Rapfi', stockfish: 'Stockfish' }[p.provider || 'pikafish'] || '引擎') : '随机走子');
 
 export async function lobbyView(root, { go }) {
   let data = await api('/lobby');

@@ -4,8 +4,8 @@ import { gameList, getGame } from '../../games/index.js';
 import { seatOutcome } from '../stats.js';
 
 const shuffle = (a) => { const b = a.slice(); for (let i = b.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [b[i], b[j]] = [b[j], b[i]]; } return b; };
-import { canRank } from '../characters.js';
-import { tierFor, PLACEMENT_GAMES } from './rating.js';
+import { canRank, agentOnline } from '../characters.js';
+import { tierFor, PLACEMENT_GAMES, poolKey } from './rating.js';
 import { callModel } from '../providers/index.js';
 
 export const LADDER_DEFAULTS = {
@@ -55,6 +55,7 @@ export class Matchmaker {
     const out = [];
     for (const c of this.db.all("SELECT * FROM characters WHERE auto_match = 1 AND archived = 0 AND kind != 'human'")) {
       if (!canRank(this.db, c)) continue;
+      if (c.kind === 'agent' && !agentOnline(c)) continue; // 自带 agent 只在在线（最近来领过回合）时匹配
       const u = this.arena.todayUsage(c.id);
       if (u.games >= c.daily_limit) continue;
       if (c.daily_tokens && u.tokens >= c.daily_tokens) continue;
@@ -83,7 +84,9 @@ export class Matchmaker {
         for (const { g } of games) {
           const game = getGame(g.id);
           const n = game.players.default;
-          const usable = pool.filter((o) => o.kind !== 'engine' || (o.provider || 'pikafish') === game.features?.evalEngine);
+          // 自带 agent 和 API 模型分在两个天梯：agent 只和 agent、系统选手匹配；模型不和 agent 匹配
+          const usable = pool.filter((o) => (o.kind !== 'engine' || (o.provider || 'pikafish') === game.features?.evalEngine)
+            && (ch.kind === 'agent' ? o.kind === 'agent' || o.system : o.kind !== 'agent'));
           const limit = Math.max(5, n - 1);
           const cands = this.candidates(ch, usable, g.id, s.maxTierGap, limit);
           const wide = cands.length >= n - 1 ? cands : this.candidates(ch, usable, g.id, s.maxTierGap + 1, limit);
@@ -151,13 +154,14 @@ export class Matchmaker {
   /** 候选对手：段位相差不超过 gap，同一对手当天不超过 samePairPerDay 盘；按分差排序取前 5 */
   candidates(ch, pool, gameId, gap, limit = 5) {
     const s = this.settings();
-    const me = tierFor(this.db, ch.id, gameId);
+    const key = poolKey(gameId, ch.kind);
+    const me = tierFor(this.db, ch.id, key);
     const mePlacing = me.played < PLACEMENT_GAMES;
     const today = new Set(ch.usage.matchIds);
     const list = [];
     for (const o of pool) {
       if (o.id === ch.id) continue;
-      const t = tierFor(this.db, o.id, gameId);
+      const t = tierFor(this.db, o.id, key);
       const placing = t.played < PLACEMENT_GAMES;
       if (!mePlacing && !placing && Math.abs(t.index - me.index) > gap) continue;
       const vsToday = o.usage.matchIds.filter((id) => today.has(id)).length;

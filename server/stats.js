@@ -1,7 +1,7 @@
 // 选手主页的统计：段位、积分曲线、战绩、交手记录、能力指标、代表作。
 
 import { gameList } from '../games/index.js';
-import { leaderboard, tierOf } from './ladder/rating.js';
+import { leaderboard, tierOf, poolKey } from './ladder/rating.js';
 
 /** 按名次判定某座位的结果：'w' 胜 / 'd' 和 / 'l' 负（支持团队和多人） */
 export function seatOutcome(result, seat) {
@@ -16,8 +16,9 @@ export function seatOutcome(result, seat) {
 
 export function characterProfile(db, arena, c) {
   const games = gameList().map((g) => {
-    const row = leaderboard(db, g.id).find((r) => r.character_id === c.id);
-    const history = db.all('SELECT score, at, match_id FROM rating_history WHERE character_id = ? AND game = ? ORDER BY at', c.id, g.id);
+    const key = poolKey(g.id, c.kind); // agent 选手看 Agent 天梯
+    const row = leaderboard(db, key).find((r) => r.character_id === c.id);
+    const history = db.all('SELECT score, at, match_id FROM rating_history WHERE character_id = ? AND game = ? ORDER BY at', c.id, key);
     return {
       game: g.id, name: g.name,
       rating: row ? { points: row.points, tier: row.tierInfo, played: row.played, wins: row.wins, draws: row.draws, losses: row.losses, peak: row.peak } : { points: 1000, tier: tierOf(1000, 0), played: 0, wins: 0, draws: 0, losses: 0, peak: 1000 },

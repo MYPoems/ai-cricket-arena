@@ -1,5 +1,6 @@
 // 选手（AI 角色）管理。配置创建后锁定，想改模型或参数就「派生」新选手。
 
+import { createHash, randomBytes } from 'node:crypto';
 import { newId, now } from './db.js';
 import { presetOf, canSetBaseURL, rankedAllowed, EFFORTS } from './providers/presets.js';
 import { HttpError } from './http.js';
@@ -7,7 +8,30 @@ import { HttpError } from './http.js';
 const AVATARS = ['🦊', '🐯', '🐼', '🦁', '🐉', '🦅', '🐺', '🦉', '🐬', '🦄', '🐢', '🐲', '🦈', '🐙', '🦚', '🐝'];
 
 export const LOCKED = ['kind', 'provider', 'base_url', 'model', 'effort', 'style', 'memory', 'show_legal', 'level'];
-export const EDITABLE = ['name', 'avatar', 'auto_match', 'daily_limit', 'daily_tokens', 'archived'];
+export const EDITABLE = ['name', 'avatar', 'auto_match', 'daily_limit', 'daily_tokens', 'archived', 'agent_timeout'];
+
+/** 自带 agent 选手：多久内来领过回合算在线（长轮询最长 60 秒） */
+export const AGENT_ONLINE_MS = 90_000;
+export const AGENT_TIMEOUT = { min: 30, max: 900, default: 180 }; // 每步限时（秒）
+const clampTimeout = (v) => Math.max(AGENT_TIMEOUT.min, Math.min(AGENT_TIMEOUT.max, Number(v) || AGENT_TIMEOUT.default));
+
+export const agentOnline = (c) => c?.kind === 'agent' && !!c.last_seen && Date.now() - Date.parse(c.last_seen) < AGENT_ONLINE_MS;
+const hashToken = (t) => createHash('sha256').update(String(t)).digest('hex');
+
+/** 生成新的接入令牌（旧令牌立即失效）；返回明文，只显示这一次 */
+export function issueAgentToken(db, id) {
+  const c = getCharacter(db, id);
+  if (c.kind !== 'agent') throw new HttpError(400, '只有 Agent 选手有接入令牌');
+  const token = `pka_${randomBytes(24).toString('base64url')}`;
+  db.update('characters', { id }, { agent_token: hashToken(token) });
+  return token;
+}
+
+/** 按令牌找 Agent 选手；找不到返回 null */
+export function agentByToken(db, token) {
+  if (!token || !/^pka_[A-Za-z0-9_-]{20,}$/.test(token)) return null;
+  return db.get("SELECT * FROM characters WHERE agent_token = ? AND kind = 'agent' AND archived = 0", hashToken(token)) || null;
+}
 
 export const MAX_DAILY_LIMIT = 50; // 平台允许的每日对局上限
 
@@ -19,14 +43,16 @@ export function getCharacter(db, id) {
 
 /** 是否能参加排位赛 */
 export function canRank(db, c) {
-  if (c.kind !== 'model') return true; // 系统参照选手和玩家本人
+  if (c.kind !== 'model') return true; // 系统参照选手、玩家本人、自带 agent（agent 在单独的天梯）
   if (c.provider === 'mock') return true;
   return rankedAllowed(c.provider) || (db.getSetting('allowLocalRanked', false) && c.provider === 'ollama');
 }
 
 export function publicCharacter(db, c) {
+  const { agent_token: token, ...rest } = c;
   return {
-    ...c,
+    ...rest,
+    ...(c.kind === 'agent' ? { hasToken: !!token, online: agentOnline(c) } : {}),
     providerName: c.provider ? presetOf(c.provider)?.name || (c.provider === 'mock' ? '模拟模型' : c.provider) : null,
     effortName: c.effort ? EFFORTS[c.effort] : null,
     ranked: canRank(db, c),
@@ -39,7 +65,7 @@ function clean(s, max) {
 
 export function createCharacter(db, ownerId, input, { system = false } = {}) {
   const kind = input.kind || 'model';
-  if (!['model', 'builtin', 'random', 'engine', 'human'].includes(kind)) throw new HttpError(400, '未知选手类型');
+  if (!['model', 'agent', 'builtin', 'random', 'engine', 'human'].includes(kind)) throw new HttpError(400, '未知选手类型');
   const name = clean(input.name, 24);
   if (!name) throw new HttpError(400, '请填写选手名字');
   const c = {
@@ -76,6 +102,11 @@ export function createCharacter(db, ownerId, input, { system = false } = {}) {
     if (c.effort === 'off' && !presetOf(c.provider)?.thinkingParams?.canOff && c.provider !== 'mock') {
       throw new HttpError(400, `${presetOf(c.provider)?.name || c.provider} 不能关闭思考`);
     }
+  } else if (kind === 'agent') {
+    // 自带 agent：思考和记忆由 agent 自己负责；风格、跨局笔记都不用
+    c.style = '';
+    c.memory = 0;
+    c.agent_timeout = clampTimeout(input.agent_timeout);
   } else {
     c.style = '';
     c.memory = 0;
@@ -95,6 +126,7 @@ export function updateCharacter(db, id, input) {
     else if (k === 'avatar') patch.avatar = clean(input.avatar, 8) || c.avatar;
     else if (k === 'daily_limit') patch.daily_limit = Math.max(1, Math.min(MAX_DAILY_LIMIT, Number(input.daily_limit) || c.daily_limit));
     else if (k === 'daily_tokens') patch.daily_tokens = input.daily_tokens ? Math.max(1000, Number(input.daily_tokens)) : null;
+    else if (k === 'agent_timeout') { if (c.kind === 'agent') patch.agent_timeout = clampTimeout(input.agent_timeout); }
     else patch[k] = input[k] ? 1 : 0;
   }
   const locked = LOCKED.filter((k) => k in input && input[k] !== c[k]);

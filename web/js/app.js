@@ -8,6 +8,7 @@ import { charactersView, profileView } from './characters.js';
 import { ladderView } from './ladder.js';
 import { compareNewView, compareView } from './compare.js';
 import { historyView, settingsView } from './pages.js';
+import { agentGuideView } from './agent-guide.js';
 
 const app = document.getElementById('app');
 const meta = {};
@@ -23,9 +24,11 @@ const go = (hash) => { location.hash = hash; };
 async function route() {
   cleanup?.();
   cleanup = null;
+  // 换页时关掉弹窗；接入令牌弹窗（只显示一次）除外，要用户确认保存后自己关
+  document.querySelectorAll('dialog[open]:not([data-keep])').forEach((d) => d.close());
   const parts = location.hash.replace(/^#\/?/, '').split('?')[0].split('/').filter(Boolean);
   const [page = 'lobby', id] = parts;
-  const navKey = { lobby: 'lobby', new: 'play', match: 'lobby', characters: 'characters', ladder: 'ladder', compare: 'compare', history: 'history', settings: 'settings' }[page] || 'lobby';
+  const navKey = { lobby: 'lobby', new: 'play', match: 'lobby', characters: 'characters', ladder: 'ladder', compare: 'compare', history: 'history', settings: 'settings', 'agent-guide': 'characters' }[page] || 'lobby';
   document.querySelectorAll('#nav a').forEach((a) => a.classList.toggle('on', a.dataset.r === navKey));
   document.body.dataset.page = page === 'match' && id ? 'match' : page;
   try {
@@ -41,6 +44,7 @@ async function route() {
     else if (page === 'history') r = await historyView(app, ctx);
     else if (page === 'settings') r = await settingsView(app, ctx);
     else if (page === 'new') r = await playView(app, ctx);
+    else if (page === 'agent-guide') r = await agentGuideView(app, ctx);
     else r = await lobbyView(app, ctx);
     cleanup = typeof r === 'function' ? r : null;
     window.scrollTo(0, 0);

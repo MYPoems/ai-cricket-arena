@@ -112,6 +112,7 @@ export function modelLine(c) {
   if (c.kind === 'human') return '玩家';
   if (c.kind === 'builtin') return `内置 AI · ${c.level || 3} 层搜索`;
   if (c.kind === 'random') return '随机走子';
+  if (c.kind === 'agent') return `自带 Agent${c.agent_timeout ? ` · 每步 ${c.agent_timeout} 秒` : ''}`;
   if (c.kind === 'engine') return `${{ pikafish: 'Pikafish', rapfi: 'Rapfi', stockfish: 'Stockfish' }[c.provider || 'pikafish'] || c.provider} · 每步 ${c.level || 200}ms`;
   return `${c.providerName || c.provider} · ${c.model}`;
 }

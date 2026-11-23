@@ -110,7 +110,7 @@ function authorized(req) {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
-export function handler(router, mounts) {
+export function handler(router, mounts, { bypassAuth = () => false } = {}) {
   return async (req, res) => {
     let url;
     try {
@@ -120,7 +120,8 @@ export function handler(router, mounts) {
       res.end('请求地址不合法');
       return;
     }
-    if (!authorized(req)) {
+    // bypassAuth：自带 agent 用自己的令牌访问 /api/agent/*，不需要网站访问密码（路由里校验令牌）
+    if (!authorized(req) && !bypassAuth(req, url.pathname)) {
       res.writeHead(401, { 'WWW-Authenticate': 'Basic realm="AI Arena", charset="UTF-8"', 'Content-Type': 'text/plain; charset=utf-8' });
       res.end('需要访问密码');
       return;

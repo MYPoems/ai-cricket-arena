@@ -7,6 +7,10 @@ import { now } from '../db.js';
 export const PLACEMENT_GAMES = 5;
 export const KING_SLOTS = 10; // 王者名额：大师里排名前 10
 
+/** 积分池：有自带 agent 的排位记在单独的 Agent 天梯（键为 agent:游戏），不和 API 模型选手混排 */
+export const ratingKey = (game, kinds = []) => (kinds.includes('agent') ? `agent:${game}` : game);
+export const poolKey = (game, kind) => (kind === 'agent' ? `agent:${game}` : game);
+
 export const score = (r) => Math.round(1000 + 40 * ordinal(r));
 
 // 大段：[名称, 起始分]；大师以上不分小段，王者由排名决定

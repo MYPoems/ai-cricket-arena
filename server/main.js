@@ -16,6 +16,7 @@ import { ensureSystemCharacters, ensureEngineCharacter } from './characters.js';
 import { routes } from './api.js';
 import { setCliWorkRoot } from './providers/cli.js';
 import { lobbyRoutes } from './lobby.js';
+import { agentRoutes, isAgentRequest } from './agent-api.js';
 import { Recorder } from './recorder.js';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -57,6 +58,7 @@ arena.onFinish = (sum) => { matchmaker.onFinished(sum); matchmaker.tick().catch(
 const router = new Router();
 routes(router, { db, hub, arena, matchmaker, compare, evaluator, ownerId: OWNER });
 lobbyRoutes(router, { db, arena });
+agentRoutes(router, { db, arena });
 const recorder = new Recorder({ db, outDir: join(DATA, 'recordings'), baseUrl: `http://127.0.0.1:${PORT}` });
 router.post('/api/matches/:id/record', ({ params, body }) => recorder.start(params.id, { speed: body.speed }));
 router.get('/api/recordings', () => ({ status: recorder.status(), list: recorder.list() }));
@@ -64,7 +66,7 @@ router.get('/api/recordings/:id/file', ({ params, res }) => { recorder.send(para
 
 // 字体与 MYPoetry 作品集相同，自托管（SIL OFL），不依赖外部字体服务
 const FONTS = join(ROOT, 'node_modules', '@fontsource-variable');
-const server = createServer(handler(router, [['/games/', join(ROOT, 'games')], ['/fonts/', FONTS], ['/', join(ROOT, 'web')]]));
+const server = createServer(handler(router, [['/games/', join(ROOT, 'games')], ['/fonts/', FONTS], ['/', join(ROOT, 'web')]], { bypassAuth: isAgentRequest }));
 server.listen(PORT, HOST, () => {
   console.log(`电子斗蛐蛐已启动：http://${HOST === '0.0.0.0' ? 'localhost' : HOST}:${PORT}`);
   if (HOST !== '127.0.0.1' && HOST !== 'localhost' && !process.env.ARENA_PASSWORD) {

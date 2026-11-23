@@ -5,7 +5,7 @@ import { getGame, replay } from '../games/index.js';
 import { newId, now } from './db.js';
 import { callModel } from './providers/index.js';
 import { getCharacter, canRank, engineGameName } from './characters.js';
-import { applyResult, PLACEMENT_GAMES } from './ladder/rating.js';
+import { applyResult, PLACEMENT_GAMES, ratingKey } from './ladder/rating.js';
 import { moveQuality } from './evaluator.js';
 import { HttpError } from './http.js';
 
@@ -108,6 +108,47 @@ export class Arena {
     this.evaluator = evaluator;
     this.ownerId = ownerId;
     this.live = new Map(); // matchId → 运行时状态
+    this.agentTurns = new Map(); // 自带 agent：characterId → 等它来领的回合列表
+    this.agentWaiters = new Map(); // characterId → 正在长轮询的请求
+  }
+
+  // ---------- 自带 agent 选手 ----------
+
+  /** 这名 agent 选手现在等着的回合（最早的一个） */
+  agentPending(characterId) {
+    return (this.agentTurns.get(characterId) || [])[0] || null;
+  }
+
+  /** 长轮询：等到有回合或超时；返回回合或 null */
+  agentWait(characterId, ms, signal) {
+    const now0 = this.agentPending(characterId);
+    if (now0 || ms <= 0) return Promise.resolve(now0);
+    return new Promise((resolve) => {
+      const set = this.agentWaiters.get(characterId) || new Set();
+      this.agentWaiters.set(characterId, set);
+      const done = () => { clearTimeout(t); set.delete(wake); resolve(this.agentPending(characterId)); };
+      const wake = () => done();
+      const t = setTimeout(done, ms);
+      set.add(wake);
+      signal?.addEventListener('abort', done, { once: true });
+    });
+  }
+
+  agentTurn(characterId, turnId) {
+    return (this.agentTurns.get(characterId) || []).find((t) => t.id === turnId) || null;
+  }
+
+  #publishAgentTurn(turn) {
+    const list = this.agentTurns.get(turn.characterId) || [];
+    list.push(turn);
+    this.agentTurns.set(turn.characterId, list);
+    for (const wake of this.agentWaiters.get(turn.characterId) || []) wake();
+  }
+
+  #dropAgentTurn(turn) {
+    const list = (this.agentTurns.get(turn.characterId) || []).filter((t) => t !== turn);
+    if (list.length) this.agentTurns.set(turn.characterId, list);
+    else this.agentTurns.delete(turn.characterId);
   }
 
   // ---------- 创建 ----------
@@ -135,6 +176,11 @@ export class Arena {
     if (mode === 'ranked') {
       const bad = Object.values(chars).filter((c) => !canRank(this.db, c));
       if (bad.length) throw new HttpError(400, `${bad.map((c) => c.name).join('、')} 不能参加排位赛（本机订阅和自定义接口只能下娱乐赛）`);
+      // 自带 agent 在单独的天梯：排位里只能和 agent、内置 AI、引擎、随机同场，不和 API 模型选手混排
+      const all = Object.values(chars);
+      if (all.some((c) => c.kind === 'agent') && all.some((c) => c.kind === 'model' || c.kind === 'human')) {
+        throw new HttpError(400, 'Agent 选手的排位在单独的 Agent 天梯：不能和 API 模型选手或玩家本人同场排位（娱乐赛可以）');
+      }
       if (setup.fen) throw new HttpError(400, '排位赛只能从标准开局开始');
       const ids = Object.values(seats);
       const system = new Set(this.db.all('SELECT id FROM characters WHERE system = 1').map((r) => r.id));
@@ -295,7 +341,7 @@ export class Arena {
         this.db.update('matches', { id: m.id }, { actions: m.actions, conversations: m.conversations, options: m.options });
         this.#saveTurn(m, { ply, seat, ch, res, latency, action: res.action, label });
         delete rt.partials[seat];
-        const hideModel = m.options.hideThoughts && ch.kind === 'model';
+        const hideModel = m.options.hideThoughts && (ch.kind === 'model' || ch.kind === 'agent');
         if (secret) this.hub.emit(channel, { type: 'move', ply, seat: null, characterId: null, action: null, label: null, analysis: null, view: null, secret: true });
         else this.hub.emit(channel, {
           type: 'move', ply, seat, characterId: ch.id, action: res.action, label,
@@ -366,6 +412,7 @@ export class Arena {
         return { action: await this.evaluator.bestMove(spec, ch.level || 200) };
       }
       case 'model':
+      case 'agent': // 自带 agent 走同一套对话、重试、提和流程，只是不调模型接口，而是等 agent 来领回合、提交回答
         return this.#modelMove(ctx);
       default:
         throw new Error(`未知选手类型：${ch.kind}`);
@@ -431,11 +478,44 @@ export class Arena {
 胜率：50%
 ${game.noun || '行动'}：${act}`;
     }
+    const isAgent = ch.kind === 'agent';
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
       partial.text = '';
       partial.reasoning = '';
       partial.attempt = attempt;
       const hide = m.options.hideThoughts;
+      if (isAgent) {
+        const retry = attempt ? attempts[attempts.length - 1].error : null;
+        const res = await this.#agentCall({ m, rt, ch, game, state, seat, conv, partial, channel, hide, attempt, turn, retry, showLegal });
+        if (res.offline) {
+          return { forfeit: `${game.seatName(seat)}（${ch.name}）${ch.agent_timeout || 180} 秒内没有来领回合，判负（agent 不在线）`, attempts, usage, model: served };
+        }
+        res.text = plainReply(res.text);
+        for (const k of Object.keys(usage)) usage[k] += res.usage?.[k] || 0;
+        served = res.model || served;
+        conv.messages.push(res.message);
+        const verdict = (v) => { res.report?.(v); return v; };
+        if (offer && ACCEPT_RE.test(res.text)) {
+          verdict({ ok: true, accepted_draw: true });
+          return { acceptDraw: true, text: res.text, reasoning: res.reasoning, winrate: game.parseReply(state, seat, res.text).winrate, attempts, usage, model: served };
+        }
+        const parsed = res.timeout ? { action: null, error: `超过每步限时（${ch.agent_timeout || 180} 秒）没有提交` }
+          : res.directAction !== null && res.directAction !== undefined ? { action: res.directAction, winrate: res.text ? game.parseReply(state, seat, res.text).winrate : null }
+            : game.parseReply(state, seat, res.text);
+        if (parsed.action !== null && parsed.action !== undefined) {
+          verdict({ ok: true, action: parsed.action, label: game.label(state, seat, parsed.action) });
+          return { action: parsed.action, offerDraw: OFFER_RE.test(res.text), text: res.text, reasoning: res.reasoning, winrate: parsed.winrate, attempts, usage, model: served };
+        }
+        const error = res.timeout || res.text.trim() ? parsed.error : '回答是空的';
+        attempts.push({ text: res.text, reasoning: res.reasoning, error, attempted: parsed.attempted });
+        if (!partial.secret) this.hub.emit(channel, { type: 'illegal', ply: partial.ply, seat, attempt, error, attempted: parsed.attempted });
+        verdict({ ok: false, error, retries_left: MAX_RETRIES - attempt });
+        if (attempt === MAX_RETRIES) {
+          return { forfeit: `${game.seatName(seat)}连续 ${MAX_RETRIES + 1} 次给出无效${game.noun || '行动'}，判负`, text: res.text, reasoning: res.reasoning, attempts, usage, model: served };
+        }
+        conv.messages.push({ role: 'user', content: game.retryPrompt(error, attempt + 1, MAX_RETRIES) });
+        continue;
+      }
       const res = await withRetry(() => {
         partial.text = '';
         partial.reasoning = '';
@@ -467,6 +547,64 @@ ${game.noun || '行动'}：${act}`;
     throw new Error('不可能到达');
   }
 
+  /**
+   * 自带 agent 的一次回答：发布回合，等 agent 领走并提交。
+   * 返回 { text, reasoning, usage, model, message, report }；report(verdict) 把判定结果回给提交请求。
+   * 限时内没来领：{ offline: true }；领了但没提交：{ timeout: true, text: '' }。
+   */
+  #agentCall({ m, rt, ch, game, state, seat, conv, partial, channel, hide, attempt, turn: turnText, retry, showLegal }) {
+    const timeoutMs = (ch.agent_timeout || 180) * 1000;
+    return new Promise((resolve, reject) => {
+      const acts = showLegal ? game.actions(state, seat) : null;
+      const t = {
+        id: newId('turn'), characterId: ch.id, matchId: m.id, seat, ply: partial.ply, attempt,
+        game: game.id, gameName: game.name, seatName: game.seatName(seat), noun: game.noun || '行动',
+        system: conv.system, prompt: turnText, retry,
+        actions: Array.isArray(acts) ? acts.slice(0, 500).map((a) => ({ id: a.id, label: a.label })) : null,
+        createdAt: Date.now(), deadline: Date.now() + timeoutMs, fetched: false,
+      };
+      let settled = false;
+      const finish = (value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        this.#dropAgentTurn(t);
+        resolve(value);
+      };
+      t.think = (text) => {
+        const chunk = String(text || '').slice(0, 4000);
+        if (!chunk || settled) return;
+        partial.reasoning += (partial.reasoning ? '\n' : '') + chunk;
+        if (!hide) this.hub.emit(channel, { type: 'delta', ply: partial.ply, seat, attempt, kind: 'reasoning', text: (partial.reasoning === chunk ? '' : '\n') + chunk });
+      };
+      t.submit = (reply, meta = {}) => {
+        if (settled) throw new HttpError(409, '这个回合已经结束');
+        const text = String(reply || '').slice(0, 8000);
+        const u = meta.usage || {};
+        const usage = { input: Math.max(0, Math.round(Number(u.input) || 0)), output: Math.max(0, Math.round(Number(u.output) || 0)) };
+        return new Promise((report) => {
+          finish({
+            text, reasoning: partial.reasoning || null, usage,
+            model: meta.model ? `自报：${String(meta.model).slice(0, 60)}` : 'agent',
+            message: { role: 'assistant', content: text || `${game.noun || '行动'}：${meta.action}` }, report,
+            directAction: meta.action ?? null, // 直接提交了 legal_actions 里的 id
+          });
+        });
+      };
+      const timer = setTimeout(() => {
+        finish(t.fetched ? { timeout: true, text: '', reasoning: partial.reasoning || null, message: { role: 'assistant', content: '' } } : { offline: true });
+      }, timeoutMs);
+      rt.abort.signal.addEventListener('abort', () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        this.#dropAgentTurn(t);
+        reject(new Abort());
+      }, { once: true });
+      this.#publishAgentTurn(t);
+    });
+  }
+
   // ---------- 结束 ----------
 
   #finish(m, rt, outcome, abortReason = null) {
@@ -474,7 +612,11 @@ ${game.noun || '行动'}：${act}`;
       this.db.update('matches', { id: m.id }, { status: 'aborted', result: { over: true, aborted: true, reason: abortReason }, finished_at: now(), conversations: m.conversations });
     } else {
       let changes = null;
-      if (m.mode !== 'casual') changes = applyResult(this.db, m.game, m.id, m.seats, outcome.ranks);
+      if (m.mode !== 'casual') {
+        // 有自带 agent 的排位记在单独的 Agent 天梯
+        const kinds = Object.values(m.seats).map((cid) => this.db.get('SELECT kind FROM characters WHERE id = ?', cid)?.kind);
+        changes = applyResult(this.db, ratingKey(m.game, kinds), m.id, m.seats, outcome.ranks);
+      }
       this.db.update('matches', { id: m.id }, { status: 'finished', result: outcome, rating_changes: changes, finished_at: now(), conversations: m.conversations });
       this.#writeNotes(m, outcome).catch((e) => console.error('写复盘笔记失败：', e.message));
     }
@@ -600,7 +742,7 @@ ${game.noun || '行动'}：${act}`;
   }
 
   #isModel(cid) {
-    return this.db.get('SELECT kind FROM characters WHERE id = ?', cid)?.kind === 'model';
+    return ['model', 'agent'].includes(this.db.get('SELECT kind FROM characters WHERE id = ?', cid)?.kind); // 会写思考的选手
   }
 
   /** 今天某选手已下的盘数和 token 用量 */

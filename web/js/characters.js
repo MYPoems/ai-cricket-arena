@@ -3,6 +3,18 @@
 import { h, api, post, patch, guard, toast, tierBadge, avatar, modelLine, fmtTime, fmtMs, fmtTokens, MODE_NAMES, resultText, dialog, seatOutcome } from './ui.js';
 
 const EMOJIS = ['🦊', '🐯', '🐼', '🦁', '🐉', '🦅', '🐺', '🦉', '🐬', '🦄', '🐢', '🐲', '🦈', '🐙', '🦚', '🐝', '🐧', '🦝', '🐸', '🦋', '🐳', '🦜', '🐻', '🐨'];
+/** Agent 接入令牌：只在生成时显示一次 */
+export function tokenDialog(name, token) {
+  const box = h('input', { type: 'text', value: token, readonly: true, onclick: (e) => e.target.select(), style: { fontFamily: 'var(--mono)' } });
+  const dlg = dialog(`「${name}」的接入令牌`, h('div', { class: 'col', style: { gap: '12px' } },
+    h('div', { class: 'small' }, '把这个令牌交给你的 agent。令牌只显示这一次，网站只保存它的哈希；丢了就在选手主页重新生成（旧令牌立即失效）。'),
+    h('div', { class: 'keyline' }, box, h('button', { class: 'btn sm', onclick: async () => { try { await navigator.clipboard.writeText(token); toast('已复制'); } catch { box.select(); } } }, '复制')),
+    h('div', { class: 'small' }, '接入方法见 ', h('a', { href: '#/agent-guide' }, '「Agent 接入说明」'), '：HTTP 接口或 MCP 都可以，agent 在线时才会被自动匹配。'),
+  ), [h('button', { class: 'btn primary', onclick: () => dlg.close() }, '我已保存')]);
+  dlg.dataset.keep = '1';
+  return dlg;
+}
+
 const STYLE_EXAMPLES = ['喜欢弃子抢攻，宁可冒险也不求和。', '稳健防守，先保证不丢子，再寻找对方破绽。', '偏爱炮的进攻，开局常走中炮。'];
 
 export async function charactersView(root, { meta, go, reloadMeta }) {
@@ -17,6 +29,7 @@ export async function charactersView(root, { meta, go, reloadMeta }) {
       h('div', { class: 'row', style: { gap: '6px' } }, tierBadge(c.tier), h('span', { class: 'small muted' }, `${c.tier.points} 分`)),
       h('div', { class: 'row', style: { gap: '6px' } },
         !c.ranked ? h('span', { class: 'chip' }, '仅娱乐赛') : null,
+        c.kind === 'agent' ? h('span', { class: `chip ${c.online ? 'good' : ''}` }, c.online ? 'Agent 在线' : 'Agent 离线') : null,
         c.auto_match ? h('span', { class: 'chip good', title: '自动匹配已开启' }, `今日 ${c.today.games}/${c.daily_limit}`) : null)),
   );
 
@@ -47,7 +60,7 @@ export function createDialog({ meta, reloadMeta, base = null, onDone }) {
     const keyState = keys[f.provider];
     const datalist = h('datalist', { id: 'model-options' }, ...(p?.models || []).map((m) => h('option', { value: m })));
     const keyInput = h('input', { type: 'password', placeholder: `${p?.name || ''} API Key`, autocomplete: 'off' });
-    const kindSeg = h('div', { class: 'seg' }, ...[['model', 'AI 模型'], ['builtin', '内置 AI']].map(([v, l]) => h('button', { class: f.kind === v ? 'on' : '', onclick: () => { f.kind = v; draw(); } }, l)));
+    const kindSeg = h('div', { class: 'seg' }, ...[['model', 'AI 模型'], ['agent', '自带 Agent'], ['builtin', '内置 AI']].map(([v, l]) => h('button', { class: f.kind === v ? 'on' : '', onclick: () => { f.kind = v; draw(); } }, l)));
     body.replaceChildren(
       base ? h('div', { class: 'small muted' }, `从「${base.name}」派生：可以修改配置，积分从头算。`) : kindSeg,
       h('div', { class: 'grid2' },
@@ -85,6 +98,10 @@ export function createDialog({ meta, reloadMeta, base = null, onDone }) {
         h('div', { class: 'row', style: { gap: '20px' } },
           h('label', { class: 'switch', title: '每盘结束后写一句复盘笔记，下一盘带上最近 5 条' }, h('input', { type: 'checkbox', checked: f.memory, onchange: (e) => { f.memory = e.target.checked; } }), '跨局记忆'),
           h('label', { class: 'switch' }, h('input', { type: 'checkbox', checked: f.show_legal, onchange: (e) => { f.show_legal = e.target.checked; } }), '提供合法着法列表')),
+      ] : f.kind === 'agent' ? [
+        h('div', { class: 'note' }, '选手背后是你自己的 agent（Claude Code、Codex 或你写的程序）：轮到它时，agent 用接入令牌来领回合、想好后提交。思考、记忆都由 agent 自己负责。Agent 选手在单独的 Agent 天梯排名，只在 agent 在线时参加自动匹配。'),
+        h('label', { class: 'field' }, h('span', {}, '每步限时（秒）'), h('input', { type: 'number', min: 30, max: 900, value: f.agent_timeout || 180, oninput: (e) => { f.agent_timeout = Number(e.target.value); } }),
+          h('span', {}, '限时内没来领回合判负；领了没交按无效处理（最多重来 3 次）。')),
       ] : h('label', { class: 'field' }, h('span', {}, '搜索深度'),
         h('div', { class: 'seg' }, ...[[1, '1 层'], [2, '2 层'], [3, '3 层'], [4, '4 层']].map(([v, l]) => h('button', { class: f.level === v ? 'on' : '', onclick: () => { f.level = v; draw(); } }, l)))),
       h('div', { class: 'grid2' },
@@ -110,6 +127,7 @@ export function createDialog({ meta, reloadMeta, base = null, onDone }) {
       const c = base ? await post(`/characters/${base.id}/derive`, payload) : await post('/characters', payload);
       dlg.close();
       toast(`已创建「${c.name}」`);
+      if (c.agentToken) tokenDialog(c.name, c.agentToken);
       onDone?.(c);
     }) }, '创建'),
   ]);
@@ -179,6 +197,18 @@ export async function profileView(root, id, { meta, go, reloadMeta }) {
     if (c.system) { settings.replaceChildren(h('div', { class: 'small muted' }, '系统参照选手，用来给新选手定级，让积分有固定参照。')); return; }
     if (c.kind === 'human') { settings.replaceChildren(h('div', { class: 'small muted' }, '你自己。和 AI 下排位赛时也会计分。')); return; }
     settings.replaceChildren(
+      c.kind === 'agent' ? h('div', { class: 'col', style: { gap: '10px' } },
+        h('div', { class: 'row', style: { gap: '8px' } }, h('span', { class: `chip ${c.online ? 'good' : ''}` }, c.online ? '在线' : '离线'),
+          h('span', { class: 'small muted' }, c.last_seen ? `最近来过：${fmtTime(c.last_seen)}` : 'agent 还没有来过')),
+        h('label', { class: 'field' }, h('span', {}, '每步限时（秒）'), h('input', { type: 'number', min: 30, max: 900, value: c.agent_timeout || 180, onchange: guard(async (e) => { Object.assign(c, await patch(`/characters/${c.id}`, { agent_timeout: Number(e.target.value) })); toast('已保存'); }) })),
+        h('div', { class: 'row' },
+          h('button', { class: 'btn sm', onclick: guard(async () => {
+            if (c.hasToken && !confirm('重新生成后旧令牌立即失效，正在用旧令牌的 agent 会断开。继续？')) return;
+            const r = await post(`/characters/${c.id}/agent-token`);
+            c.hasToken = true;
+            tokenDialog(c.name, r.agentToken);
+          }) }, c.hasToken ? '重新生成接入令牌' : '生成接入令牌'),
+          h('a', { class: 'btn sm', href: '#/agent-guide' }, '接入说明'))) : null,
       h('label', { class: 'switch' }, h('input', { type: 'checkbox', checked: !!c.auto_match, onchange: guard(async (e) => { Object.assign(c, await patch(`/characters/${c.id}`, { auto_match: e.target.checked })); toast(e.target.checked ? '已加入自动匹配' : '已退出自动匹配'); }) }), '参加天梯自动匹配'),
       h('div', { class: 'grid2' },
         h('label', { class: 'field' }, h('span', {}, '每日对局上限'), h('input', { type: 'number', min: 1, max: meta.maxDailyLimit, value: c.daily_limit, onchange: guard(async (e) => { Object.assign(c, await patch(`/characters/${c.id}`, { daily_limit: Number(e.target.value) })); toast('已保存'); }) })),

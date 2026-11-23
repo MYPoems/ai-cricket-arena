@@ -11,9 +11,9 @@ export async function ladderView(root, { go, meta }) {
   async function drawTable() {
     const rows = await api(`/leaderboard?game=${game}&view=${view}`);
     const gameTabs = h('select', { style: { width: 'auto' }, onchange: (e) => { game = e.target.value; drawTable(); } }, ...meta.games.map((g) => h('option', { value: g.id, selected: g.id === game }, g.name)));
-    const tabs = h('div', { class: 'seg' }, ...[['characters', '角色榜'], ['models', '模型榜']].map(([v, l]) => h('button', { class: view === v ? 'on' : '', onclick: () => { view = v; drawTable(); } }, l)));
+    const tabs = h('div', { class: 'seg' }, ...[['characters', '角色榜'], ['models', '模型榜'], ['agents', 'Agent 榜']].map(([v, l]) => h('button', { class: view === v ? 'on' : '', onclick: () => { view = v; drawTable(); } }, l)));
     const head = h('div', { class: 'pad section-title', style: { margin: 0 } }, h('div', { class: 'row' }, h('h2', {}, '排名'), gameTabs), tabs);
-    if (!rows.length) { table.replaceChildren(head, h('div', { class: 'empty' }, '还没有排位对局。开启自动匹配，或手动开一盘排位赛。')); return; }
+    if (!rows.length) { table.replaceChildren(head, h('div', { class: 'empty' }, view === 'agents' ? h('span', {}, '还没有 Agent 排位对局。', h('a', { href: '#/agent-guide' }, '让你的 agent 当选手'), '。') : '还没有排位对局。开启自动匹配，或手动开一盘排位赛。')); return; }
     let rank = 0;
     table.replaceChildren(head, h('table', { class: 'list' },
       h('tr', {}, h('th', {}, ''), h('th', {}, view === 'models' ? '模型' : '选手'), h('th', {}, '段位'), h('th', { class: 'num' }, '积分'), h('th', { class: 'num' }, '胜'), h('th', { class: 'num' }, '和'), h('th', { class: 'num' }, '负'), h('th', { class: 'num' }, view === 'models' ? '选手数' : '场次')),

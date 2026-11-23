@@ -158,7 +158,7 @@ export async function matchView(root, id, { characters }) {
             h('b', {}, c?.name || '？'),
             role ? h('span', { class: 'chip' }, role) : null,
             won ? h('span', { class: 'chip good' }, '胜') : null),
-          h('div', { class: 'sub' }, c?.kind === 'model' ? `${c.providerName || c.provider} · ${c.model}` : c?.kind === 'human' ? '玩家' : c?.name),
+          h('div', { class: 'sub' }, c?.kind === 'model' ? `${c.providerName || c.provider} · ${c.model}` : c?.kind === 'agent' ? '自带 Agent' : c?.kind === 'human' ? '玩家' : c?.name),
           two ? h('div', { class: 'row', style: { gap: '6px', marginTop: '4px' } },
             c?.tier ? tierBadge(c.tier) : null,
             change ? h('span', { class: change.delta >= 0 ? 'delta-up' : 'delta-down' }, `${change.before} → ${change.after}（${change.delta >= 0 ? '+' : ''}${change.delta}）`) : null) : null)),
@@ -323,10 +323,10 @@ export async function matchView(root, id, { characters }) {
     const q = t.eval?.quality;
     const body = [];
     if (isLive) {
-      if (d.options?.hideThoughts && c?.kind === 'model') body.push(h('div', { class: 'stream muted' }, '思考中，对局结束后公开'));
+      if (d.options?.hideThoughts && (c?.kind === 'model' || c?.kind === 'agent')) body.push(h('div', { class: 'stream muted' }, '思考中，对局结束后公开'));
       else {
         if (t.reasoning) body.push(h('details', { open: !t.text }, h('summary', {}, `原生推理 · ${t.reasoning.length} 字`), h('div', { class: 'reasoning' }, t.reasoning)));
-        body.push(h('div', { class: 'stream typing' }, t.text || (c?.kind === 'model' ? '' : '思考中')));
+        body.push(h('div', { class: 'stream typing' }, t.text || (c?.kind === 'model' || c?.kind === 'agent' ? '' : '思考中')));
       }
     } else if (a) {
       body.push(h('div', { class: 'lines' }, ...LINE_KEYS.filter((k) => a[k]).flatMap((k) => [h('b', {}, k), h('span', {}, a[k])])));
@@ -343,7 +343,7 @@ export async function matchView(root, id, { characters }) {
     return h('article', { class: `thought${isLive ? ' live' : ''}`, 'data-ply': t.ply },
       h('header', {},
         h('span', { class: 'ply' }, `#${t.ply}`),
-        h('span', { class: 'move' }, t.label || (isLive ? (d.options?.hideThoughts && c?.kind === 'model' ? '' : '思考中') : '判负')),
+        h('span', { class: 'move' }, t.label || (isLive ? (d.options?.hideThoughts && (c?.kind === 'model' || c?.kind === 'agent') ? '' : '思考中') : '判负')),
         h('span', { class: 'grow' }),
         drawChip(t.ply),
         qualityChip(q)),
