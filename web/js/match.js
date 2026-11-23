@@ -481,6 +481,7 @@ export async function matchView(root, id, { characters }) {
         break;
       }
       case 'move': {
+        if (e.secret) { await refresh(); if (viewPly === null) renderAll(); break; } // 对玩家隐藏的一步（别人的夜间行动）
         if (waitingHuman === e.seat) waitingHuman = null;
         const p = partials.get(e.seat);
         turns.set(e.ply, {

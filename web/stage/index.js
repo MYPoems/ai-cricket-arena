@@ -15,6 +15,7 @@ const LOADERS = {
   dilemma: () => import('./dilemma.js'),
   othello: () => import('./othello.js'),
   connect4: () => import('./connect4.js'),
+  werewolf: () => import('./werewolf.js'),
 };
 
 export async function loadRenderer(gameId) {

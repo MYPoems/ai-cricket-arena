@@ -7,7 +7,7 @@ import { initSecrets, setKey, getKey, keyStatus } from '../server/secrets.js';
 import { Hub } from '../server/http.js';
 import { AiPool } from '../server/ai-worker.js';
 import { Evaluator } from '../server/evaluator.js';
-import { Arena } from '../server/arena.js';
+import { Arena, secretPlies, recordOf } from '../server/arena.js';
 import { Matchmaker } from '../server/ladder/matchmaker.js';
 import { Compare } from '../server/compare.js';
 import { createCharacter, ensureSystemCharacters, updateCharacter } from '../server/characters.js';
@@ -100,6 +100,37 @@ test('玩家本人走棋与认输', async () => {
   const m = await waitEnd(id);
   assert.equal(m.result.winner, 'b');
   assert.match(m.result.reason, /认输/);
+});
+
+test('隐藏信息：有玩家本人时，别人的夜间行动不出现在事件和对局详情里', async () => {
+  const { default: ww } = await import('../games/werewolf/index.js');
+  const me = db.get("SELECT * FROM characters WHERE kind = 'human'");
+  let seed = 1;
+  while (ww.create({ players: 6, seed }).roles.p1 !== 'villager') seed++; // 让玩家本人当村民，夜里不用行动
+  const seats = { p1: me.id, p2: builtin.id, p3: builtin.id, p4: builtin.id, p5: builtin.id, p6: builtin.id };
+  const from = events.length;
+  const id = arena.createMatch({ game: 'werewolf', seats, mode: 'casual', options: { delayMs: 0, seed } });
+  await new Promise((r) => { const iv = setInterval(() => { if (Object.keys(arena.live.get(id)?.humans || {}).length) { clearInterval(iv); r(); } }, 30); });
+  const roles = ww.create({ players: 6, seed }).roles;
+  const night = Object.keys(roles).filter((s) => roles[s] !== 'villager');
+  const row = db.get('SELECT * FROM matches WHERE id = ?', id);
+  const secret = secretPlies(ww, recordOf(row), 'p1');
+  assert.ok(secret.size >= 2, '第一夜至少有狼人和预言家的行动');
+  const mine = events.slice(from).filter((e) => e.ch === `match:${id}`);
+  for (const e of mine) {
+    if (e.type === 'turn_start' || e.type === 'illegal' || (e.type === 'move' && !e.secret)) assert.ok(!secret.has(e.ply), `第 ${e.ply} 步（${e.seat}）的 ${e.type} 泄露了`);
+    if (e.type === 'move' && e.secret) { assert.equal(e.seat, null); assert.equal(e.action, null); }
+  }
+  assert.equal(mine.filter((e) => e.type === 'move' && e.secret).length, secret.size);
+  const d = arena.detail(id);
+  assert.equal(d.viewer, 'p1');
+  assert.equal(d.record.actions, null);
+  assert.ok(d.turns.every((t) => !secret.has(t.ply)), '对局详情里不应有别人的夜间行动');
+  assert.ok(d.partials.every((p) => !p.secret));
+  arena.control(id, 'resign');
+  const m = await waitEnd(id);
+  assert.equal(m.status, 'finished');
+  assert.ok(arena.detail(id).turns.some((t) => night.includes(t.seat)), '结束后全部公开');
 });
 
 test('自动匹配：模型自己挑对手并写宣言', async () => {

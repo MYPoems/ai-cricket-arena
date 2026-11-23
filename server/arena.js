@@ -40,6 +40,26 @@ function canOffer(m, seat, ply) {
 const localDate = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
 /** 对局记录 → 重建用的参数；兼容只有 start_fen 的旧对局 */
+/** 有玩家本人的隐藏信息对局里，这一步是否要对玩家隐藏（别人的夜间行动等；game.secret 由游戏提供） */
+export function isSecret(game, state, seat, action, human) {
+  if (!human || seat === human || !game.features?.hidden || !game.secret) return false;
+  try { return !!game.secret(state, seat, action); } catch { return true; }
+}
+
+/** 逐步重放，标出要对玩家隐藏的步（ply 从 1 开始） */
+export function secretPlies(game, record, human) {
+  const out = new Set();
+  if (!human || !game.secret || !game.features?.hidden) return out;
+  let state = game.create({ players: record.players, seed: record.seed, setup: record.setup });
+  (record.actions || []).forEach((a, i) => {
+    const seat = typeof a === 'string' ? game.pending(state)[0] : a.seat;
+    const action = typeof a === 'string' ? a : a.action;
+    if (isSecret(game, state, seat, action, human)) out.add(i + 1);
+    state = game.apply(state, seat, action);
+  });
+  return out;
+}
+
 export function recordOf(m) {
   const s = m.setup || {};
   return { setup: s.setup || (m.start_fen ? { fen: m.start_fen } : {}), seed: s.seed, players: s.players || Object.keys(m.seats).length, actions: m.actions };
@@ -199,8 +219,8 @@ export class Arena {
       const jobs = pend.map((seat, i) => {
         const ch = getCharacter(this.db, m.seats[seat]);
         const ply = base + i + 1;
-        rt.partials[seat] = { ply, seat, characterId: ch.id, text: '', reasoning: '', attempts: [] };
-        this.hub.emit(channel, { type: 'turn_start', ply, seat, characterId: ch.id, kind: ch.kind, simultaneous: pend.length > 1 });
+        rt.partials[seat] = { ply, seat, characterId: ch.id, text: '', reasoning: '', attempts: [], secret: isSecret(game, state, seat, null, human) };
+        if (!rt.partials[seat].secret) this.hub.emit(channel, { type: 'turn_start', ply, seat, characterId: ch.id, kind: ch.kind, simultaneous: pend.length > 1 });
         const offer = game.features?.draw ? pendingOfferTo(m, seat) : null;
         const t0 = Date.now();
         return this.#getMove({ m, rt, game, state, seat, ch, channel, offer, ply })
@@ -227,6 +247,7 @@ export class Arena {
       for (const r of results) {
         const { seat, ch, ply, offer, res, latency } = r;
         const label = game.label(state, seat, res.action);
+        const secret = isSecret(game, state, seat, res.action, human);
         state = game.apply(state, seat, res.action);
         m.actions.push({ seat, action: res.action });
         let drawChanged = false;
@@ -239,7 +260,8 @@ export class Arena {
         this.#saveTurn(m, { ply, seat, ch, res, latency, action: res.action, label });
         delete rt.partials[seat];
         const hideModel = m.options.hideThoughts && ch.kind === 'model';
-        this.hub.emit(channel, {
+        if (secret) this.hub.emit(channel, { type: 'move', ply, seat: null, characterId: null, action: null, label: null, analysis: null, view: null, secret: true });
+        else this.hub.emit(channel, {
           type: 'move', ply, seat, characterId: ch.id, action: res.action, label,
           analysis: hideModel ? null : res.text || null,
           selfWinrate: hideModel ? null : res.winrate ?? null, latency, usage: res.usage || null, view: publicView(),
@@ -393,7 +415,7 @@ ${game.noun || '行动'}：${act}`;
       }
       const error = res.text.trim() ? parsed.error : '只有思考、没有给出回答（可能用完了输出长度上限）';
       attempts.push({ text: res.text, reasoning: res.reasoning, error, attempted: parsed.attempted });
-      this.hub.emit(channel, { type: 'illegal', ply: partial.ply, seat, attempt, error, attempted: parsed.attempted });
+      if (!partial.secret) this.hub.emit(channel, { type: 'illegal', ply: partial.ply, seat, attempt, error, attempted: parsed.attempted });
       if (attempt === MAX_RETRIES) {
         return { forfeit: `${game.seatName(seat)}连续 ${MAX_RETRIES + 1} 次给出无效${game.noun || '行动'}，判负`, text: res.text, reasoning: res.reasoning, attempts, usage, model: served };
       }
@@ -509,7 +531,9 @@ ${game.noun || '行动'}：${act}`;
     const rt = this.live.get(matchId);
     const hide = m.options.hideThoughts && running;
     const sum = this.summary(matchId);
-    const partials = Object.values(rt?.partials || {}).map((p) => (hide ? { ...p, text: '', reasoning: '' } : p));
+    const hiddenLive = game.features?.hidden && human && running;
+    const secrets = hiddenLive ? secretPlies(game, record, human) : new Set();
+    const partials = Object.values(rt?.partials || {}).filter((p) => !(hiddenLive && p.secret) && !rt?.humans?.[p.seat]).map((p) => (hide ? { ...p, text: '', reasoning: '' } : p));
     const humanH = this.#humanHandler(rt);
     return {
       ...sum,
@@ -518,7 +542,7 @@ ${game.noun || '行动'}：${act}`;
       startFen: m.start_fen,
       viewer: v,
       view: game.view(state, v),
-      turns: turns.map((t) => (hide && t.character_id && this.#isModel(t.character_id) ? { ...t, analysis: null, reasoning: null, attempts: null, self_winrate: null } : t)),
+      turns: turns.filter((t) => !secrets.has(t.ply)).map((t) => (hide && t.character_id && this.#isModel(t.character_id) ? { ...t, analysis: null, reasoning: null, attempts: null, self_winrate: null } : t)),
       partials,
       partial: partials[0] || null,
       paused: rt?.paused || false,

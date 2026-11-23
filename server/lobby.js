@@ -35,7 +35,7 @@ function liveCard(db, arena, id) {
     lastMove: lastMove?.iccs || null,
     lastLabel: lastMove?.cn || lastMove?.label || null,
     redE: last?.eval?.e0 ?? last?.eval?.redE ?? m.options?.startEval?.e0 ?? m.options?.startEval?.redE ?? null,
-    thinking: Object.keys(rt?.partials || {})[0] || Object.keys(rt?.humans || {})[0] || null,
+    thinking: Object.values(rt?.partials || {}).find((p) => !(game.features?.hidden && human && p.secret))?.seat || Object.keys(rt?.humans || {})[0] || null,
     paused: !!rt?.paused,
     started_at: m.started_at,
   };
