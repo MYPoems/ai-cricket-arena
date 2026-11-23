@@ -203,6 +203,7 @@ export async function matchView(root, id, { characters }) {
         running && waitingHuman ? btn('🏳', '认输', async () => { if (confirm('确定认输？')) await post(`/matches/${id}/control`, { op: 'resign' }); }) : null,
         running && d.mode === 'casual' ? btn('■', '中止对局', async () => { if (confirm('中止这盘？')) await post(`/matches/${id}/control`, { op: 'abort' }); }) : null,
         stage.setFlipped ? btn('⇅', '翻转', () => { flipped = !flipped; stage.setFlipped(flipped); renderStage(false); }) : null,
+        !running && canReview() && n ? btn('⏺', '录成视频（按当前回放速度）', async () => { await post(`/matches/${id}/record`, { speed }); toast(`已开始录制（${speed}×），完成后在「对局记录」里下载`); }) : null,
         h('a', { class: 'icon-btn', title: '导出记录', href: `/api/matches/${id}/export` }, '⤓'),
       ),
     );

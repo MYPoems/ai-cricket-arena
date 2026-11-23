@@ -2,16 +2,28 @@
 
 import { h, api, post, guard, toast, avatar, fmtTime, MODE_NAMES, resultText } from './ui.js';
 
+const REC_STATUS = { queued: '排队中', running: '录制中', done: '已完成', failed: '失败' };
+
 export async function historyView(root, { go }) {
-  const list = await api('/matches?limit=200');
-  root.replaceChildren(h('div', { class: 'card table-wrap' },
+  const [list, rec] = await Promise.all([api('/matches?limit=200'), api('/recordings')]);
+  const recBlock = rec.list.length ? h('section', { style: { marginBottom: '40px' } },
+    h('div', { class: 'section-title' }, h('h2', {}, '录制的视频'), h('span', { class: 'label' }, rec.status.chrome ? '1920×1080 · MP4' : '服务器上没有可用的浏览器，无法录制')),
+    h('div', { class: 'table-wrap' }, h('table', { class: 'list' },
+      h('tr', {}, h('th', {}, '时间'), h('th', {}, '对局'), h('th', { class: 'num' }, '倍速'), h('th', {}, '状态'), h('th', {}, '')),
+      ...rec.list.map((r) => h('tr', {},
+        h('td', { class: 'muted' }, fmtTime(r.created_at)),
+        h('td', {}, h('a', { href: `#/match/${r.match_id}` }, r.match_id)),
+        h('td', { class: 'num' }, `${r.speed}×`),
+        h('td', { title: r.error || '' }, REC_STATUS[r.status] || r.status, r.error ? h('span', { class: 'small muted' }, `：${r.error}`) : null),
+        h('td', {}, r.status === 'done' ? h('a', { class: 'btn sm', href: `/api/recordings/${r.id}/file` }, '下载 MP4') : null)))))) : null;
+  root.replaceChildren(recBlock, h('div', { class: 'card table-wrap' },
     h('div', { class: 'pad' }, h('h2', {}, '对局记录')),
     list.length ? h('table', { class: 'list' },
-      h('tr', {}, h('th', {}, '时间'), h('th', {}, '红方'), h('th', {}, '黑方'), h('th', {}, '模式'), h('th', { class: 'num' }, '步数'), h('th', {}, '结果')),
+      h('tr', {}, h('th', {}, '时间'), h('th', {}, '游戏'), h('th', {}, '选手'), h('th', {}, '模式'), h('th', { class: 'num' }, '步数'), h('th', {}, '结果')),
       ...list.map((m) => h('tr', { class: 'click', onclick: () => go(`#/match/${m.id}`) },
         h('td', { class: 'muted' }, fmtTime(m.created_at)),
-        h('td', {}, h('span', { class: 'row', style: { gap: '6px', flexWrap: 'nowrap' } }, avatar(m.players.r, 'sm'), m.players.r?.name)),
-        h('td', {}, h('span', { class: 'row', style: { gap: '6px', flexWrap: 'nowrap' } }, avatar(m.players.b, 'sm'), m.players.b?.name)),
+        h('td', {}, h('span', { class: 'chip' }, m.gameName)),
+        h('td', {}, Object.values(m.players).map((pl) => pl?.name).join(' · ')),
         h('td', {}, MODE_NAMES[m.mode]),
         h('td', { class: 'num' }, m.plies),
         h('td', {}, m.status === 'running' ? h('span', { class: 'chip good' }, '进行中') : resultText(m))))) : h('div', { class: 'empty' }, '还没有对局'),

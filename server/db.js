@@ -140,6 +140,18 @@ CREATE TABLE IF NOT EXISTS compare_answers (
   PRIMARY KEY (compare_id, character_id)
 );
 
+-- 录制任务
+CREATE TABLE IF NOT EXISTS recordings (
+  id TEXT PRIMARY KEY,
+  match_id TEXT NOT NULL,
+  speed REAL NOT NULL,
+  status TEXT NOT NULL,           -- queued / running / done / failed
+  file TEXT,
+  error TEXT,
+  created_at TEXT NOT NULL,
+  finished_at TEXT
+);
+
 CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL

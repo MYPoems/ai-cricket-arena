@@ -286,9 +286,11 @@ export class Evaluator {
 export function moveQuality(before, after, played) {
   const eBefore = before.e;
   const eAfter = 1 - after.e;
-  const loss = Math.max(0, eBefore - eAfter);
+  const isBest = !!played && before.best === played;
+  // 引擎认定的最佳着法不算损失（分数波动来自评估本身的误差）
+  const loss = isBest ? 0 : Math.max(0, eBefore - eAfter);
   let tag;
-  if (played && before.best === played) tag = '最佳';
+  if (isBest) tag = '最佳';
   else if (loss >= 0.2) tag = '大漏着';
   else if (loss >= 0.1) tag = '失误';
   else if (loss >= 0.05) tag = '缓着';

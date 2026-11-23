@@ -16,6 +16,7 @@ import { ensureSystemCharacters, ensureEngineCharacter } from './characters.js';
 import { routes } from './api.js';
 import { setCliWorkRoot } from './providers/cli.js';
 import { lobbyRoutes } from './lobby.js';
+import { Recorder } from './recorder.js';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 if (existsSync(join(ROOT, '.env'))) process.loadEnvFile(join(ROOT, '.env'));
@@ -55,6 +56,10 @@ arena.onFinish = (sum) => { matchmaker.onFinished(sum); matchmaker.tick().catch(
 const router = new Router();
 routes(router, { db, hub, arena, matchmaker, compare, evaluator, ownerId: OWNER });
 lobbyRoutes(router, { db, arena });
+const recorder = new Recorder({ db, outDir: join(DATA, 'recordings'), baseUrl: `http://127.0.0.1:${PORT}` });
+router.post('/api/matches/:id/record', ({ params, body }) => recorder.start(params.id, { speed: body.speed }));
+router.get('/api/recordings', () => ({ status: recorder.status(), list: recorder.list() }));
+router.get('/api/recordings/:id/file', ({ params, res }) => { recorder.send(params.id, res); });
 
 // 字体与 MYPoetry 作品集相同，自托管（SIL OFL），不依赖外部字体服务
 const FONTS = join(ROOT, 'node_modules', '@fontsource-variable');
