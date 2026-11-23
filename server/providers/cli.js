@@ -101,6 +101,7 @@ function splitConversation(messages) {
 function runJsonl(bin, args, { cwd, input, signal, onEvent }) {
   return new Promise((resolve, reject) => {
     const proc = spawn(bin, args, { cwd, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+    proc.stdin.on('error', () => {}); // 进程提前退出时由 close 事件报错
     let stderr = '';
     let done = false;
     const finish = (err) => {

@@ -48,6 +48,7 @@ class UciEngine {
     this.proc = spawn(this.bin, [], { cwd: dirname(this.bin), stdio: ['pipe', 'pipe', 'ignore'], windowsHide: true }); // 权重文件 pikafish.nnue 和程序放在一起
     this.proc.on('exit', () => { this.dead = true; });
     this.proc.on('error', () => { this.dead = true; });
+    this.proc.stdin.on('error', () => { this.dead = true; }); // 引擎退出后再写会 EPIPE，不能拖垮整个服务
     createInterface({ input: this.proc.stdout }).on('line', (line) => {
       for (const l of this.listeners) l(line);
     });
@@ -59,7 +60,7 @@ class UciEngine {
   }
 
   #send(s) {
-    this.proc.stdin.write(`${s}\n`);
+    if (!this.dead) this.proc.stdin.write(`${s}\n`);
   }
 
   #cmd(cmd, done, timeoutMs, onLine) {
@@ -153,10 +154,11 @@ class Rapfi {
     this.proc = spawn(this.bin, [], { cwd: dirname(this.bin), stdio: ['pipe', 'pipe', 'ignore'], windowsHide: true });
     this.proc.on('exit', () => { this.dead = true; });
     this.proc.on('error', () => { this.dead = true; });
+    this.proc.stdin.on('error', () => { this.dead = true; }); // 引擎退出后再写会 EPIPE，不能拖垮整个服务
     createInterface({ input: this.proc.stdout }).on('line', (line) => { for (const l of this.listeners) l(line.trim()); });
   }
 
-  #send(s) { this.proc.stdin.write(`${s}
+  #send(s) { if (!this.dead) this.proc.stdin.write(`${s}
 `); }
 
   #wait(done, timeoutMs, onLine) {

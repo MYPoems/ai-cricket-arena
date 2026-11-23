@@ -27,8 +27,10 @@ import doudizhu from './doudizhu/index.js';
 import undercover from './undercover/index.js';
 import poker from './poker/index.js';
 import dilemma from './dilemma/index.js';
+import othello from './othello/index.js';
+import connect4 from './connect4/index.js';
 
-export const GAMES = { [xiangqi.id]: xiangqi, [gomoku.id]: gomoku, [chess.id]: chess, [doudizhu.id]: doudizhu, [undercover.id]: undercover, [poker.id]: poker, [dilemma.id]: dilemma };
+export const GAMES = { [xiangqi.id]: xiangqi, [gomoku.id]: gomoku, [chess.id]: chess, [doudizhu.id]: doudizhu, [undercover.id]: undercover, [poker.id]: poker, [dilemma.id]: dilemma, [othello.id]: othello, [connect4.id]: connect4 };
 
 export function registerGame(g) {
   GAMES[g.id] = g;

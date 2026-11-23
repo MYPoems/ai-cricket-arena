@@ -13,6 +13,8 @@ const LOADERS = {
   undercover: () => import('./undercover.js'),
   poker: () => import('./poker.js'),
   dilemma: () => import('./dilemma.js'),
+  othello: () => import('./othello.js'),
+  connect4: () => import('./connect4.js'),
 };
 
 export async function loadRenderer(gameId) {
