@@ -21,8 +21,9 @@
 // 对局记录：{ setup, seed, players, actions: [{ seat, action }] }，replay(record) 由 create + 逐个 apply 得到同一局面。
 
 import xiangqi from './xiangqi/index.js';
+import gomoku from './gomoku/index.js';
 
-export const GAMES = { [xiangqi.id]: xiangqi };
+export const GAMES = { [xiangqi.id]: xiangqi, [gomoku.id]: gomoku };
 
 export function registerGame(g) {
   GAMES[g.id] = g;

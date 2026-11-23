@@ -4,7 +4,7 @@
 import { getGame, replay } from '../games/index.js';
 import { newId, now } from './db.js';
 import { callModel } from './providers/index.js';
-import { getCharacter, canRank } from './characters.js';
+import { getCharacter, canRank, engineGameName } from './characters.js';
 import { applyResult, PLACEMENT_GAMES } from './ladder/rating.js';
 import { moveQuality } from './evaluator.js';
 import { HttpError } from './http.js';
@@ -68,6 +68,9 @@ export class Arena {
     for (const seat of seatIds) {
       if (!seats?.[seat]) throw new HttpError(400, `请为${game.seatName(seat)}选择选手`);
       chars[seat] = getCharacter(this.db, seats[seat]);
+    }
+    for (const c of Object.values(chars)) {
+      if (c.kind === 'engine' && (c.provider || 'pikafish') !== game.features?.evalEngine) throw new HttpError(400, `${c.name}只会下${engineGameName(c.provider)}`);
     }
     const humans = Object.values(chars).filter((c) => c.kind === 'human');
     if (humans.length > 1) throw new HttpError(400, '目前一盘里只能有一位玩家本人');

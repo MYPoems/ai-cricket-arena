@@ -168,15 +168,16 @@ class Rapfi {
       this.#send(`INFO timeout_turn ${movetime}`);
       this.#send('INFO timeout_match 100000000');
       let evalLine = null;
-      const reply = this.#wait((l) => /^d+,d+$/.test(l), movetime + 15000, (l) => { if (/| Eval /.test(l)) evalLine = l; });
+      const reply = this.#wait((l) => /^\d+,\d+$/.test(l), movetime + 15000, (l) => { if (/\| Eval /.test(l)) evalLine = l; });
       this.#send('BOARD');
       for (const s of spec.stones) this.#send(`${s.x},${s.y},${s.c === spec.toMove ? 1 : 2}`);
       this.#send('DONE');
       const [bx, by] = (await reply).split(',').map(Number);
-      const out = { best: `${bx},${by}`, source: 'rapfi' };
-      const ev = evalLine && /Eval (-?d+)/.exec(evalLine);
+      const out = { best: spec.toAction ? spec.toAction(bx, by) : `${bx},${by}`, source: 'rapfi' };
+      const ev = evalLine && /Eval (-?\d+)/.exec(evalLine);
       if (ev) out.cp = Number(ev[1]);
-      out.e = out.cp === undefined ? 0.5 : Math.abs(out.cp) >= 15000 ? (out.cp > 0 ? 1 : 0) : logistic(out.cp);
+      // 一步能赢等情况引擎不输出分数，改用游戏自己的粗略估算
+      out.e = out.cp === undefined ? (spec.heuristic ?? 0.5) : Math.abs(out.cp) >= 15000 ? (out.cp > 0 ? 1 : 0) : logistic(out.cp);
       return out;
     };
     const p = this.queue.then(job, job);

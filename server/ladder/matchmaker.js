@@ -1,6 +1,8 @@
 // 天梯自动匹配：选出今天还有余量的选手，列出段位相近的候选对手，由模型自己挑对手并写挑战宣言。
 
-import { gameList } from '../../games/index.js';
+import { gameList, getGame } from '../../games/index.js';
+
+const shuffle = (a) => { const b = a.slice(); for (let i = b.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [b[i], b[j]] = [b[j], b[i]]; } return b; };
 import { canRank } from '../characters.js';
 import { tierFor, PLACEMENT_GAMES } from './rating.js';
 import { callModel } from '../providers/index.js';
@@ -75,19 +77,53 @@ export class Matchmaker {
       const pool = this.eligible();
       const challengers = pool.filter((c) => !c.system).sort((a, b) => a.usage.games - b.usage.games || Math.random() - 0.5);
       for (const ch of challengers) {
-        const gameId = gameList()[0].id; // 目前只有象棋；以后由模型在候选游戏里选
-        const cands = this.candidates(ch, pool, gameId, s.maxTierGap) ;
-        const wide = cands.length ? cands : this.candidates(ch, pool, gameId, s.maxTierGap + 1);
-        if (!wide.length) continue;
-        const pick = await this.choose(ch, wide, gameId);
-        const seats = Math.random() < 0.5 ? { r: ch.id, b: pick.opponent.id } : { r: pick.opponent.id, b: ch.id };
-        const id = this.arena.createMatch({ game: pick.game, seats, mode: 'ranked', challenge: { by: ch.id, text: pick.declaration } });
-        this.#log(`${ch.name} 向 ${pick.opponent.name} 发起挑战：${pick.declaration || '（无宣言）'}`);
-        return id;
+        // 选游戏：挑战者在哪个游戏里下得最少就先下哪个，保证各游戏都有积分
+        const games = gameList().map((g) => ({ g, played: this.arena.played(ch.id, g.id) })).sort((a, b) => a.played - b.played || Math.random() - 0.5);
+        for (const { g } of games) {
+          const game = getGame(g.id);
+          const n = game.players.default;
+          const usable = pool.filter((o) => o.kind !== 'engine' || (o.provider || 'pikafish') === game.features?.evalEngine);
+          const cands = this.candidates(ch, usable, g.id, s.maxTierGap);
+          const wide = cands.length >= n - 1 ? cands : this.candidates(ch, usable, g.id, s.maxTierGap + 1);
+          if (wide.length < n - 1) continue;
+          const pick = await this.choose(ch, wide, g.id);
+          // 多人游戏：主对手由模型挑，其余座位按分差就近补齐
+          const others = [pick.opponent, ...wide.filter((o) => o.id !== pick.opponent.id)].slice(0, n - 1);
+          const players = shuffle([ch, ...others]);
+          const seatIds = game.seats(n);
+          const seats = Object.fromEntries(seatIds.map((sid, i) => [sid, players[i].id]));
+          const series = game.rankedSeries ? { id: `s_${Date.now().toString(36)}`, leg: 1, of: game.rankedSeries.legs, seed: Math.floor(Math.random() * 2 ** 31) } : null;
+          const id = this.arena.createMatch({ game: g.id, seats, mode: 'ranked', challenge: { by: ch.id, text: pick.declaration }, options: series ? { series, seed: series.seed } : {} });
+          this.#log(`${ch.name} 向 ${pick.opponent.name} 发起${game.name}挑战：${pick.declaration || '（无宣言）'}`);
+          return id;
+        }
       }
       return null;
     } finally {
       this.ticking = false;
+    }
+  }
+
+  /**
+   * 系列赛：五子棋排位赛交换先后手再下一盘；斗地主、德州用同一副牌轮换座位（复式）。
+   * 上一盘结束后接着开下一盘，座位整体轮转一位。
+   */
+  onFinished(sum) {
+    const ser = sum?.series;
+    if (!ser || sum.status !== 'finished' || ser.leg >= ser.of) return null;
+    const game = getGame(sum.game);
+    const seatIds = Object.keys(sum.seats);
+    const ids = seatIds.map((sid) => sum.seats[sid]);
+    const rotated = [ids[ids.length - 1], ...ids.slice(0, -1)];
+    const seats = Object.fromEntries(seatIds.map((sid, i) => [sid, rotated[i]]));
+    const next = { ...ser, leg: ser.leg + 1 };
+    try {
+      const id = this.arena.createMatch({ game: sum.game, seats, mode: 'ranked', options: { series: next, ...(game.rankedSeries?.sameSeed ? { seed: ser.seed } : {}) } });
+      this.#log(`${game.name}系列赛第 ${next.leg}/${next.of} 盘开始`);
+      return id;
+    } catch (e) {
+      this.#log(`系列赛下一盘没能开始：${e.message}`);
+      return null;
     }
   }
 

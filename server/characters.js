@@ -118,11 +118,25 @@ export function ensureSystemCharacters(db, ownerId) {
 }
 
 /** 有 Pikafish 时创建「守关」选手 */
-export function ensureEngineCharacter(db, ownerId) {
-  if (!db.get("SELECT 1 FROM characters WHERE kind = 'engine' AND system = 1")) {
-    createCharacter(db, ownerId, { kind: 'engine', name: 'Pikafish 守关', avatar: '🐟', level: 200 }, { system: true });
+const ENGINE_CHARS = {
+  pikafish: { name: 'Pikafish 守关', avatar: '🐟', game: '中国象棋' },
+  rapfi: { name: 'Rapfi 守关', avatar: '⚫', game: '五子棋' },
+};
+
+/** 引擎守关选手：每个可用的引擎一名，provider 字段记引擎名 */
+export function ensureEngineCharacter(db, ownerId, engine = 'pikafish') {
+  const def = ENGINE_CHARS[engine];
+  if (!def) return;
+  // 早期创建的 Pikafish 守关没有记引擎名，补上
+  db.run("UPDATE characters SET provider = 'pikafish' WHERE kind = 'engine' AND system = 1 AND provider IS NULL AND name = 'Pikafish 守关'");
+  if (!db.get("SELECT 1 FROM characters WHERE kind = 'engine' AND system = 1 AND provider = ?", engine)) {
+    const c = createCharacter(db, ownerId, { kind: 'engine', name: def.name, avatar: def.avatar, level: 200 }, { system: true });
+    db.update('characters', { id: c.id }, { provider: engine });
   }
 }
+
+/** 引擎选手只会下自己引擎对应的游戏 */
+export const engineGameName = (engine) => ENGINE_CHARS[engine || 'pikafish']?.game;
 
 export function humanCharacter(db, ownerId) {
   return db.get("SELECT * FROM characters WHERE kind = 'human' AND owner_id = ?", ownerId);
