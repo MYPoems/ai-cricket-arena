@@ -65,7 +65,7 @@ authRoutes(router, { db, hub, onApproved: (u) => {
 } });
 routes(router, { db, hub, arena, matchmaker, compare, evaluator });
 roomRoutes(router, { db, hub, arena });
-lobbyRoutes(router, { db, arena });
+lobbyRoutes(router, { db, arena, matchmaker });
 agentRoutes(router, { db, arena });
 const recorder = new Recorder({ db, outDir: join(DATA, 'recordings'), baseUrl: `http://127.0.0.1:${PORT}`, sessionToken: () => createSession(db, ADMIN_ID) });
 router.post('/api/matches/:id/record', ({ params, body }) => recorder.start(params.id, { speed: body.speed }));
@@ -74,7 +74,8 @@ router.get('/api/recordings/:id/file', ({ params, res }) => { recorder.send(para
 
 // 字体与 MYPoetry 作品集相同，自托管（SIL OFL），不依赖外部字体服务
 const FONTS = join(ROOT, 'node_modules', '@fontsource-variable');
-const server = createServer(handler(router, [['/games/', join(ROOT, 'games')], ['/fonts/', FONTS], ['/', join(ROOT, 'web')]], {
+const FONTS_STATIC = join(ROOT, 'node_modules', '@fontsource'); // 书法字体（马善政楷书，SIL OFL）
+const server = createServer(handler(router, [['/games/', join(ROOT, 'games')], ['/fonts/', FONTS], ['/fonts-static/', FONTS_STATIC], ['/', join(ROOT, 'web')]], {
   resolveUser: (req) => userFromRequest(db, req),
   publicView: () => db.getSetting('publicView', true), // 游客能不能观战（庄家在设置里改）
 }));

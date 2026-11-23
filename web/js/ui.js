@@ -140,6 +140,14 @@ export function resultText(m, seatNames = {}) {
   return `${names.join('、')}胜（${r.reason}）`;
 }
 
+/** 页面标题：书法大字 + 副标题 + 角落水印字，右侧可放按钮 */
+export function pageHead(title, sub = '', wm = '', ...actions) {
+  return h('div', { class: 'page-head' },
+    wm ? h('span', { class: 'wm', 'aria-hidden': 'true' }, wm) : null,
+    h('div', {}, h('h1', {}, title), sub ? h('div', { class: 'sub' }, sub) : null),
+    actions.length ? h('div', { class: 'row' }, actions) : null);
+}
+
 /** 弹窗 */
 export function dialog(title, body, actions = []) {
   const dlg = h('dialog', {},

@@ -1,6 +1,6 @@
 // 选手：列表、新建、主页。
 
-import { h, api, post, patch, guard, toast, tierBadge, avatar, modelLine, fmtTime, fmtMs, fmtTokens, MODE_NAMES, resultText, dialog, seatOutcome } from './ui.js';
+import { h, api, post, patch, guard, toast, tierBadge, avatar, modelLine, fmtTime, fmtMs, fmtTokens, MODE_NAMES, resultText, dialog, seatOutcome, pageHead } from './ui.js';
 
 const EMOJIS = ['🦊', '🐯', '🐼', '🦁', '🐉', '🦅', '🐺', '🦉', '🐬', '🦄', '🐢', '🐲', '🦈', '🐙', '🦚', '🐝', '🐧', '🦝', '🐸', '🦋', '🐳', '🦜', '🐻', '🐨'];
 /** Agent 接入令牌：只在生成时显示一次 */
@@ -17,10 +17,10 @@ export function tokenDialog(name, token) {
 
 const STYLE_EXAMPLES = ['喜欢弃子抢攻，宁可冒险也不求和。', '稳健防守，先保证不丢子，再寻找对方破绽。', '偏爱炮的进攻，开局常走中炮。'];
 
-export async function charactersView(root, { meta, go, reloadMeta }) {
+export async function charactersView(root, { meta, go, reloadMeta, session }) {
   const list = await api('/characters');
-  const mine = list.filter((c) => !c.system && c.kind !== 'human');
-  const sys = list.filter((c) => c.system || c.kind === 'human');
+  const mine = list.filter((c) => c.mine && !c.system && c.kind !== 'human');
+  const sys = list.filter((c) => c.system || (c.mine && c.kind === 'human'));
 
   const card = (c) => h('div', { class: 'card char', onclick: () => go(`#/characters/${c.id}`) },
     h('div', { class: 'top-row' }, avatar(c), h('div', { class: 'grow', style: { minWidth: 0 } }, h('div', { class: 'nm' }, c.name), h('div', { class: 'md' }, modelLine(c)))),
@@ -30,13 +30,14 @@ export async function charactersView(root, { meta, go, reloadMeta }) {
       h('div', { class: 'row', style: { gap: '6px' } },
         !c.ranked ? h('span', { class: 'chip' }, '仅娱乐赛') : null,
         c.kind === 'agent' ? h('span', { class: `chip ${c.online ? 'good' : ''}` }, c.online ? 'Agent 在线' : 'Agent 离线') : null,
-        c.auto_match ? h('span', { class: 'chip good', title: '自动匹配已开启' }, `今日 ${c.today.games}/${c.daily_limit}`) : null)),
+        c.auto_match ? h('span', { class: 'chip good', title: '今天主动参加的对局 / 每日上限（组局不计）' }, `今日 ${c.today.games}/${c.daily_limit}`) : null)),
   );
 
   root.replaceChildren(
-    h('div', { class: 'section-title' }, h('h2', {}, '我的 AI 选手')),
-    h('div', { class: 'cards' }, ...mine.map(card), h('div', { class: 'card char new', onclick: () => createDialog({ meta, reloadMeta, onDone: (c) => go(`#/characters/${c.id}`) }) }, '＋ 新建选手')),
-    h('div', { class: 'section-title', style: { marginTop: '28px' } }, h('h2', {}, '参照选手')),
+    pageHead('蛐蛐', '养自己的 AI 蛐蛐：接一个模型，或者让你的 Agent 亲自上场。配置创建后锁定，想换就派生一只新的。', '养'),
+    session.user ? h('div', { class: 'section-title' }, h('h2', {}, '我的蛐蛐')) : null,
+    session.user ? h('div', { class: 'cards' }, ...mine.map(card), h('div', { class: 'card char new', onclick: () => createDialog({ meta, reloadMeta, onDone: (c) => go(`#/characters/${c.id}`) }) }, '＋ 养一只新蛐蛐')) : h('div', { class: 'empty card' }, h('div', {}, '登录后可以养自己的蛐蛐。'), h('a', { class: 'btn primary', href: '#/login' }, '登录')),
+    h('div', { class: 'section-title', style: { marginTop: '32px' } }, h('h2', {}, '系统选手与我')),
     h('div', { class: 'cards' }, ...sys.map(card)),
   );
 }
@@ -105,7 +106,7 @@ export function createDialog({ meta, reloadMeta, base = null, onDone }) {
       ] : h('label', { class: 'field' }, h('span', {}, '搜索深度'),
         h('div', { class: 'seg' }, ...[[1, '1 层'], [2, '2 层'], [3, '3 层'], [4, '4 层']].map(([v, l]) => h('button', { class: f.level === v ? 'on' : '', onclick: () => { f.level = v; draw(); } }, l)))),
       h('div', { class: 'grid2' },
-        h('label', { class: 'field' }, h('span', {}, '每日对局上限'), h('input', { type: 'number', min: 1, max: meta.maxDailyLimit, value: f.daily_limit, oninput: (e) => { f.daily_limit = Number(e.target.value); } })),
+        h('label', { class: 'field' }, h('span', {}, '每天主动参加的对局上限'), h('input', { type: 'number', min: 1, max: meta.maxDailyLimit, value: f.daily_limit, oninput: (e) => { f.daily_limit = Number(e.target.value); } })),
         h('label', { class: 'field' }, h('span', {}, '每日 token 上限'), h('input', { type: 'number', min: 1000, step: 10000, value: f.daily_tokens || '', placeholder: '不限', oninput: (e) => { f.daily_tokens = e.target.value ? Number(e.target.value) : null; } })),
       ),
       h('label', { class: 'switch' }, h('input', { type: 'checkbox', checked: f.auto_match, onchange: (e) => { f.auto_match = e.target.checked; } }), '参加天梯自动匹配'),
@@ -120,7 +121,7 @@ export function createDialog({ meta, reloadMeta, base = null, onDone }) {
   }
   draw();
 
-  const dlg = dialog(base ? '派生选手' : '新建 AI 选手', body, [
+  const dlg = dialog(base ? '派生一只新蛐蛐' : '养一只新蛐蛐', body, [
     h('button', { class: 'btn', onclick: () => dlg.close() }, '取消'),
     h('button', { class: 'btn primary', onclick: guard(async () => {
       const payload = { ...f };
@@ -195,7 +196,8 @@ export async function profileView(root, id, { meta, go, reloadMeta }) {
   const settings = h('div', { class: 'col', style: { gap: '10px' } });
   const drawSettings = () => {
     if (c.system) { settings.replaceChildren(h('div', { class: 'small muted' }, '系统参照选手，用来给新选手定级，让积分有固定参照。')); return; }
-    if (c.kind === 'human') { settings.replaceChildren(h('div', { class: 'small muted' }, '你自己。和 AI 下排位赛时也会计分。')); return; }
+    if (c.kind === 'human') { settings.replaceChildren(h('div', { class: 'small muted' }, c.mine ? '你自己。亲自上场时用这个角色。' : '一位真人玩家。')); return; }
+    if (!c.mine) { settings.replaceChildren(h('div', { class: 'small muted' }, `这只蛐蛐是 ${c.owner?.name || '别人'} 养的。想和它斗，开一个组局请主人把它拉进来。`)); return; }
     settings.replaceChildren(
       c.kind === 'agent' ? h('div', { class: 'col', style: { gap: '10px' } },
         h('div', { class: 'row', style: { gap: '8px' } }, h('span', { class: `chip ${c.online ? 'good' : ''}` }, c.online ? '在线' : '离线'),
@@ -209,9 +211,10 @@ export async function profileView(root, id, { meta, go, reloadMeta }) {
             tokenDialog(c.name, r.agentToken);
           }) }, c.hasToken ? '重新生成接入令牌' : '生成接入令牌'),
           h('a', { class: 'btn sm', href: '#/agent-guide' }, '接入说明'))) : null,
-      h('label', { class: 'switch' }, h('input', { type: 'checkbox', checked: !!c.auto_match, onchange: guard(async (e) => { Object.assign(c, await patch(`/characters/${c.id}`, { auto_match: e.target.checked })); toast(e.target.checked ? '已加入自动匹配' : '已退出自动匹配'); }) }), '参加天梯自动匹配'),
+      h('label', { class: 'switch' }, h('input', { type: 'checkbox', checked: !!c.auto_match, onchange: guard(async (e) => { Object.assign(c, await patch(`/characters/${c.id}`, { auto_match: e.target.checked })); toast(e.target.checked ? '已加入自动匹配' : '已退出自动匹配'); }) }), '参加天梯自动匹配（主动找对手）'),
+      h('div', { class: 'small muted' }, `每日上限只限制主动参加的对局，最多 ${meta.maxDailyLimit} 局；被拉进组局的对局不计入、没有上限。`),
       h('div', { class: 'grid2' },
-        h('label', { class: 'field' }, h('span', {}, '每日对局上限'), h('input', { type: 'number', min: 1, max: meta.maxDailyLimit, value: c.daily_limit, onchange: guard(async (e) => { Object.assign(c, await patch(`/characters/${c.id}`, { daily_limit: Number(e.target.value) })); toast('已保存'); }) })),
+        h('label', { class: 'field' }, h('span', {}, '每天主动参加的对局上限'), h('input', { type: 'number', min: 1, max: meta.maxDailyLimit, value: c.daily_limit, onchange: guard(async (e) => { Object.assign(c, await patch(`/characters/${c.id}`, { daily_limit: Number(e.target.value) })); toast('已保存'); }) })),
         h('label', { class: 'field' }, h('span', {}, '每日 token 上限'), h('input', { type: 'number', min: 1000, step: 10000, value: c.daily_tokens || '', placeholder: '不限', onchange: guard(async (e) => { Object.assign(c, await patch(`/characters/${c.id}`, { daily_tokens: e.target.value ? Number(e.target.value) : null })); toast('已保存'); }) }))),
       h('div', { class: 'row' },
         c.kind === 'model' ? h('button', { class: 'btn sm', onclick: guard(async (e) => {

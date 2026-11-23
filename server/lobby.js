@@ -1,9 +1,10 @@
 // 对战大厅：正在进行的对局（带缩略棋盘、胜率、谁在思考）和最近结束的对局。
 
-import { getGame, replay } from '../games/index.js';
+import { getGame, replay, gameList } from '../games/index.js';
+import { leaderboard } from './ladder/rating.js';
 import { recordOf } from './arena.js';
 
-export function lobbyRoutes(router, { db, arena }) {
+export function lobbyRoutes(router, { db, arena, matchmaker }) {
   router.get('/api/lobby', () => {
     const live = db.all("SELECT id FROM matches WHERE status = 'running' ORDER BY created_at DESC").map((r) => liveCard(db, arena, r.id)).filter(Boolean);
     const recent = db.all("SELECT id FROM matches WHERE status != 'running' ORDER BY COALESCE(finished_at, created_at) DESC LIMIT 12")
@@ -12,7 +13,13 @@ export function lobbyRoutes(router, { db, arena }) {
     start.setHours(0, 0, 0, 0);
     const today = db.get('SELECT COUNT(*) AS n FROM matches WHERE created_at >= ?', start.toISOString()).n;
     const total = db.get("SELECT COUNT(*) AS n FROM matches WHERE status = 'finished'").n;
-    return { live, recent, today, total };
+    // 各游戏天梯榜首（不含系统参照选手）、天梯动态
+    const tops = gameList().map((g) => {
+      const r = leaderboard(db, g.id).find((x) => !x.system);
+      return r ? { game: g.id, gameName: g.name, id: r.character_id, name: r.name, avatar: r.avatar, points: r.points, tier: r.tierInfo } : null;
+    }).filter(Boolean);
+    const rooms = db.get("SELECT COUNT(*) AS n FROM rooms WHERE status = 'open'").n;
+    return { live, recent, today, total, tops, rooms, log: (matchmaker?.lastLog || []).slice(0, 12) };
   });
 }
 
