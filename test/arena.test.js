@@ -124,6 +124,48 @@ test('每日对局上限生效', () => {
   assert.ok(!mm.eligible().some((x) => x.id === c.id));
 });
 
+test('提和：对方模型接受，对局以和棋结束', async () => {
+  const a = mock('提和方', { style: '【测试：求和】' });
+  const b = mock('应和方', { style: '【测试：接受和棋】' });
+  const id = arena.createMatch({ seats: { r: a.id, b: b.id }, mode: 'casual', options: { delayMs: 0 } });
+  const m = await waitEnd(id);
+  assert.equal(m.status, 'finished');
+  assert.deepEqual(m.result, { over: true, winner: null, ranks: { r: 1, b: 1 }, reason: '双方同意和棋' });
+  const full = db.get('SELECT options, actions FROM matches WHERE id = ?', id);
+  assert.equal(full.actions.length, 1);
+  assert.deepEqual(full.options.draw.offers, [{ ply: 1, seat: 'r', status: 'accepted', answerPly: 2 }]);
+  const t2 = db.get('SELECT label, action FROM turns WHERE match_id = ? AND ply = 2', id);
+  assert.deepEqual(t2, { label: '接受和棋', action: null });
+  const conv = db.get('SELECT conversations FROM matches WHERE id = ?', id).conversations;
+  assert.match(conv.r.system, /求和：是/);
+  assert.match(conv.b.messages.at(-2).content, /对方提出了和棋/);
+});
+
+test('提和：内置 AI 在不占优时接受', async () => {
+  const a = mock('向内置提和', { style: '【测试：求和】' });
+  const id = arena.createMatch({ seats: { r: a.id, b: builtin.id }, mode: 'casual', options: { delayMs: 0 } });
+  const m = await waitEnd(id);
+  assert.equal(m.result.reason, '双方同意和棋');
+});
+
+test('提和：被拒后 10 个回合内再提会被忽略', async () => {
+  const a = mock('反复提和', { style: '【测试：求和】' });
+  const rnd = db.get("SELECT * FROM characters WHERE name = '随机走子'");
+  const id = arena.createMatch({ seats: { r: a.id, b: rnd.id }, mode: 'casual', options: { delayMs: 0 } });
+  for (let i = 0; i < 600; i++) {
+    const n = db.get('SELECT actions, status FROM matches WHERE id = ?', id);
+    if (n.actions.length >= 23 || n.status !== 'running') break;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  if (arena.live.has(id)) arena.control(id, 'abort');
+  await waitEnd(id);
+  const offers = db.get('SELECT options FROM matches WHERE id = ?', id).options.draw.offers;
+  const byPly = Object.fromEntries(offers.map((o) => [o.ply, o.status]));
+  assert.equal(byPly[1], 'declined');
+  for (const p of [3, 5, 19]) if (byPly[p]) assert.equal(byPly[p], 'ignored', `第 ${p} 步应被忽略`);
+  if (byPly[21]) assert.notEqual(byPly[21], 'ignored');
+});
+
 test('同题对比', async () => {
   const a = mock('对比甲');
   const cmp = new Compare(arena);

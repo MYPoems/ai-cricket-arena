@@ -32,6 +32,10 @@ export async function matchView(root, id, { characters }) {
   let viewPly = null; // null 表示跟随最新局面
   let paused = d.paused;
   let waitingHuman = d.waitingHuman;
+  let offerNext = false; // 玩家本人：下一步附带提和
+  const offers = () => d.options?.draw?.offers || [];
+  const pendingOffer = () => { const o = offers().at(-1); return o?.status === 'pending' ? o : null; };
+  const DRAW_TAG = { pending: ['提和', 'warn'], declined: ['提和被拒', ''], accepted: ['提和', 'good'], ignored: ['提和（冷却中，未送出）', ''] };
 
   const seatChar = (seat) => chars.get(d.seats[seat]) || d.players[seat];
   const humanSeat = ['r', 'b'].find((s) => seatChar(s)?.kind === 'human' && seatChar(s === 'r' ? 'b' : 'r')?.kind !== 'human');
@@ -39,7 +43,8 @@ export async function matchView(root, id, { characters }) {
 
   const board = new Board({
     onMove: guard(async (iccs) => {
-      await post(`/matches/${id}/move`, { action: iccs });
+      await post(`/matches/${id}/move`, { action: iccs, offerDraw: offerNext });
+      offerNext = false;
       waitingHuman = null;
     }),
   });
@@ -142,8 +147,9 @@ export async function matchView(root, id, { characters }) {
   function renderStatus() {
     const running = d.status === 'running';
     const n = d.view.moves.length;
+    const po = running ? pendingOffer() : null;
     const status = running
-      ? (paused ? '已暂停' : waitingHuman ? '轮到你走' : live ? `${SEAT_NAME[live.seat]}思考中` : '…')
+      ? (paused ? '已暂停' : po ? `${SEAT_NAME[po.seat]}提和，等${SEAT_NAME[po.seat === 'r' ? 'b' : 'r']}回应` : waitingHuman ? '轮到你走' : live ? `${SEAT_NAME[live.seat]}思考中` : '…')
       : resultText(d, d.seatNames);
     const btn = (label, title, fn, extra = '') => h('button', { class: `icon-btn ${extra}`, title, onclick: guard(fn) }, label);
     statusBar.replaceChildren(
@@ -159,6 +165,8 @@ export async function matchView(root, id, { characters }) {
         ] : null,
         running && !humanSeat ? btn(paused ? '▶' : '⏸', paused ? '继续' : '暂停', () => post(`/matches/${id}/control`, { op: paused ? 'resume' : 'pause' })) : null,
         running && paused ? btn('⏭', '单步', () => post(`/matches/${id}/control`, { op: 'step' })) : null,
+        running && waitingHuman && po && po.seat !== waitingHuman ? h('button', { class: 'btn sm primary', onclick: guard(() => post(`/matches/${id}/control`, { op: 'accept_draw' })) }, '接受和棋') : null,
+        running && waitingHuman && !po ? h('button', { class: `btn sm${offerNext ? ' primary' : ''}`, title: '走下一步时同时向对方提出和棋', onclick: () => { offerNext = !offerNext; renderStatus(); } }, offerNext ? '走棋时提和 ✓' : '提和') : null,
         running && waitingHuman ? btn('🏳', '认输', async () => { if (confirm('确定认输？')) await post(`/matches/${id}/control`, { op: 'resign' }); }) : null,
         running && d.mode === 'casual' ? btn('■', '中止对局', async () => { if (confirm('中止这盘棋？')) await post(`/matches/${id}/control`, { op: 'abort' }); }) : null,
         btn('⇅', '翻转棋盘', () => { flipped = !flipped; board.setFlipped(flipped); renderBoard(false); }),
@@ -282,9 +290,21 @@ export async function matchView(root, id, { characters }) {
         h('span', { class: 'ply' }, `#${t.ply}`),
         h('span', { class: 'move' }, t.label || (isLive ? (d.options?.hideThoughts && c?.kind === 'model' ? '' : '思考中') : '判负')),
         h('span', { class: 'grow' }),
+        drawChip(t.ply),
         qualityChip(q)),
       meta ? h('div', { class: 'meta' }, meta) : null,
       ...body);
+  }
+
+  function drawChip(ply) {
+    const made = offers().find((o) => o.ply === ply);
+    if (made) {
+      const [text, cls] = DRAW_TAG[made.status] || ['提和', ''];
+      return h('span', { class: `chip ${cls}` }, text);
+    }
+    const answered = offers().find((o) => o.answerPly === ply);
+    if (answered?.status === 'declined') return h('span', { class: 'chip' }, '拒绝和棋');
+    return null;
   }
 
   function renderThoughts() {
@@ -402,6 +422,11 @@ export async function matchView(root, id, { characters }) {
         }
         break;
       }
+      case 'draw':
+        d.options.draw = e.draw;
+        renderStatus();
+        renderThoughts();
+        break;
       case 'control':
         paused = e.paused;
         renderStatus();

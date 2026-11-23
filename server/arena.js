@@ -13,6 +13,28 @@ const NOTES_IN_PROMPT = 5;
 
 class Abort extends Error {}
 
+// ---------- 提和 ----------
+// 任一方在走棋时可以附带提出和棋；对方下一步可以接受（对局以和棋结束），照常走棋即视为拒绝。
+// 被拒后同一方 20 步（各 10 回合）内再提会被忽略，避免反复提和。
+export const DRAW_COOLDOWN_PLIES = 20;
+export const DRAW_RULE = '【提和】如果你判断局面已经是和棋、继续下去只是浪费步数，可以在回答最后多写一行「求和：是」向对方提出和棋（这一步的着法照常写、照常走）。对方向你提和时我会告诉你：接受就把着法那一行写成「着法：接受和棋」，不接受就照常走棋。提和被拒后，10 个回合内不能再提。';
+const OFFER_RE = /求和[:：]\s*(是|提出|要)/;
+const ACCEPT_RE = /着法[:：]\s*(接受和棋|同意和棋|接受求和|和棋)/;
+
+function drawState(m) {
+  if (!m.options.draw) m.options.draw = { offers: [] };
+  return m.options.draw;
+}
+/** 对 seat 而言，对方提出、尚未回应的和棋 */
+function pendingOfferTo(m, seat) {
+  const o = drawState(m).offers.at(-1);
+  return o && o.status === 'pending' && o.seat !== seat ? o : null;
+}
+function canOffer(m, seat, ply) {
+  const last = drawState(m).offers.filter((o) => o.seat === seat && o.status !== 'ignored').at(-1);
+  return !last || ply - last.ply >= DRAW_COOLDOWN_PLIES;
+}
+
 const today = () => {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -140,8 +162,18 @@ export class Arena {
       this.hub.emit(channel, { type: 'turn_start', ply, seat, characterId: ch.id, kind: ch.kind });
 
       const t0 = Date.now();
-      const res = await this.#getMove({ m, rt, game, state, seat, ch, channel });
+      const offer = pendingOfferTo(m, seat);
+      const res = await this.#getMove({ m, rt, game, state, seat, ch, channel, offer });
       const latency = Date.now() - t0;
+      if (res.acceptDraw && offer) {
+        offer.status = 'accepted';
+        offer.answerPly = ply;
+        this.db.update('matches', { id: m.id }, { options: m.options, conversations: m.conversations });
+        this.#saveTurn(m, { ply, seat, ch, res, latency, action: null, label: '接受和棋' });
+        this.hub.emit(channel, { type: 'draw', draw: m.options.draw });
+        const ranks = Object.fromEntries(game.seats.map((s2) => [s2, 1]));
+        return this.#finish(m, rt, { over: true, winner: null, ranks, reason: '双方同意和棋' });
+      }
       if (res.forfeit) {
         this.#saveTurn(m, { ply, seat, ch, res, latency, action: null });
         return this.#finish(m, rt, game.forfeit(state, seat, res.forfeit));
@@ -151,6 +183,13 @@ export class Arena {
       const before = state;
       state = game.apply(state, res.action);
       m.actions.push(res.action);
+      let drawChanged = false;
+      if (offer) { offer.status = 'declined'; offer.answerPly = ply; drawChanged = true; }
+      if (res.offerDraw) {
+        drawState(m).offers.push({ ply, seat, status: canOffer(m, seat, ply) ? 'pending' : 'ignored' });
+        drawChanged = true;
+      }
+      if (drawChanged) this.db.update('matches', { id: m.id }, { options: m.options });
       this.db.update('matches', { id: m.id }, { actions: m.actions, conversations: m.conversations });
       this.#saveTurn(m, { ply, seat, ch, res, latency, action: res.action, label });
       rt.partial = null;
@@ -159,6 +198,7 @@ export class Arena {
         analysis: m.options.hideThoughts && ch.kind === 'model' ? null : res.text || null,
         selfWinrate: m.options.hideThoughts && ch.kind === 'model' ? null : res.winrate ?? null, latency, usage: res.usage || null, view: game.view(state),
       });
+      if (drawChanged) this.hub.emit(channel, { type: 'draw', draw: m.options.draw });
 
       // 评估走后局面，计算这步棋的质量（异步，不挡住对局）
       const evBefore = prevEval;
@@ -198,7 +238,12 @@ export class Arena {
   // ---------- 各类玩家 ----------
 
   async #getMove(ctx) {
-    const { ch, game, state } = ctx;
+    const { ch, game, state, offer } = ctx;
+    // 内置 AI 和引擎：局面评估里自己不占优（期望得分低于 55%）就接受和棋；随机走子不接受
+    if (offer && (ch.kind === 'builtin' || ch.kind === 'engine')) {
+      const ev = await this.evaluator.evaluate(game.fen(state)).catch(() => null);
+      if (ev && ev.e < 0.55) return { acceptDraw: true };
+    }
     switch (ch.kind) {
       case 'human':
         return this.#humanMove(ctx);
@@ -221,12 +266,16 @@ export class Arena {
     }
   }
 
-  #humanMove({ m, rt, game, state, seat }) {
+  #humanMove({ m, rt, game, state, seat, offer }) {
     return new Promise((resolve, reject) => {
-      rt.human = { seat, resolve: (action) => {
+      rt.human = { seat, offer: !!offer, resolve: (action, offerDraw = false) => {
         if (!game.actions(state).some((a) => a.id === action)) throw new HttpError(400, `不合法的着法：${action}`);
         rt.human = null;
-        resolve({ action });
+        resolve({ action, offerDraw });
+      }, acceptDraw: () => {
+        if (!offer) throw new HttpError(409, '对方没有提出和棋');
+        rt.human = null;
+        resolve({ acceptDraw: true });
       }, resign: () => { rt.human = null; resolve({ forfeit: `${game.seatNames[seat]}认输` }); } };
       rt.abort.signal.addEventListener('abort', () => reject(new Abort()), { once: true });
       void m;
@@ -234,17 +283,22 @@ export class Arena {
   }
 
   /** 模型走棋：整局保持一段连续的对话（模型能看到自己整局的思考） */
-  async #modelMove({ m, rt, game, state, seat, ch, channel }) {
+  async #modelMove({ m, rt, game, state, seat, ch, channel, offer }) {
     let conv = m.conversations[seat];
     if (!conv) {
       const notes = ch.memory
         ? this.db.all('SELECT text FROM notes WHERE character_id = ? ORDER BY created_at DESC LIMIT ?', ch.id, NOTES_IN_PROMPT).map((n) => n.text)
         : [];
       let system = game.systemPrompt(seat, { style: ch.style, showLegal: !!ch.show_legal && m.options.showLegal });
+      system += `\n\n${DRAW_RULE}`;
       if (notes.length) system += `\n\n【你以前对局的复盘笔记】\n${notes.map((n, i) => `${i + 1}. ${n}`).join('\n')}`;
-      conv = m.conversations[seat] = { system, messages: [] };
+      conv = m.conversations[seat] = { system, messages: [], drawRule: true };
     }
-    conv.messages.push({ role: 'user', content: game.turnPrompt(state, seat, { showLegal: !!ch.show_legal && m.options.showLegal }) });
+    let turn = game.turnPrompt(state, seat, { showLegal: !!ch.show_legal && m.options.showLegal });
+    // 提和规则加入之前开始的对局：在下一步提示里补充一次
+    if (!conv.drawRule && !conv.system.includes('求和')) { turn = `${DRAW_RULE}\n\n${turn}`; conv.drawRule = true; }
+    if (offer) turn = `对方提出了和棋。接受就把着法那一行写成「着法：接受和棋」；不接受就照常走棋。\n\n${turn}`;
+    conv.messages.push({ role: 'user', content: turn });
 
     const attempts = [];
     const usage = { input: 0, output: 0, cached: 0, reasoning: 0 };
@@ -263,9 +317,12 @@ export class Arena {
       for (const k of Object.keys(usage)) usage[k] += res.usage?.[k] || 0;
       served = res.model;
       conv.messages.push(res.message);
+      if (offer && ACCEPT_RE.test(res.text)) {
+        return { acceptDraw: true, text: res.text, reasoning: res.reasoning, winrate: game.parseReply(state, res.text).winrate, attempts, usage, model: served };
+      }
       const parsed = game.parseReply(state, res.text);
       if (parsed.action) {
-        return { action: parsed.action, text: res.text, reasoning: res.reasoning, winrate: parsed.winrate, attempts, usage, model: served };
+        return { action: parsed.action, offerDraw: OFFER_RE.test(res.text), text: res.text, reasoning: res.reasoning, winrate: parsed.winrate, attempts, usage, model: served };
       }
       const error = res.text.trim() ? parsed.error : '只有思考、没有给出回答（可能用完了输出长度上限）';
       attempts.push({ text: res.text, reasoning: res.reasoning, error, attempted: parsed.attempted });
@@ -316,10 +373,10 @@ export class Arena {
 
   // ---------- 控制 ----------
 
-  humanMove(matchId, action) {
+  humanMove(matchId, action, offerDraw = false) {
     const rt = this.live.get(matchId);
     if (!rt?.human) throw new HttpError(409, '现在不是你走棋');
-    rt.human.resolve(action);
+    rt.human.resolve(action, offerDraw);
   }
 
   control(matchId, op) {
@@ -328,7 +385,10 @@ export class Arena {
     if (op === 'pause') rt.paused = true;
     else if (op === 'resume') { rt.paused = false; rt.wake?.(); }
     else if (op === 'step') { rt.step = true; rt.wake?.(); }
-    else if (op === 'resign') {
+    else if (op === 'accept_draw') {
+      if (!rt.human) throw new HttpError(409, '只有轮到你走时才能接受和棋');
+      rt.human.acceptDraw();
+    } else if (op === 'resign') {
       if (!rt.human) throw new HttpError(409, '只有轮到你走时才能认输');
       rt.human.resign();
     } else if (op === 'abort') {
@@ -378,6 +438,7 @@ export class Arena {
       partial: rt?.partial && !hide ? rt.partial : rt?.partial ? { ...rt.partial, text: '', reasoning: '' } : null,
       paused: rt?.paused || false,
       waitingHuman: rt?.human ? rt.human.seat : null,
+      drawOfferToHuman: rt?.human?.offer || false,
       seatNames: game.seatNames,
     };
   }

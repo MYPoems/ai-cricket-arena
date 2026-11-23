@@ -52,7 +52,9 @@ async function mockCall(system, messages, onDelta, signal) {
   const last = messages[messages.length - 1]?.content || '';
   let text;
   const cands = [...last.matchAll(/\b([a-i][0-9][a-i][0-9]) \S+/g)].map((m) => m[1]);
-  if (system.includes('【测试：总是走错】')) {
+  if (system.includes('【测试：接受和棋】') && /对方提出了和棋/.test(last)) {
+    text = '判断：双方均无进攻手段。\n威胁：无\n理由：局面已和。\n胜率：50%\n着法：接受和棋';
+  } else if (system.includes('【测试：总是走错】')) {
     text = '判断：测试\n威胁：无\n理由：测试\n胜率：50%\n着法：i0i9';
   } else if (/候选对手/.test(last)) {
     text = '对手：1\n游戏：xiangqi\n宣言：来一盘，看看谁算得更深。';
@@ -61,7 +63,7 @@ async function mockCall(system, messages, onDelta, signal) {
   } else if (cands.length) {
     const pick = cands[Math.floor(Math.random() * cands.length)];
     const w = 30 + Math.floor(Math.random() * 40);
-    text = `判断：局面复杂，双方机会相当。\n威胁：对方可能通过车马配合进攻。\n理由：随手一试，看看对方怎么应。\n胜率：${w}%\n着法：${pick}`;
+    text = `判断：局面复杂，双方机会相当。\n威胁：对方可能通过车马配合进攻。\n理由：随手一试，看看对方怎么应。\n胜率：${w}%\n着法：${pick}${system.includes('【测试：求和】') ? '\n求和：是' : ''}`;
   } else {
     text = '判断：无法判断。\n威胁：无\n理由：无\n胜率：50%\n着法：a0a1';
   }

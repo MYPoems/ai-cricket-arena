@@ -145,7 +145,7 @@ export function routes(router, { db, hub, arena, matchmaker, compare, evaluator,
   router.get('/api/matches/:id', ({ params }) => arena.detail(params.id));
 
   router.post('/api/matches/:id/move', ({ params, body }) => {
-    arena.humanMove(params.id, String(body.action || ''));
+    arena.humanMove(params.id, String(body.action || ''), !!body.offerDraw);
     return { ok: true };
   });
 
