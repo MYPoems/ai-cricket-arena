@@ -384,3 +384,28 @@ test('内置 AI 打完整场不出错，筹码守恒', () => {
     assert.equal(s.stacks.reduce((a, b) => a + b, 0), n * 200);
   }
 });
+
+test('每手结束、新一手开始的停顿：服务端和牌桌按同一份时长', async () => {
+  const { default: g } = await import('../games/poker/index.js');
+  const { T, endDur, streetsBetween } = await import('../games/poker/timing.js');
+  let s = g.create({ players: 2, seed: 7 });
+  assert.equal(g.interlude(null, s), T.DEAL, '开局有开局提示');
+  // 同一手里的普通行动不停
+  const a = g.pending(s)[0];
+  const s1 = g.apply(s, a, 'call');
+  assert.equal(g.interlude(s, s1), 0);
+  // 有人弃牌：结算卡 + 开局提示
+  const s2 = g.apply(s1, g.pending(s1)[0], 'raise:60');
+  const s3 = g.apply(s2, g.pending(s2)[0], 'fold');
+  assert.equal(s3.hand.no, s2.hand.no + 1);
+  assert.equal(g.interlude(s2, s3), endDur({ showdown: false, streets: 0 }) + T.DEAL);
+  // 翻牌前全下跟注：摊牌，要把三条街翻完
+  let t = g.create({ players: 2, seed: 9 });
+  t = g.apply(t, g.pending(t)[0], 'allin');
+  const before = t;
+  t = g.apply(t, g.pending(t)[0], 'call');
+  assert.equal(streetsBetween(0, 5), 3);
+  assert.equal(t.last.showdown, true);
+  if (!t.over) assert.equal(g.view(t, null).last.showdown, true);
+  assert.equal(g.interlude(before, t), endDur({ showdown: true, streets: 3 }) + (t.over ? 0 : T.DEAL));
+});

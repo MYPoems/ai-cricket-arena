@@ -211,12 +211,12 @@ export async function profileView(root, id, { meta, go, reloadMeta }) {
             tokenDialog(c.name, r.agentToken);
           }) }, c.hasToken ? '重新生成接入令牌' : '生成接入令牌'),
           h('a', { class: 'btn sm', href: '#/agent-guide' }, '接入说明'))) : null,
-      h('label', { class: 'switch' }, h('input', { type: 'checkbox', checked: !!c.auto_match, onchange: guard(async (e) => { Object.assign(c, await patch(`/characters/${c.id}`, { auto_match: e.target.checked })); toast(e.target.checked ? '已加入自动匹配' : '已退出自动匹配'); }) }), '参加天梯自动匹配（主动找对手）'),
-      h('div', { class: 'small muted' }, `每日上限只限制主动参加的对局，最多 ${meta.maxDailyLimit} 局；被拉进组局的对局不计入、没有上限。`),
-      h('div', { class: 'grid2' },
-        h('label', { class: 'field' }, h('span', {}, '每天主动参加的对局上限'), h('input', { type: 'number', min: 1, max: meta.maxDailyLimit, value: c.daily_limit, onchange: guard(async (e) => { Object.assign(c, await patch(`/characters/${c.id}`, { daily_limit: Number(e.target.value) })); toast('已保存'); }) })),
-        h('label', { class: 'field' }, h('span', {}, '每日 token 上限'), h('input', { type: 'number', min: 1000, step: 10000, value: c.daily_tokens || '', placeholder: '不限', onchange: guard(async (e) => { Object.assign(c, await patch(`/characters/${c.id}`, { daily_tokens: e.target.value ? Number(e.target.value) : null })); toast('已保存'); }) }))),
-      h('div', { class: 'row' },
+      h('label', { class: 'switch' }, h('input', { type: 'checkbox', checked: !!c.auto_match, onchange: guard(async (e) => { Object.assign(c, await patch(`/characters/${c.id}`, { auto_match: e.target.checked })); toast(e.target.checked ? '已加入自动匹配' : '已退出自动匹配'); }) }), '参加天梯自动匹配'),
+      h('div', { class: 'small muted' }, `打开后会主动找对手。每日上限只算主动参加的对局，最多 ${meta.maxDailyLimit} 局；被拉进组局的不计入。`),
+      h('div', { class: 'set-limits' },
+        h('label', { class: 'field' }, h('span', {}, '每日主动对局'), h('span', { class: 'unit-input', 'data-unit': '局' }, h('input', { type: 'number', min: 1, max: meta.maxDailyLimit, value: c.daily_limit, onchange: guard(async (e) => { Object.assign(c, await patch(`/characters/${c.id}`, { daily_limit: Number(e.target.value) })); toast('已保存'); }) }))),
+        h('label', { class: 'field' }, h('span', {}, '每日 token'), h('span', { class: 'unit-input', 'data-unit': 'tokens' }, h('input', { type: 'number', min: 1000, step: 10000, value: c.daily_tokens || '', placeholder: '不限', onchange: guard(async (e) => { Object.assign(c, await patch(`/characters/${c.id}`, { daily_tokens: e.target.value ? Number(e.target.value) : null })); toast('已保存'); }) })))),
+      h('div', { class: 'set-actions' },
         c.kind === 'model' ? h('button', { class: 'btn sm', onclick: guard(async (e) => {
           e.target.disabled = true;
           const t = await post(`/characters/${c.id}/test`);
@@ -230,7 +230,7 @@ export async function profileView(root, id, { meta, go, reloadMeta }) {
           Object.assign(c, await patch(`/characters/${c.id}`, { name }));
           profileView(root, id, { meta, go, reloadMeta });
         }) }, '改名'),
-        h('button', { class: 'btn sm', onclick: guard(async () => {
+        h('button', { class: `btn sm ${c.archived ? '' : 'ghost danger'}`, onclick: guard(async () => {
           if (!confirm(c.archived ? '恢复这名选手？' : '归档后不再出现在列表和排行榜里，历史对局保留。确定归档？')) return;
           await patch(`/characters/${c.id}`, { archived: !c.archived });
           go('#/characters');

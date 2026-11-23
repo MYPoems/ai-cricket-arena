@@ -122,15 +122,58 @@ test('隐藏信息：有玩家本人时，别人的夜间行动不出现在事�
     if (e.type === 'move' && e.secret) { assert.equal(e.seat, null); assert.equal(e.action, null); }
   }
   assert.equal(mine.filter((e) => e.type === 'move' && e.secret).length, secret.size);
-  const d = arena.detail(id);
+  const d = arena.detail(id, null, me.owner_id);
   assert.equal(d.viewer, 'p1');
+  assert.equal(d.mySeat, 'p1');
   assert.equal(d.record.actions, null);
+  // 观众（没坐在局里的账号、游客）只看公共视角，也不能用 ?viewer= 偷看玩家的身份
+  const spec = arena.detail(id, 'p1', null);
+  assert.equal(spec.viewer, null);
+  assert.equal(spec.waitingHuman, null);
+  assert.ok(!JSON.stringify(spec.view).includes('预言家') || ww.create({ players: 6, seed }).roles.p1 === 'seer', '观众看不到身份');
+  assert.ok(spec.turns.every((t) => !secret.has(t.ply)));
   assert.ok(d.turns.every((t) => !secret.has(t.ply)), '对局详情里不应有别人的夜间行动');
   assert.ok(d.partials.every((p) => !p.secret));
   arena.control(id, 'resign');
   const m = await waitEnd(id);
   assert.equal(m.status, 'finished');
   assert.ok(arena.detail(id).turns.some((t) => night.includes(t.seat)), '结束后全部公开');
+});
+
+test('一盘里可以有多位真人：各看各的身份，只能走自己的座位', async () => {
+  const { default: ww } = await import('../games/werewolf/index.js');
+  const mk = (n) => {
+    const uid = `u_test_${n}`;
+    if (!db.get('SELECT 1 FROM users WHERE id = ?', uid)) db.insert('users', { id: uid, name: n, created_at: new Date().toISOString() });
+    return createCharacter(db, uid, { kind: 'human', name: n, avatar: '🙂' });
+  };
+  const a = mk('甲'), b = mk('乙');
+  let seed = 1;
+  while (!(ww.create({ players: 6, seed }).roles.p1 === 'wolf' && ww.create({ players: 6, seed }).roles.p2 === 'villager')) seed++;
+  const seats = { p1: a.id, p2: b.id, p3: builtin.id, p4: builtin.id, p5: builtin.id, p6: builtin.id };
+  const from = events.length;
+  const id = arena.createMatch({ game: 'werewolf', seats, mode: 'casual', options: { delayMs: 0, seed } });
+  // 第一夜：狼人甲要行动
+  await new Promise((r) => { const iv = setInterval(() => { if (arena.live.get(id)?.humans?.p1) { clearInterval(iv); r(); } }, 30); });
+  const da = arena.detail(id, null, a.owner_id);
+  const db_ = arena.detail(id, null, b.owner_id);
+  assert.equal(da.viewer, 'p1');
+  assert.equal(db_.viewer, 'p2');
+  assert.equal(da.waitingHuman, 'p1');
+  assert.equal(db_.waitingHuman, null, '乙看不到甲在夜里行动');
+  assert.ok(da.humanActions?.length);
+  assert.equal(db_.humanActions, null);
+  assert.notDeepEqual(JSON.stringify(da.view), JSON.stringify(db_.view), '两位玩家的视角不同');
+  // 夜里谁在行动不进公共事件
+  const ht = events.slice(from).filter((e) => e.ch === `match:${id}` && e.type === 'human_turn');
+  assert.ok(ht.every((e) => e.seat === null));
+  // 只能替自己的座位行动
+  assert.throws(() => arena.humanMove(id, da.humanActions[0].id, false, 'p2'), /不是你行动/);
+  arena.humanMove(id, da.humanActions[0].id, false, 'p1');
+  arena.control(id, 'abort');
+  await waitEnd(id);
+  // 同一位真人不能占两个座位
+  assert.throws(() => arena.createMatch({ game: 'werewolf', seats: { ...seats, p3: a.id }, mode: 'casual' }), /两个座位/);
 });
 
 test('自动匹配：模型自己挑对手并写宣言', async () => {

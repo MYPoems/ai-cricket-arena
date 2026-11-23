@@ -480,6 +480,8 @@ const game = {
       first: state.first,
       deals: state.deals,
       bids: state.bids.map((b) => ({ seat: b.seat, bid: b.bid })),
+      // 出过的牌是公开信息：本局记录按轮列出
+      plays: state.plays.map((p) => ({ seat: p.seat, trick: p.trick, cards: p.cards ? namesOf(p.cards) : null, type: p.cards ? TYPE_NAMES[p.type] : null })),
       landlord: state.landlord,
       bid: state.landlord ? state.bid : maxBid(state),
       multiplier: st ? st.multiplier : bombMult(state),

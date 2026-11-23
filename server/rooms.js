@@ -85,10 +85,6 @@ export function roomRoutes(router, { db, hub, arena }) {
     if (c.kind === 'engine' && (c.provider || 'pikafish') !== game.features?.evalEngine) throw new HttpError(400, `${c.name}不会下${game.name}`);
     const taken = Object.values(r.seats).map((x) => x.characterId);
     if (!c.system && taken.includes(c.id)) throw new HttpError(409, `${c.name}已经在这一局里了`);
-    if (c.kind === 'human') {
-      const humans = Object.values(r.seats).filter((x) => db.get('SELECT kind FROM characters WHERE id = ?', x.characterId)?.kind === 'human');
-      if (humans.length) throw new HttpError(409, '一局里目前只能有一位真人玩家');
-    }
     return save(r, { seats: { ...r.seats, [seat]: { characterId: c.id, userId: user.id } } });
   });
 

@@ -292,6 +292,34 @@ function cnNum(n) {
 const playKey = (seat, t) => (t && t.cards ? `${seat}:${t.cards.join(',')}` : '');
 
 export default {
+  // 对局页用「牌桌 + 右侧聚光框 + 本局记录」版式：牌桌上已有每家的名牌、剩牌和出牌，两侧不再放选手卡
+  hud: true,
+
+  /** 聚光框头上的一行：地主/农民、剩几张 */
+  seatLine(view, seat) {
+    if (!view?.counts) return '';
+    const role = view.landlord ? (view.landlord === seat ? '地主' : '农民') : view.phase === 'bid' ? '叫分中' : '';
+    return [role, `剩 ${view.counts[seat]} 张`].filter(Boolean).join(' · ');
+  },
+
+  /** 本局记录：叫分一组，之后每一轮一组 */
+  handLog(view) {
+    if (!view?.seats) return null;
+    const groups = [];
+    if (view.bids?.length) groups.push({ street: 'bid', name: view.deals ? `叫分 · 第 ${view.deals + 1} 次发牌` : '叫分', board: [], items: view.bids.map((b) => ({ seat: b.seat, text: b.bid ? `叫 ${b.bid} 分` : '不叫' })) });
+    for (const p of view.plays || []) {
+      let g = groups[groups.length - 1];
+      if (!g || g.street !== `t${p.trick}`) { g = { street: `t${p.trick}`, name: `第 ${cnNum(p.trick)} 轮`, board: [], items: [] }; groups.push(g); }
+      g.items.push({ seat: p.seat, text: p.cards ? `${p.type} ${p.cards.join(' ')}` : '不出' });
+    }
+    const r = view.result;
+    return {
+      label: '本局记录', title: '本局', sub: view.landlord ? `底分 ${view.bid} · ${view.multiplier} 倍` : '叫地主',
+      groups, count: (view.bids?.length || 0) + (view.plays?.length || 0), last: null,
+      result: r ? `${r.landlordWins ? '地主' : '农民'}胜 · ${r.multiplier} 倍${r.spring ? ' · 春天' : r.anti ? ' · 反春' : ''} · 每家 ${r.score} 分` : null,
+    };
+  },
+
   // 手机竖屏用竖版桌面，其余横版
   get aspect() { return typeof matchMedia === 'function' && matchMedia('(max-width: 700px)').matches ? [10, 14] : [16, 10]; },
   seatColor: (seat, i) => COLORS[(i ?? SEATS.indexOf(seat)) % COLORS.length],

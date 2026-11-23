@@ -6,6 +6,7 @@ import {
   code, cardText, cardsText, evaluate, handName, bestFive, equity, equityVsRandom, chen,
   makeRng, hashSeed, shuffledDeck,
 } from './cards.js';
+import { pauseBetween } from './timing.js';
 
 const MAX = 6;
 const STREET_CN = ['翻牌前', '翻牌', '转牌', '河牌', '摊牌'];
@@ -665,6 +666,15 @@ const game = {
     return 'fold';
   },
 
+  /** 两个局面之间对局要停多久（毫秒）：每一手结束演结算、新一手弹开局提示；prev 为 null 是开局 */
+  interlude(prev, next) {
+    const pick = (s) => s && ({
+      handNo: s.hand.no, boardLen: s.hand.board.length, over: s.over, showdown: !!(s.hand.done && s.hand.result?.showdown),
+      last: s.last ? { no: s.last.no, showdown: !!s.last.showdown, boardLen: s.last.board.length } : null,
+    });
+    return pauseBetween(pick(prev), pick(next));
+  },
+
   // ---------- 浏览器数据 ----------
   view(state, viewer = null) {
     const s = state, h = s.hand;
@@ -697,7 +707,8 @@ const game = {
     }
     const L = !h.done && h.toAct >= 0 ? legal(s, h.toAct) : null;
     const lastHand = s.last && s.last.no !== h.no ? {
-      no: s.last.no, text: s.last.text, board: s.last.board.map(code),
+      no: s.last.no, text: s.last.text, board: s.last.board.map(code), showdown: !!s.last.showdown,
+      net: Object.fromEntries(s.last.net.map((v, j) => [seatId(j), v])),
       shown: Object.fromEntries(Object.entries(s.last.shown).map(([j, c]) => [seatId(Number(j)), c.map(code)])),
       hands: Object.fromEntries(Object.entries(s.last.hands).map(([j, v]) => [seatId(Number(j)), v])),
     } : null;
@@ -712,7 +723,7 @@ const game = {
       toAct: h.toAct >= 0 ? seatId(h.toAct) : null, currentBet: h.currentBet,
       legal: L ? { toCall: L.toCall, owe: L.owe, minTo: L.minTo, maxTo: L.maxTo, canRaise: L.canRaise, canCheck: L.canCheck, bet: h.bet[h.toAct] } : null,
       players,
-      log: h.log.map((e) => ({ seat: seatId(e.i), street: STREET_ID[e.st], text: e.text })),
+      log: h.log.map((e) => ({ seat: seatId(e.i), street: STREET_ID[e.st], text: e.text, ...(e.kind === 'sb' || e.kind === 'bb' ? { blind: true } : {}) })),
       result: h.done ? { text: h.result.text, showdown: h.result.showdown, winners: [...new Set(h.result.pots.flatMap((p) => p.winners))].map(seatId) } : null,
       last: lastHand,
       over: s.over,

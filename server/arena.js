@@ -75,25 +75,32 @@ async function withRetry(fn, signal, onRetry) {
   }
 }
 
-/** 有玩家本人的隐藏信息对局里，这一步是否要对玩家隐藏（别人的夜间行动等；game.secret 由游戏提供） */
-export function isSecret(game, state, seat, action, human) {
-  if (!human || seat === human || !game.features?.hidden || !game.secret) return false;
+/**
+ * 有真人玩家的隐藏信息对局里，这一步是不是私密行动（夜间行动等；game.secret 由游戏提供）。
+ * 私密行动不进公共事件流；每位玩家刷新对局详情时，只看得到自己座位的私密行动。
+ */
+export function isSecret(game, state, seat, action, humans) {
+  if (!humans?.length || !game.features?.hidden || !game.secret) return false;
   try { return !!game.secret(state, seat, action); } catch { return true; }
 }
 
-/** 逐步重放，标出要对玩家隐藏的步（ply 从 1 开始） */
-export function secretPlies(game, record, human) {
+/** 逐步重放，标出对这位观看者（viewer 座位；null 为观众）要隐藏的步（ply 从 1 开始） */
+export function secretPlies(game, record, viewer, humans = [viewer]) {
   const out = new Set();
-  if (!human || !game.secret || !game.features?.hidden) return out;
+  const hs = (humans || []).filter(Boolean);
+  if (!hs.length || !game.secret || !game.features?.hidden) return out;
   let state = game.create({ players: record.players, seed: record.seed, setup: record.setup });
   (record.actions || []).forEach((a, i) => {
     const seat = typeof a === 'string' ? game.pending(state)[0] : a.seat;
     const action = typeof a === 'string' ? a : a.action;
-    if (isSecret(game, state, seat, action, human)) out.add(i + 1);
+    if (seat !== viewer && isSecret(game, state, seat, action, hs)) out.add(i + 1);
     state = game.apply(state, seat, action);
   });
   return out;
 }
+
+/** 公共视角：传给 game.view 的「不是任何座位」的观看者——谁的底牌、身份、夜间行动都看不到（null 是上帝视角） */
+export const PUBLIC_VIEWER = '*';
 
 export function recordOf(m) {
   const s = m.setup || {};
@@ -172,7 +179,7 @@ export class Arena {
       if (c.kind === 'engine' && (c.provider || 'pikafish') !== game.features?.evalEngine) throw new HttpError(400, `${c.name}只会下${engineGameName(c.provider)}`);
     }
     const humans = Object.values(chars).filter((c) => c.kind === 'human');
-    if (humans.length > 1) throw new HttpError(400, '目前一盘里只能有一位玩家本人');
+    if (new Set(humans.map((c) => c.id)).size < humans.length) throw new HttpError(400, '同一位真人玩家不能占两个座位');
     const setup = { ...(options.setup || {}), ...(options.fen ? { fen: options.fen } : {}) };
     if (mode === 'ranked') {
       const bad = Object.values(chars).filter((c) => !canRank(this.db, c));
@@ -232,9 +239,17 @@ export class Arena {
     return this.db.get('SELECT played FROM ratings WHERE character_id = ? AND game = ?', characterId, gameId)?.played || 0;
   }
 
-  humanSeat(m) {
+  /** 真人玩家的座位（可以有多位，各自是不同账号） */
+  humanSeats(m) {
+    return Object.entries(m.seats).filter(([, cid]) => this.db.get('SELECT kind FROM characters WHERE id = ?', cid)?.kind === 'human').map(([seat]) => seat);
+  }
+
+  /** 这个账号在这盘里坐的真人座位 */
+  seatOf(m, userId) {
+    if (!userId) return null;
     for (const [seat, cid] of Object.entries(m.seats)) {
-      if (this.db.get('SELECT kind FROM characters WHERE id = ?', cid)?.kind === 'human') return seat;
+      const c = this.db.get('SELECT kind, owner_id FROM characters WHERE id = ?', cid);
+      if (c?.kind === 'human' && c.owner_id === userId) return seat;
     }
     return null;
   }
@@ -275,8 +290,8 @@ export class Arena {
     let state = replay(game, recordOf(m));
     const channel = `match:${m.id}`;
     const hidden = !!game.features?.hidden;
-    const human = this.humanSeat(m);
-    const publicView = () => (hidden && human ? null : game.view(state, null));
+    const humans = this.humanSeats(m);
+    const publicView = () => (hidden && humans.length ? null : game.view(state, null)); // 有真人时不广播局面，各自刷新详情
 
     if (!m.options.startEval && game.evalSpec) {
       const ev = await this.#evaluate(game, state, seatIds);
@@ -292,6 +307,9 @@ export class Arena {
       prevEval = last?.eval ? { raw: last.eval.raw, persp: last.eval.persp } : m.options.startEval ? { raw: { e: m.options.startEval.e, best: m.options.startEval.best }, persp: game.evalSpec(state)?.persp } : null;
     }
 
+    // 开局停顿（例如德州第一手的开局提示）
+    if (!m.actions.length && game.interlude) await sleep(game.interlude(null, state) || 0, rt);
+
     while (true) {
       const out = game.outcome(state);
       if (out.over) return this.#finish(m, rt, out);
@@ -304,7 +322,7 @@ export class Arena {
       const jobs = pend.map((seat, i) => {
         const ch = getCharacter(this.db, m.seats[seat]);
         const ply = base + i + 1;
-        rt.partials[seat] = { ply, seat, characterId: ch.id, text: '', reasoning: '', attempts: [], secret: isSecret(game, state, seat, null, human) };
+        rt.partials[seat] = { ply, seat, characterId: ch.id, text: '', reasoning: '', attempts: [], secret: isSecret(game, state, seat, null, humans) };
         if (!rt.partials[seat].secret) this.hub.emit(channel, { type: 'turn_start', ply, seat, characterId: ch.id, kind: ch.kind, simultaneous: pend.length > 1 });
         const offer = game.features?.draw ? pendingOfferTo(m, seat) : null;
         const t0 = Date.now();
@@ -312,6 +330,7 @@ export class Arena {
           .then((res) => ({ seat, ch, ply, offer, res, latency: Date.now() - t0 }));
       });
       const results = await Promise.all(jobs);
+      const before = state;
 
       for (const r of results) {
         const { seat, ch, ply, offer, res, latency } = r;
@@ -332,7 +351,7 @@ export class Arena {
       for (const r of results) {
         const { seat, ch, ply, offer, res, latency } = r;
         const label = game.label(state, seat, res.action);
-        const secret = isSecret(game, state, seat, res.action, human);
+        const secret = isSecret(game, state, seat, res.action, humans);
         state = game.apply(state, seat, res.action);
         m.actions.push({ seat, action: res.action });
         let drawChanged = false;
@@ -366,7 +385,10 @@ export class Arena {
           }
         }
       }
-      if (m.options.delayMs) await sleep(m.options.delayMs, rt);
+      // 游戏要求的停顿（德州每手结束演结算、新一手弹开局提示），画面按同一份时长演完再继续
+      const pause = game.interlude ? game.interlude(before, state) || 0 : 0;
+      if (pause) await sleep(pause, rt);
+      else if (m.options.delayMs) await sleep(m.options.delayMs, rt);
     }
   }
 
@@ -423,6 +445,7 @@ export class Arena {
   }
 
   #humanMove({ m, rt, game, state, seat, offer }) {
+    const secret = !!rt.partials[seat]?.secret;
     return new Promise((resolve, reject) => {
       rt.humans[seat] = {
         seat, offer: !!offer,
@@ -442,7 +465,8 @@ export class Arena {
         },
         resign: () => { delete rt.humans[seat]; resolve({ forfeit: `${game.seatName(seat)}认输` }); },
       };
-      this.hub.emit(`match:${m.id}`, { type: 'human_turn', seat });
+      // 私密行动（夜里）不说是谁：各位玩家收到后刷新详情，只有轮到的那位能拿到自己的行动
+      this.hub.emit(`match:${m.id}`, { type: 'human_turn', seat: secret ? null : seat });
       rt.abort.signal.addEventListener('abort', () => reject(new Abort()), { once: true });
     });
   }
@@ -648,21 +672,22 @@ ${game.noun || '行动'}：${act}`;
 
   // ---------- 控制 ----------
 
-  #humanHandler(rt) {
-    const hs = Object.values(rt?.humans || {});
-    return hs[0] || null;
+  /** 等某个座位的真人行动的句柄；seat 省略时取任意一位（单人对局、测试用） */
+  #humanHandler(rt, seat) {
+    if (seat !== undefined) return (seat && rt?.humans?.[seat]) || null;
+    return Object.values(rt?.humans || {})[0] || null;
   }
 
-  humanMove(matchId, action, offerDraw = false) {
-    const h = this.#humanHandler(this.live.get(matchId));
+  humanMove(matchId, action, offerDraw = false, seat) {
+    const h = this.#humanHandler(this.live.get(matchId), seat);
     if (!h) throw new HttpError(409, '现在不是你行动');
     h.resolve(action, offerDraw);
   }
 
-  control(matchId, op) {
+  control(matchId, op, seat) {
     const rt = this.live.get(matchId);
     if (!rt) throw new HttpError(409, '对局不在进行中');
-    const h = this.#humanHandler(rt);
+    const h = this.#humanHandler(rt, seat);
     if (op === 'pause') rt.paused = true;
     else if (op === 'resume') { rt.paused = false; rt.wake?.(); }
     else if (op === 'step') { rt.step = true; rt.wake?.(); }
@@ -705,25 +730,30 @@ ${game.noun || '行动'}：${act}`;
     };
   }
 
-  /** viewer：观看者的座位；有玩家本人且游戏有隐藏信息时，进行中只给玩家自己的视角 */
-  detail(matchId, viewer = null) {
+  /**
+   * viewer：想看的座位视角；userId：请求的账号。
+   * 有真人玩家的隐藏信息对局进行中：玩家只能看自己座位的视角，观众只能看公共视角（谁的牌都看不到）。
+   */
+  detail(matchId, viewer = null, userId = null) {
     const m = this.db.get('SELECT * FROM matches WHERE id = ?', matchId);
     if (!m) throw new HttpError(404, '对局不存在');
     const game = getGame(m.game);
     const record = recordOf(m);
     const state = replay(game, record);
-    const human = this.humanSeat(m);
+    const humans = this.humanSeats(m);
+    const mySeat = this.seatOf(m, userId);
     const running = m.status === 'running';
+    const hiddenLive = !!game.features?.hidden && humans.length > 0 && running;
     let v = viewer && m.seats[viewer] ? viewer : null;
-    if (game.features?.hidden && human && running) v = human;
+    if (hiddenLive) v = mySeat; // 观众（null）在下面换成公共视角
     const turns = this.db.all('SELECT * FROM turns WHERE match_id = ? ORDER BY ply', matchId);
     const rt = this.live.get(matchId);
     const hide = m.options.hideThoughts && running;
     const sum = this.summary(matchId);
-    const hiddenLive = game.features?.hidden && human && running;
-    const secrets = hiddenLive ? secretPlies(game, record, human) : new Set();
+    const secrets = hiddenLive ? secretPlies(game, record, v, humans) : new Set();
     const partials = Object.values(rt?.partials || {}).filter((p) => !(hiddenLive && p.secret) && !rt?.humans?.[p.seat]).map((p) => (hide ? { ...p, text: '', reasoning: '' } : p));
-    const humanH = this.#humanHandler(rt);
+    // 只告诉这位玩家自己座位在等他行动
+    const humanH = this.#humanHandler(rt, mySeat);
     return {
       ...sum,
       // 系列赛的种子不给浏览器（第 1 盘的种子就是本盘种子，拿到就能算出别人的牌）
@@ -732,7 +762,8 @@ ${game.noun || '行动'}：${act}`;
       record: hiddenLive ? { players: record.players, actions: null } : record,
       startFen: m.start_fen,
       viewer: v,
-      view: game.view(state, v),
+      mySeat,
+      view: game.view(state, hiddenLive && !v ? PUBLIC_VIEWER : v),
       turns: turns.filter((t) => !secrets.has(t.ply)).map((t) => (hide && t.character_id && this.#isModel(t.character_id) ? { ...t, analysis: null, reasoning: null, attempts: null, self_winrate: null } : t)),
       partials,
       partial: partials[0] || null,

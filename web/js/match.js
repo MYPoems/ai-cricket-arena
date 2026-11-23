@@ -5,6 +5,7 @@
 import { h, api, post, listen, toast, guard, tierBadge, fmtMs, fmtTokens, pct, MODE_NAMES, resultText, modelLine } from './ui.js';
 import { loadRenderer, PALETTE } from '../stage/index.js';
 import { createFold } from './fold.js';
+import { createSpot } from './spot.js';
 
 const LINE_KEYS = ['判断', '威胁', '理由', '推断', '计划'];
 const QUALITY_CLASS = { 最佳: 'good', 好棋: 'good', 缓着: 'warn', 失误: 'warn', 大漏着: 'bad' };
@@ -53,7 +54,9 @@ export async function matchView(root, id, { characters }) {
   const seatChar = (seat) => chars.get(d.seats[seat]) || d.players[seat];
   const seatName = (seat) => d.seatNames?.[seat] || seat;
   const color = (seat) => renderer.seatColor?.(seat, seats.indexOf(seat)) || PALETTE[seats.indexOf(seat) % PALETTE.length];
-  const humanSeat = seats.find((s) => seatChar(s)?.kind === 'human') || null;
+  // 我自己坐的座位（一盘里可以有多位真人，各看各的）；有真人在局时不给暂停
+  const humanSeat = d.mySeat || null;
+  const hasHuman = seats.some((s) => seatChar(s)?.kind === 'human');
   let flipped = humanSeat ? !!renderer.flipFor?.(humanSeat) : false;
   const offers = () => d.options?.draw?.offers || [];
   const pendingOffer = () => { const o = offers().at(-1); return o?.status === 'pending' ? o : null; };
@@ -69,6 +72,12 @@ export async function matchView(root, id, { characters }) {
   const duo = typeof renderer.duoView === 'function';
   let duoInfo = { scene: null, seats: {} };
   let focusSeat = null; // 点座位卡切换焦点；null 表示跟随当前行动者
+  // 牌桌版式（德州）：牌桌上已有每个人的名牌和动作，两侧不放选手卡；右上是聚光框（只显示轮到的人），右下是本手记录
+  const hud = !duo && !!renderer.hud;
+  const spot = hud ? createSpot() : null;
+  const handBox = h('section', { class: 'hand-log' });
+  let pinPly = null; // 在本手记录里点过的一步；null 表示聚光框跟随当前行动者
+  let spotPly = null;
   stage.setFlipped?.(flipped);
 
   // ---------- 布局 ----------
@@ -110,6 +119,10 @@ export async function matchView(root, id, { characters }) {
     const arenaEl = root.firstElementChild;
     fold = createFold({ arena: arenaEl, stageCol: arenaEl.querySelector('.stage'), focusEl, panelRoot: stage.el, logBox, moves, logLabel: () => logSum.textContent.replace(/^全部记录\s*·\s*/, '') });
     logBox.before(fold.el);
+  } else if (hud) {
+    root.replaceChildren(h('div', { class: `arena hud g-${d.game}${recordMode ? ' recording' : ''}`, style: { '--aw': aw, '--ah': ah } },
+      h('section', { class: 'stage' }, statusBar, h('div', { class: 'stage-board' }, h('div', { class: 'board-wrap' }, stage.el))),
+      h('aside', { class: 'hud-col' }, spot.el, handBox)));
   } else {
     root.replaceChildren(h('div', { class: `arena g-${d.game}${winbarOn ? '' : ' no-winbar'}${recordMode ? ' recording' : ''}`, style: { '--aw': aw, '--ah': ah } },
       h('div', { class: 'camp-col' }, ...leftSeats.map((s) => camps[s].el)),
@@ -238,13 +251,21 @@ export async function matchView(root, id, { characters }) {
     seatEls[seat] = el;
   }
 
+  // 天黑、天亮、换阶段：场景条不硬切——昼夜切换时整条先压暗再亮起，标题从下面浮上来
+  let lastScene = null;
   function renderScene() {
     const sc = duoInfo.scene;
-    sceneEl.className = `scene ${sc?.kind || 'day'}`;
+    const kind = sc?.kind || 'day';
+    const key = `${kind}|${sc?.title || ''}|${sc?.sub || ''}`;
+    const prev = lastScene;
+    lastScene = { kind, key };
+    const fx = !prev || prev.key === key ? '' : prev.kind !== kind ? ' flip' : sc?.title !== sceneEl.querySelector('.t')?.textContent ? ' retitle' : ' resub';
+    sceneEl.className = `scene ${kind}${fx}`;
     sceneEl.replaceChildren(sc ? h('div', {}, h('b', { class: 't' }, sc.title), sc.sub ? h('span', { class: 's' }, sc.sub) : null) : null);
   }
 
   /** 焦点区：大头像 +「说的」（公开发言、投票）+「想的」（AI 的推理，上帝视角或对局结束后才有） */
+  let lastFocus = null;
   function renderFocus() {
     const seat = focusOf();
     const c = seatChar(seat);
@@ -268,7 +289,10 @@ export async function matchView(root, id, { characters }) {
     const saidBox = h('div', { class: 'said-list' }, ...(lines.length ? lines : [h('div', { class: 'none' }, '还没有开口')]));
     // 没有想法可看（内置 AI 不写想法，或真人局里 AI 的想法要等终局）：「说的」占满整行，想法那栏收成一句说明
     const solo = !live && (hidden || !thoughtText);
-    focusEl.className = `focus${solo ? ' solo' : ''}`;
+    // 换了人：焦点区内容依次浮上来，不是一下子替换
+    const swapped = lastFocus !== null && lastFocus !== seat;
+    lastFocus = seat;
+    focusEl.className = `focus${solo ? ' solo' : ''}${swapped ? ' swap' : ''}`;
     focusEl.replaceChildren(
       // 结构：头像行（横排）+「说的」+「想的」；宽屏时说的、想的左右并排
       h('div', { class: 'who' }, h('span', { class: 'coin lg' }, c?.avatar || '？'),
@@ -287,8 +311,108 @@ export async function matchView(root, id, { characters }) {
     fold?.schedule();
   }
 
+  // ---------- 牌桌版式：聚光框、本手记录 ----------
+  /** 聚光框看谁：本手记录里点过的那一步；否则正在想的人；否则轮到的真人；否则最近出手的人 */
+  function spotFocus() {
+    if (pinPly !== null && turns.get(pinPly)?.label) return { seat: turns.get(pinPly).seat, ply: pinPly, turn: turns.get(pinPly), pinned: true };
+    if (viewPly === null && d.status === 'running') {
+      const live = [...partials.values()][0];
+      if (live) return { seat: live.seat, ply: live.ply ?? `h${live.seat}`, live };
+      if (waitingHuman) return { seat: waitingHuman, ply: `h${waitingHuman}`, human: true };
+    }
+    const limit = viewPly ?? Infinity;
+    const k = Math.max(0, ...[...turns.keys()].filter((p) => p <= limit && turns.get(p).label));
+    if (k) return { seat: turns.get(k).seat, ply: k, turn: turns.get(k) };
+    const view = viewPly === null ? d.view : viewAt(viewPly);
+    return { seat: view?.toAct || seats[0], ply: 'idle', idle: true };
+  }
+
+  const seatNum = (seat) => String(seat).replace(/^\D+/, '') || String(seats.indexOf(seat) + 1);
+  function renderSpot() {
+    if (!hud) return;
+    const view = viewPly === null ? d.view : viewAt(viewPly);
+    const f = spotFocus();
+    spotPly = f.ply;
+    const seat = f.seat;
+    const c = seatChar(seat);
+    const isModel = c?.kind === 'model' || c?.kind === 'agent';
+    const hidden = d.options?.hideThoughts && isModel && d.status === 'running';
+    const t = f.live || f.turn || null;
+    const mine = f.human && seat === humanSeat;
+    const status = f.live ? '思考中' : f.human ? (mine ? '轮到你' : '思考中') : f.pinned ? `第 ${f.ply} 步` : f.idle ? (d.status === 'running' ? '等待开局' : '') : d.status === 'running' ? '刚出手' : '最后一手';
+    const line = renderer.seatLine?.(view, seat);
+    const head = [
+      h('span', { class: 'coin' }, c?.avatar || '？'),
+      h('div', { class: 'who' },
+        h('b', {}, c?.name || seatName(seat)),
+        h('span', {}, [seatName(seat), c?.kind === 'human' ? '真人' : c?.kind === 'agent' ? '自带 Agent' : c?.kind === 'model' ? c.model : modelLine(c || {})].filter(Boolean).join(' · ')),
+        line ? h('span', { class: 'ln' }, line) : null),
+    ];
+    const tools = f.pinned ? h('button', { class: 'btn sm ghost', onclick: () => { pinPly = null; renderSpot(); renderHandLog(); } }, '跟随当前') : null;
+    const body = [h('div', { class: 'spot-act' },
+      h('span', { class: `st${f.live || f.human ? ' live' : ''}` }, status),
+      f.turn?.label ? h('b', { class: 'act' }, f.turn.label) : f.live || f.human ? h('span', { class: 'dots' }, h('i'), h('i'), h('i')) : null)];
+    const scroll = h('div', { class: 'spot-scroll', 'data-stick': f.live ? 'bottom' : '' });
+    if (mine) scroll.append(h('div', { class: 'spot-tip' }, '轮到你了：在牌桌右下角的操作台出手。'));
+    else if (hidden) scroll.append(h('div', { class: 'spot-tip' }, '有真人在局：模型的思考对局结束后公开，这里只显示出手。'));
+    else if (c && !isModel && c.kind !== 'human') scroll.append(h('div', { class: 'spot-tip' }, f.live ? '计算中…' : `${modelLine(c)}没有文字思考。`));
+    else if (t) {
+      const a = !f.live ? parseAnalysis(t.analysis) : null;
+      if (t.reasoning) scroll.append(h('details', { class: 'spot-reason', open: f.live && !t.text }, h('summary', {}, `原生推理 · ${t.reasoning.length} 字`), h('div', { class: 'reasoning' }, t.reasoning)));
+      if (a) scroll.append(h('div', { class: 'lines' }, ...LINE_KEYS.filter((k) => a[k]).flatMap((k) => [h('b', {}, k), h('span', {}, a[k])])));
+      else if (f.live ? t.text : t.analysis) scroll.append(h('div', { class: `stream${f.live ? ' typing' : ''}` }, f.live ? t.text : t.analysis));
+      else if (f.live) scroll.append(h('div', { class: 'spot-tip' }, '思考中…'));
+      for (const at of t.attempts || []) scroll.append(h('div', { class: 'illegal' }, `✗ ${at.attempted || '无效'}：${at.error}`));
+    } else if (f.idle) scroll.append(h('div', { class: 'spot-tip' }, d.status === 'running' ? '马上开局。' : '没有记录'));
+    body.push(scroll);
+    const meta = f.turn ? [f.turn.latency_ms ? fmtMs(f.turn.latency_ms) : null, f.turn.usage && (f.turn.usage.input || f.turn.usage.output) ? `${fmtTokens(f.turn.usage.input + f.turn.usage.output)} tokens` : null].filter(Boolean).join(' · ') : '';
+    if (meta) body.push(h('div', { class: 'spot-meta' }, meta));
+    const out = view?.out || [];
+    spot.show({
+      key: `${seat}|${f.ply}`, index: seats.indexOf(seat), head, body, tools,
+      chambers: seats.map((s) => ({ label: seatNum(s), color: color(s), out: out.includes?.(s) })),
+    });
+    spot.el.classList.toggle('mine', !!mine);
+    spot.el.classList.toggle('thinking', !!(f.live || f.human));
+  }
+
+  const SUIT = { s: '♠', h: '♥', d: '♦', c: '♣' };
+  const cardChip = (cd) => h('span', { class: `cc${cd[1] === 'h' || cd[1] === 'd' ? ' r' : ''}` }, `${cd[0] === 'T' ? '10' : cd[0]}${SUIT[cd[1]] || ''}`);
+  let hlSeen = new Set();
+  function renderHandLog() {
+    if (!hud) return;
+    const view = viewPly === null ? d.view : viewAt(viewPly);
+    const L = renderer.handLog?.(view);
+    if (!L) return;
+    const cur = viewPly ?? totalPlies();
+    const base = cur - L.count; // 本手第 k 条行动是第 base + k 步
+    let k = 0;
+    const list = h('div', { class: 'hl-list' });
+    // 新出现的行滑进来；已经在的行不重播动画
+    const seen = hlSeen;
+    hlSeen = new Set();
+    const fresh = (key) => { hlSeen.add(key); return seen.size && !seen.has(key) ? ' fresh' : ''; };
+    if (L.last) list.append(h('div', { class: 'hl-last' }, L.last));
+    for (const g of L.groups) {
+      list.append(h('div', { class: `hl-street${fresh(`${view.handNo}|${g.street}|${g.board.join('')}`)}` }, h('span', {}, g.name), ...g.board.map(cardChip)));
+      for (const it of g.items) {
+        if (it.blind) { list.append(h('div', { class: `hl-item blind${fresh(`${view.handNo}|${it.seat}|${it.text}`)}` }, h('span', { class: 'no', style: { '--c': color(it.seat) } }, seatNum(it.seat)), h('span', { class: 'nm' }, seatChar(it.seat)?.name || seatName(it.seat)), h('span', { class: 'tx' }, it.text))); continue; }
+        const ply = base + (++k);
+        list.append(h('button', { class: `hl-item${spotPly === ply ? ' on' : ''}${fresh(`p${ply}`)}`, type: 'button', title: '在聚光框里看这一步的思考', onclick: () => { pinPly = pinPly === ply ? null : ply; renderSpot(); renderHandLog(); } },
+          h('span', { class: 'no', style: { '--c': color(it.seat) } }, seatNum(it.seat)),
+          h('span', { class: 'nm' }, seatChar(it.seat)?.name || seatName(it.seat)),
+          h('span', { class: 'tx' }, it.text)));
+      }
+    }
+    if (!L.count) list.append(h('div', { class: 'hl-empty' }, d.status === 'running' && viewPly === null ? '这一手还没有人行动' : '这一手没有行动'));
+    if (L.result) list.append(h('div', { class: `hl-res${fresh(`r${view.handNo}`)}` }, L.result));
+    handBox.replaceChildren(h('header', {}, h('b', {}, L.label || '本手记录'), h('span', {}, `${L.title} · ${L.sub}`)), list);
+    list.scrollTop = list.scrollHeight;
+  }
+
   function renderCamp(seat) {
     if (duo) { renderSeat(seat); return; }
+    if (hud) return;
     const c = seatChar(seat);
     const s = seatStats(seat);
     const thinking = d.status === 'running' && (partials.has(seat) || waitingHuman === seat);
@@ -329,6 +453,7 @@ export async function matchView(root, id, { characters }) {
     );
   }
 
+  let lastStatus = null;
   function renderStatus() {
     const running = d.status === 'running';
     const n = totalPlies();
@@ -339,11 +464,13 @@ export async function matchView(root, id, { characters }) {
     const btn = (label, title, fn) => h('button', { class: 'icon-btn', title, onclick: guard(fn) }, label);
     const po = pendingOffer();
     const reviewing = viewPly !== null;
+    const prevStatus = lastStatus;
+    lastStatus = status;
     statusBar.replaceChildren(
       h('div', { class: 'bar-info' },
         h('span', { class: 'gname' }, d.gameName || ''),
         h('span', { class: 'chip' }, MODE_NAMES[d.mode]),
-        h('span', { class: `stage-state${running ? '' : ' done'}` }, status),
+        h('span', { class: `stage-state${running ? '' : ' done'}${prevStatus !== null && prevStatus !== status ? ' swap' : ''}` }, status),
         h('span', { class: 'muted small', style: { whiteSpace: 'nowrap' } }, reviewing ? `${replaying ? '回放' : '复盘'} ${viewPly}/${n}` : `已走 ${n} 步`)),
       h('div', { class: 'bar-ctrl' },
         canReview() && n ? [
@@ -354,7 +481,7 @@ export async function matchView(root, id, { characters }) {
           reviewing ? btn('▶', '下一步', () => { stopReplay(); goto(Math.min(n, viewPly + 1)); }) : null,
           reviewing && running ? btn('⟳', '回到最新', () => { stopReplay(); goto(null); }) : null,
         ] : null,
-        running && !humanSeat ? btn(paused ? '▶' : '⏸', paused ? '继续' : '暂停', () => post(`/matches/${id}/control`, { op: paused ? 'resume' : 'pause' })) : null,
+        running && !hasHuman ? btn(paused ? '▶' : '⏸', paused ? '继续' : '暂停', () => post(`/matches/${id}/control`, { op: paused ? 'resume' : 'pause' })) : null,
         running && paused ? btn('⏭', '单步', () => post(`/matches/${id}/control`, { op: 'step' })) : null,
         running && waitingHuman && po && po.seat !== waitingHuman ? h('button', { class: 'btn sm primary', onclick: guard(() => post(`/matches/${id}/control`, { op: 'accept_draw' })) }, '接受和棋') : null,
         running && waitingHuman && d.features?.draw && !po ? h('button', { class: `btn sm${offerNext ? ' primary' : ''}`, title: '走下一步时同时向对方提出和棋', onclick: () => { offerNext = !offerNext; renderStatus(); } }, offerNext ? '走棋时提和 ✓' : '提和') : null,
@@ -443,7 +570,9 @@ export async function matchView(root, id, { characters }) {
     return [...turns.values()].filter((t) => t.label).sort((a, b) => a.ply - b.ply).map((t) => ({ seat: t.seat, label: t.label }));
   }
 
+  let movesShown = null;
   function renderMoves() {
+    if (hud) { renderHandLog(); return; }
     const all = moveItems();
     const items = noSpoil() && viewPly !== null ? all.slice(0, viewPly) : all;
     const cur = viewPly ?? items.length;
@@ -458,6 +587,12 @@ export async function matchView(root, id, { characters }) {
     if (two) for (let i = 0; i < items.length; i += 2) els.push(h('span', { class: 'mvpair' }, h('em', {}, i / 2 + 1), cell(i), cell(i + 1)));
     else for (let i = 0; i < items.length; i++) els.push(h('span', { class: 'mvpair' }, h('em', {}, i + 1), cell(i)));
     moves.replaceChildren(...(els.length ? els : [h('span', { class: 'muted small' }, '还没有行动')]));
+    // 新的一步弹出来
+    if (viewPly === null && movesShown !== null && items.length > movesShown) {
+      const all = moves.querySelectorAll('.mv');
+      for (let j = movesShown; j < items.length; j++) all[j]?.classList.add('fresh');
+    }
+    movesShown = items.length;
     logSum.textContent = `全部记录 · ${items.length} 条`;
     if (viewPly === null) moves.scrollTop = moves.scrollHeight;
     else {
@@ -511,8 +646,10 @@ export async function matchView(root, id, { characters }) {
       ...body);
   }
 
+  const seenCards = {};
   function renderThoughts() {
     if (duo) { renderFocus(); return; }
+    if (hud) { renderSpot(); renderHandLog(); return; }
     for (const seat of seats) {
       const cards = [];
       const p = partials.get(seat);
@@ -521,6 +658,12 @@ export async function matchView(root, id, { characters }) {
       const plies = [...turns.keys()].filter((k) => turns.get(k).seat === seat && k <= limit).sort((a, b) => b - a);
       for (const k of plies) cards.push(thoughtCard(turns.get(k)));
       if (!cards.length) cards.push(h('div', { class: 'camp-empty' }, d.status === 'running' ? '等待出手' : '没有记录'));
+      // 新出现的思考卡从上面滑进来（已经在的卡不重播）
+      if (viewPly === null) {
+        const prev = seenCards[seat];
+        seenCards[seat] = new Set(cards.map((x) => x.dataset?.ply).filter(Boolean));
+        if (prev) for (const x of cards) if (x.dataset?.ply && !prev.has(x.dataset.ply)) x.classList.add('fresh');
+      }
       const list = camps[seat].list;
       list.replaceChildren(...cards);
       if (viewPly !== null) {
@@ -571,9 +714,12 @@ export async function matchView(root, id, { characters }) {
       const t = turns.get(viewPly);
       stampFx(stampFor(t?.label, viewAt(viewPly)));
       const base = Math.min(5000, Math.max(900, (t?.latency_ms || 900) * 0.6 + (t?.analysis ? 600 : 0)));
-      replaying.timer = setTimeout(step, base / speed);
+      // 游戏要求的停顿（德州每手结算、开局提示）不随倍速缩短，画面要演完
+      const extra = renderer.pauseAfter ? renderer.pauseAfter(viewAt(viewPly - 1), viewAt(viewPly)) || 0 : 0;
+      replaying.timer = setTimeout(step, base / speed + extra);
     };
-    replaying.timer = setTimeout(step, 900 / speed);
+    const intro = from === 0 && renderer.pauseAfter ? renderer.pauseAfter(null, viewAt(0)) || 0 : 0;
+    replaying.timer = setTimeout(step, 900 / speed + intro);
     renderStatus();
   }
 
@@ -591,6 +737,7 @@ export async function matchView(root, id, { characters }) {
   function updateLive(seat) {
     if (liveTimers.has(seat) || viewPly !== null) return;
     if (duo) { liveTimers.set(seat, requestAnimationFrame(() => { liveTimers.delete(seat); if (focusOf() === seat) renderFocus(); })); return; }
+    if (hud) { liveTimers.set(seat, requestAnimationFrame(() => { liveTimers.delete(seat); renderSpot(); })); return; }
     liveTimers.set(seat, requestAnimationFrame(() => {
       liveTimers.delete(seat);
       const p = partials.get(seat);
@@ -624,7 +771,7 @@ export async function matchView(root, id, { characters }) {
   const stop = listen([`match:${id}`], async (e) => {
     switch (e.type) {
       case 'turn_start':
-        if (seatChar(e.seat)?.kind === 'human') { waitingHuman = e.seat; partials.delete(e.seat); await refresh(); }
+        if (e.seat && e.seat === humanSeat) { partials.delete(e.seat); await refresh(); waitingHuman = d.waitingHuman; }
         else partials.set(e.seat, { ply: e.ply, seat: e.seat, characterId: e.characterId, character_id: e.characterId, text: '', reasoning: '', attempts: [] });
         seats.forEach(renderCamp);
         renderStatus();
@@ -632,8 +779,10 @@ export async function matchView(root, id, { characters }) {
         renderStage(false);
         break;
       case 'human_turn':
-        waitingHuman = e.seat;
+        // 只有轮到我自己的座位才进入「轮到你」；别的真人在想时和模型一样显示思考中
         await refresh();
+        waitingHuman = d.waitingHuman;
+        if (e.seat && e.seat !== humanSeat && !partials.has(e.seat)) partials.set(e.seat, { ply: null, seat: e.seat, text: '', reasoning: '', attempts: [] });
         renderAll();
         break;
       case 'delta': {

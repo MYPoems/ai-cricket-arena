@@ -16,6 +16,8 @@ const app = document.getElementById('app');
 const meta = {};
 const session = { user: null, pending: 0, publicView: true };
 let cleanup = null;
+let pageInTimer = null;
+let routeSeq = 0; // 换页很快时，前一页还在加载：加载完发现已经不是当前页，就把它的监听关掉、不画
 
 async function reloadMeta() {
   Object.assign(meta, await api('/meta'));
@@ -35,6 +37,7 @@ const NEED_LOGIN = new Set(['new', 'settings', 'account', 'admin']);
 const PUBLIC_PAGES = new Set(['login', 'register']);
 
 async function route() {
+  const seq = ++routeSeq;
   cleanup?.();
   cleanup = null;
   // 换页时关掉弹窗；接入令牌弹窗（只显示一次）除外，要用户确认保存后自己关
@@ -72,8 +75,15 @@ async function route() {
     else if (page === 'account') r = await accountView(app, ctx);
     else if (page === 'admin') r = await adminView(app, ctx);
     else r = await lobbyView(app, ctx);
+    if (seq !== routeSeq) { if (typeof r === 'function') r(); return; }
     cleanup = typeof r === 'function' ? r : null;
     window.scrollTo(0, 0);
+    // 换页：新页面的几块依次浮上来；动画放完就摘掉，页面自己刷新内容时不再重播
+    app.classList.remove('page-in');
+    void app.offsetWidth;
+    app.classList.add('page-in');
+    clearTimeout(pageInTimer);
+    pageInTimer = setTimeout(() => app.classList.remove('page-in'), 900);
   } catch (e) {
     app.replaceChildren(h('div', { class: 'empty card' }, e.message));
     toast(e.message, true);

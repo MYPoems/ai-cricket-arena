@@ -198,22 +198,19 @@ export function routes(router, { db, hub, arena, matchmaker, compare, evaluator 
     return { id: arena.createMatch({ ...body, origin: 'manual', createdBy: user.id }) };
   });
 
-  router.get('/api/matches/:id', ({ params, query }) => arena.detail(params.id, query.viewer || null));
+  router.get('/api/matches/:id', ({ params, query, user }) => arena.detail(params.id, query.viewer || null, user?.id || null));
 
-  /** 真人落子：只有座位上那位真人的账号可以走 */
-  const humanOwner = (matchId) => {
+  /** 真人行动：只有坐在这盘里的真人账号可以走，而且只能走自己的座位（一盘里可以有多位真人） */
+  const mySeat = (matchId, user) => {
     const m = db.get('SELECT seats FROM matches WHERE id = ?', matchId);
     if (!m) throw new HttpError(404, '对局不存在');
-    for (const cid of Object.values(m.seats)) {
-      const c = db.get('SELECT kind, owner_id FROM characters WHERE id = ?', cid);
-      if (c?.kind === 'human') return c.owner_id;
-    }
-    return null;
+    return arena.seatOf(m, user?.id);
   };
 
   router.post('/api/matches/:id/move', ({ params, body, user }) => {
-    if (humanOwner(params.id) !== user.id) throw new HttpError(403, '这盘棋不是你在下');
-    arena.humanMove(params.id, String(body.action || ''), !!body.offerDraw);
+    const seat = mySeat(params.id, user);
+    if (!seat) throw new HttpError(403, '这盘棋不是你在下');
+    arena.humanMove(params.id, String(body.action || ''), !!body.offerDraw, seat);
     return { ok: true };
   });
 
@@ -221,10 +218,11 @@ export function routes(router, { db, hub, arena, matchmaker, compare, evaluator 
   router.post('/api/matches/:id/control', ({ params, body, user }) => {
     const m = db.get('SELECT created_by FROM matches WHERE id = ?', params.id);
     if (!m) throw new HttpError(404, '对局不存在');
-    const player = humanOwner(params.id) === user.id;
+    const seat = mySeat(params.id, user);
+    const player = !!seat;
     const owner = isAdmin(user) || m.created_by === user.id;
     if (['resign', 'accept_draw'].includes(body.op) ? !player : !(owner || player)) throw new HttpError(403, '你不能控制这盘对局');
-    return arena.control(params.id, body.op);
+    return arena.control(params.id, body.op, seat);
   });
 
   router.get('/api/matches/:id/export', ({ params, res }) => {

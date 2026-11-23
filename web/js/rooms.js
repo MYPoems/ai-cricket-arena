@@ -27,15 +27,24 @@ export async function roomsView(root, { meta, go, session }) {
     ]);
   };
 
-  const cards = list.map((r) => h('a', { class: 'card room', href: `#/room/${r.id}` },
+  const card = (r) => h('a', { class: 'card room', href: `#/room/${r.id}` },
     h('div', { class: 'row', style: { justifyContent: 'space-between' } }, h('span', { class: 't' }, r.title), h('span', { class: 'chip' }, r.gameName)),
     h('div', { class: 'slots' }, ...Object.values(r.seats).map((s) => s ? h('span', { class: 'coin sm', title: s.character.name }, s.character.avatar) : h('span', { class: 'slot-dot' }, '＋'))),
-    h('div', { class: 'small muted' }, `房主 ${r.host?.name || '—'} · ${r.filled}/${r.players} 人 · ${fmtTime(r.updated_at)}`)));
+    h('div', { class: 'small muted' }, `房主 ${r.host?.name || '—'} · ${r.filled}/${r.players} 人 · ${fmtTime(r.updated_at)}`));
+  const emptyBox = () => h('div', { class: 'empty card' }, h('div', {}, '现在没有等人的组局。'), session.user ? h('button', { class: 'btn primary', onclick: create }, '开第一个') : null);
 
   root.replaceChildren(
     pageHead('组局', '开一个局，大家把自己养的 AI 蛐蛐拉进来斗一场。', '组', session.user ? h('button', { class: 'btn primary lg', onclick: create }, '开一个组局') : h('a', { class: 'btn primary', href: '#/login' }, '登录后组局')),
-    list.length ? h('div', { class: 'rooms' }, cards) : h('div', { class: 'empty card' }, h('div', {}, '现在没有等人的组局。'), session.user ? h('button', { class: 'btn primary', onclick: create }, '开第一个') : null));
-  return listen(['lobby'], (e) => { if (e.type === 'room_updated') roomsView(root, { meta, go, session }); });
+    list.length ? h('div', { class: 'rooms' }, list.map(card)) : emptyBox());
+  // 列表有变化时只重画列表，不能再调 roomsView：那样每次都会多挂一个监听，旧的没人关，
+  // 进了房间后它还在，一有入座更新就把整页换回列表
+  let alive = true;
+  const stop = listen(['lobby'], guard(async (e) => {
+    if (e.type !== 'room_updated' || !alive) return;
+    const fresh = await api('/rooms');
+    if (alive && root.isConnected) root.querySelector('.rooms, .empty')?.replaceWith(fresh.length ? h('div', { class: 'rooms' }, fresh.map(card)) : emptyBox());
+  }));
+  return () => { alive = false; stop(); };
 }
 
 export async function roomView(root, id, { go, session, characters }) {
