@@ -68,7 +68,7 @@ export async function playView(root, { meta, characters, go }) {
       : null);
     modeSeg.replaceChildren(...[['casual', '娱乐赛'], ['ranked', '排位赛']].map(([v, l]) => h('button', { class: sel.mode === v ? 'on' : '', onclick: () => { sel.mode = v; redraw(); } }, l)));
     seatsBox.replaceChildren(...seatIds().map((seat, i) => h('div', { class: 'col', style: { gap: '8px' } },
-      h('div', { class: 'row', style: { gap: '8px' } }, h('span', { class: 'side-tag', style: { background: i === 0 ? 'var(--red)' : 'var(--text)' } }, g.seatNames[seat] || seat)),
+      h('div', { class: 'row', style: { gap: '8px' } }, h('span', { class: 'side-tag', style: { background: 'var(--text)' } }, g.seatNames[seat] || seat)),
       seatBox(seat))));
     startExtra.replaceChildren(
       sel.game === 'xiangqi' && sel.mode === 'casual' ? h('label', { class: 'field' }, h('span', {}, '起始局面'), startSel) : null,

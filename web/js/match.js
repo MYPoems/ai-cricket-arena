@@ -114,7 +114,8 @@ export async function matchView(root, id, { characters }) {
   }
 
   function seatStats(seat) {
-    const ts = [...turns.values()].filter((t) => t.seat === seat && t.label);
+    const limit = viewPly ?? Infinity;
+    const ts = [...turns.values()].filter((t) => t.seat === seat && t.label && t.ply <= limit);
     const tags = { 失误: 0, 大漏着: 0 };
     let lat = 0, tok = 0, illegal = 0, last = null;
     for (const t of ts) {
@@ -136,9 +137,10 @@ export async function matchView(root, id, { characters }) {
     const c = seatChar(seat);
     const s = seatStats(seat);
     const thinking = d.status === 'running' && (partials.has(seat) || waitingHuman === seat);
-    const change = d.rating_changes?.[d.seats[seat]];
+    const atEnd = viewPly === null || viewPly >= totalPlies();
+    const change = atEnd ? d.rating_changes?.[d.seats[seat]] : null;
     const ranks = d.result?.ranks;
-    const won = d.status === 'finished' && ranks && ranks[seat] === Math.min(...Object.values(ranks)) && !Object.values(ranks).every((r) => r === ranks[seat]);
+    const won = atEnd && d.status === 'finished' && ranks && ranks[seat] === Math.min(...Object.values(ranks)) && !Object.values(ranks).every((r) => r === ranks[seat]);
     const lastQ = s.last?.eval?.quality;
     const role = d.view?.roles?.[seat];
     camps[seat].el.classList.toggle('active', thinking);
@@ -177,17 +179,17 @@ export async function matchView(root, id, { characters }) {
     const thinkingSeats = [...partials.keys()];
     const status = running
       ? (paused ? '已暂停' : waitingHuman ? '轮到你' : thinkingSeats.length > 1 ? `${thinkingSeats.length} 人同时思考中` : thinkingSeats.length ? `${seatName(thinkingSeats[0])}思考中` : '…')
-      : resultText(d, d.seatNames);
+      : viewPly !== null && viewPly < n ? (replaying ? '回放中' : '复盘中') : resultText(d, d.seatNames);
     const btn = (label, title, fn) => h('button', { class: 'icon-btn', title, onclick: guard(fn) }, label);
     const po = pendingOffer();
     const reviewing = viewPly !== null;
     statusBar.replaceChildren(
-      h('div', { class: 'row', style: { gap: '8px', flexWrap: 'nowrap', minWidth: 0 } },
+      h('div', { class: 'bar-info' },
         h('span', { class: 'chip' }, d.gameName || ''),
         h('span', { class: 'chip' }, MODE_NAMES[d.mode]),
         h('span', { class: `stage-state${running ? '' : ' done'}` }, status),
         h('span', { class: 'muted small', style: { whiteSpace: 'nowrap' } }, reviewing ? `${replaying ? '回放' : '复盘'} ${viewPly}/${n}` : `已走 ${n} 步`)),
-      h('div', { class: 'row', style: { gap: '4px', flexWrap: 'nowrap' } },
+      h('div', { class: 'bar-ctrl' },
         canReview() && n ? [
           btn(replaying ? '⏸' : '⏵', replaying ? '暂停回放' : '从头回放', () => (replaying ? stopReplay() : startReplay(reviewing && viewPly < n ? viewPly : 0))),
           h('select', { class: 'speed', title: '回放速度', onchange: (e) => { speed = Number(e.target.value); } },
@@ -386,11 +388,12 @@ export async function matchView(root, id, { characters }) {
   function startReplay(from = 0) {
     if (!canReview()) return;
     replaying = { timer: null };
+    window.__replayDone = false;
     goto(from);
     const step = () => {
       const n = totalPlies();
       if (!replaying) return;
-      if (viewPly >= n) {
+      if (viewPly === null || viewPly >= n) {
         replaying = null;
         renderStatus();
         window.__replayDone = true;

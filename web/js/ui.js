@@ -13,7 +13,13 @@ export function h(tag, attrs = {}, ...children) {
   for (const [k, v] of Object.entries(attrs || {})) {
     if (v === null || v === undefined || v === false) continue;
     if (k === 'class') el.className = v;
-    else if (k === 'style' && typeof v === 'object') Object.assign(el.style, v);
+    else if (k === 'style' && typeof v === 'object') {
+      for (const [sk, sv] of Object.entries(v)) {
+        if (sv === null || sv === undefined) continue;
+        if (sk.startsWith('--')) el.style.setProperty(sk, String(sv));
+        else el.style[sk] = sv;
+      }
+    }
     else if (k.startsWith('on') && typeof v === 'function') el.addEventListener(k.slice(2).toLowerCase(), v);
     else if (k === 'html') el.innerHTML = v;
     else if (v === true) el.setAttribute(k, '');
@@ -106,16 +112,31 @@ export function modelLine(c) {
   if (c.kind === 'human') return '玩家';
   if (c.kind === 'builtin') return `内置 AI · ${c.level || 3} 层搜索`;
   if (c.kind === 'random') return '随机走子';
-  if (c.kind === 'engine') return `Pikafish · 每步 ${c.level || 200}ms`;
+  if (c.kind === 'engine') return `${{ pikafish: 'Pikafish', rapfi: 'Rapfi', stockfish: 'Stockfish' }[c.provider || 'pikafish'] || c.provider} · 每步 ${c.level || 200}ms`;
   return `${c.providerName || c.provider} · ${c.model}`;
 }
 
-export function resultText(m, seatNames = { r: '红方', b: '黑方' }) {
-  if (!m.result) return m.status === 'running' ? '进行中' : '';
-  if (m.result.aborted) return `中止：${m.result.reason}`;
-  if (!m.result.winner) return `和棋（${m.result.reason}）`;
-  const p = m.players?.[m.result.winner];
-  return `${p ? p.name : seatNames[m.result.winner]}胜（${m.result.reason}）`;
+/** 按名次判定某座位的结果：'w' 胜 / 'd' 和 / 'l' 负（支持团队和多人） */
+export function seatOutcome(result, seat) {
+  const ranks = result?.ranks;
+  if (!ranks || ranks[seat] === undefined) return result?.winner ? (result.winner === seat ? 'w' : 'l') : 'd';
+  const vals = Object.values(ranks);
+  const best = Math.min(...vals);
+  if (vals.every((r) => r === best)) return 'd';
+  return ranks[seat] === best ? 'w' : 'l';
+}
+
+export function resultText(m, seatNames = {}) {
+  const r = m.result;
+  if (!r) return m.status === 'running' ? '进行中' : '';
+  if (r.aborted) return `中止：${r.reason}`;
+  if (r.winnerTeam) return `${r.winnerTeam}胜（${r.reason}）`;
+  const seats = Object.keys(r.ranks || {});
+  const winners = seats.filter((s) => seatOutcome(r, s) === 'w');
+  if (seats.length && !winners.length) return `平局（${r.reason}）`;
+  if (!seats.length && !r.winner) return `和棋（${r.reason}）`;
+  const names = (winners.length ? winners : [r.winner]).map((s) => m.players?.[s]?.name || seatNames[s] || s);
+  return `${names.join('、')}胜（${r.reason}）`;
 }
 
 /** 弹窗 */

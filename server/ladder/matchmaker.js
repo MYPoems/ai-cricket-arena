@@ -1,6 +1,7 @@
 // 天梯自动匹配：选出今天还有余量的选手，列出段位相近的候选对手，由模型自己挑对手并写挑战宣言。
 
 import { gameList, getGame } from '../../games/index.js';
+import { seatOutcome } from '../stats.js';
 
 const shuffle = (a) => { const b = a.slice(); for (let i = b.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [b[i], b[j]] = [b[j], b[i]]; } return b; };
 import { canRank } from '../characters.js';
@@ -153,8 +154,9 @@ export class Matchmaker {
     const r = { w: 0, d: 0, l: 0 };
     for (const m of rows) {
       const mySeat = Object.entries(m.seats).find(([, id]) => id === a)[0];
-      if (!m.result.winner) r.d++;
-      else if (m.result.winner === mySeat) r.w++;
+      const o = seatOutcome(m.result, mySeat);
+      if (o === 'd') r.d++;
+      else if (o === 'w') r.w++;
       else r.l++;
     }
     return r;

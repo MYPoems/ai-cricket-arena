@@ -8,6 +8,11 @@
 const LOADERS = {
   xiangqi: () => import('./xiangqi.js'),
   gomoku: () => import('./gomoku.js'),
+  chess: () => import('./chess.js'),
+  doudizhu: () => import('./doudizhu.js'),
+  undercover: () => import('./undercover.js'),
+  poker: () => import('./poker.js'),
+  dilemma: () => import('./dilemma.js'),
 };
 
 export async function loadRenderer(gameId) {

@@ -205,7 +205,9 @@ export default {
     const t = String(text || '');
     const win = /胜率[:：]\s*(\d{1,3})/.exec(t);
     const winrate = win ? Math.min(100, Number(win[1])) : null;
-    const line = [...t.matchAll(/落子[:：]\s*([A-Oa-o])\s*(1[0-5]|[1-9])(?!\d)/g)].pop();
+    const lineText = [...t.matchAll(/落子[:：]\s*([^\n]*)/g)].pop()?.[1]?.trim();
+    const line = lineText ? /^([A-Oa-o])\s*(1[0-5]|[1-9])(?!\d)/.exec(lineText) : null;
+    if (lineText && !line) return { action: null, attempted: lineText.slice(0, 8), winrate, error: `「${lineText.slice(0, 12)}」不是合法坐标（列 A–O，行 1–15，例如 H8）` };
     let p = line ? parseCoord(line[1] + line[2]) : null;
     if (!p) {
       const all = [...t.matchAll(/\b([A-Oa-o])(1[0-5]|[1-9])\b/g)].pop();
@@ -248,11 +250,11 @@ export default {
   // ---------- 评估 ----------
   evalSpec(state) {
     if (state.winner) return null;
-    const stones = [];
-    for (let y = 0; y < SIZE; y++) for (let x = 0; x < SIZE; x++) {
-      const c = state.board[idx(x, y)];
-      if (c) stones.push({ x, y: SIZE - 1 - y, c }); // Piskvork 坐标：y 从上往下
-    }
+    // 按着手顺序列子：Rapfi 的 BOARD 命令依赖顺序（最后一子属于对方），乱序会让引擎替对方思考
+    const stones = state.moves.map((m) => {
+      const p = parseCoord(m.label);
+      return { x: p.x, y: SIZE - 1 - p.y, c: m.side }; // Piskvork 坐标：y 从上往下
+    });
     const top = ranked(state.board, state.side)[0];
     return {
       engine: 'rapfi', size: SIZE, stones, toMove: state.side, persp: state.side,

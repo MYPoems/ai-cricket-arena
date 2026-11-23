@@ -2,15 +2,17 @@
 
 import { h, api, post, guard, toast, tierBadge, avatar, listen } from './ui.js';
 
-export async function ladderView(root, { go }) {
+export async function ladderView(root, { go, meta }) {
   let view = 'characters';
+  let game = meta.games[0].id;
   const table = h('div', { class: 'card table-wrap' });
   const side = h('div', { class: 'col' });
 
   async function drawTable() {
-    const rows = await api(`/leaderboard?game=xiangqi&view=${view}`);
+    const rows = await api(`/leaderboard?game=${game}&view=${view}`);
+    const gameTabs = h('select', { style: { width: 'auto' }, onchange: (e) => { game = e.target.value; drawTable(); } }, ...meta.games.map((g) => h('option', { value: g.id, selected: g.id === game }, g.name)));
     const tabs = h('div', { class: 'seg' }, ...[['characters', '角色榜'], ['models', '模型榜']].map(([v, l]) => h('button', { class: view === v ? 'on' : '', onclick: () => { view = v; drawTable(); } }, l)));
-    const head = h('div', { class: 'pad section-title', style: { margin: 0 } }, h('h2', {}, '中国象棋排名'), tabs);
+    const head = h('div', { class: 'pad section-title', style: { margin: 0 } }, h('div', { class: 'row' }, h('h2', {}, '排名'), gameTabs), tabs);
     if (!rows.length) { table.replaceChildren(head, h('div', { class: 'empty' }, '还没有排位对局。开启自动匹配，或手动开一盘排位赛。')); return; }
     let rank = 0;
     table.replaceChildren(head, h('table', { class: 'list' },

@@ -18,9 +18,11 @@ class Abort extends Error {}
 // 任一方在走棋时可以附带提出和棋；对方下一步可以接受（对局以和棋结束），照常走棋即视为拒绝。
 // 被拒后同一方 20 步（各 10 回合）内再提会被忽略，避免反复提和。
 export const DRAW_COOLDOWN_PLIES = 20;
-export const DRAW_RULE = '【提和】如果你判断局面已经是和棋、继续下去只是浪费步数，可以在回答最后多写一行「求和：是」向对方提出和棋（这一步的着法照常写、照常走）。对方向你提和时我会告诉你：接受就把着法那一行写成「着法：接受和棋」，不接受就照常走棋。提和被拒后，10 个回合内不能再提。';
+/** 提和规则说明，按各游戏的行动叫法（着法 / 落子）写 */
+export const drawRule = (noun = '着法') => `【提和】如果你判断局面已经是和棋、继续下去只是浪费步数，可以在回答最后多写一行「求和：是」向对方提出和棋（这一步的${noun}照常写）。对方向你提和时我会告诉你：接受就把${noun}那一行写成「${noun}：接受和棋」，不接受就照常走。提和被拒后，10 个回合内不能再提。`;
+export const DRAW_RULE = drawRule('着法');
 const OFFER_RE = /求和[:：]\s*(是|提出|要)/;
-const ACCEPT_RE = /着法[:：]\s*(接受和棋|同意和棋|接受求和|和棋)/;
+const ACCEPT_RE = /(着法|落子|行动)[:：]\s*(接受和棋|同意和棋|接受求和|和棋)/;
 
 function drawState(m) {
   if (!m.options.draw) m.options.draw = { offers: [] };
@@ -84,6 +86,10 @@ export class Arena {
       if (new Set(ids.filter((id) => !system.has(id))).size < ids.filter((id) => !system.has(id)).length) throw new HttpError(400, '排位赛里同一名选手不能占多个座位');
     }
     const seed = Number.isInteger(options.seed) ? options.seed : Math.floor(Math.random() * 2 ** 31);
+    // 排位赛按游戏规定自动成为系列赛：五子棋等交换先后手，斗地主、德州复式轮换座位（同一副牌）
+    if (mode === 'ranked' && game.rankedSeries && !options.series) {
+      options = { ...options, series: { id: `s_${Date.now().toString(36)}`, leg: 1, of: game.rankedSeries.legs, seed } };
+    }
     let state;
     try {
       state = game.create({ players: n, seed, setup });
@@ -314,8 +320,10 @@ export class Arena {
         seat, offer: !!offer,
         resolve: (action, offerDraw = false) => {
           const acts = game.actions(state, seat);
-          if (acts && !acts.some((a) => a.id === action)) throw new HttpError(400, `不合法的行动：${action}`);
-          if (!acts) game.apply(state, seat, action); // 自由文本：用 apply 校验，不合法会抛错
+          if (!acts || !acts.some((a) => a.id === action)) {
+            // 自由文本，或不在代表性列表里的行动（例如德州的任意加注额）：交给游戏规则校验
+            try { game.apply(state, seat, action); } catch (e) { throw new HttpError(400, e.message); }
+          }
           delete rt.humans[seat];
           resolve({ action, offerDraw });
         },
@@ -340,13 +348,13 @@ export class Arena {
         ? this.db.all('SELECT text FROM notes WHERE character_id = ? ORDER BY created_at DESC LIMIT ?', ch.id, NOTES_IN_PROMPT).map((n) => n.text)
         : [];
       let system = game.systemPrompt(seat, { style: ch.style, showLegal, players: Object.keys(m.seats).length, state });
-      if (game.features?.draw) system += `\n\n${DRAW_RULE}`;
+      if (game.features?.draw) system += `\n\n${drawRule(game.noun)}`;
       if (notes.length) system += `\n\n【你以前对局的复盘笔记】\n${notes.map((n, i) => `${i + 1}. ${n}`).join('\n')}`;
       conv = m.conversations[seat] = { system, messages: [], drawRule: !!game.features?.draw };
     }
     let turn = game.turnPrompt(state, seat, { showLegal });
-    if (game.features?.draw && !conv.drawRule && !conv.system.includes('求和')) { turn = `${DRAW_RULE}\n\n${turn}`; conv.drawRule = true; }
-    if (offer) turn = `对方提出了和棋。接受就把着法那一行写成「着法：接受和棋」；不接受就照常走棋。\n\n${turn}`;
+    if (game.features?.draw && !conv.drawRule && !conv.system.includes('求和')) { turn = `${drawRule(game.noun)}\n\n${turn}`; conv.drawRule = true; }
+    if (offer) turn = `对方提出了和棋。接受就把${game.noun || '着法'}那一行写成「${game.noun || '着法'}：接受和棋」；不接受就照常走。\n\n${turn}`;
     conv.messages.push({ role: 'user', content: turn });
 
     const attempts = [];

@@ -8,7 +8,6 @@ async function preload(list) {
   for (const m of list) if (!renderers[m.game]) renderers[m.game] = await loadRenderer(m.game).catch(() => null);
 }
 
-const SEAT_NAME = { r: '红方', b: '黑方' };
 
 function ago(iso) {
   if (!iso) return '';
@@ -18,7 +17,7 @@ function ago(iso) {
   return `开局 ${Math.floor(s / 3600)} 小时 ${Math.floor((s % 3600) / 60)} 分`;
 }
 
-const who = (p) => (p?.kind === 'model' ? p.model : p?.kind === 'human' ? '玩家' : p?.kind === 'builtin' ? '内置 AI' : p?.kind === 'engine' ? 'Pikafish' : '随机走子');
+const who = (p) => (p?.kind === 'model' ? p.model : p?.kind === 'human' ? '玩家' : p?.kind === 'builtin' ? '内置 AI' : p?.kind === 'engine' ? ({ pikafish: 'Pikafish', rapfi: 'Rapfi', stockfish: 'Stockfish' }[p.provider || 'pikafish'] || '引擎') : '随机走子');
 
 export async function lobbyView(root, { go }) {
   let data = await api('/lobby');
@@ -71,8 +70,9 @@ export async function lobbyView(root, { go }) {
     c.board.render(m.view, { movable: null, arrows: [], animate });
     const red = m.redE ?? 0.5;
     c.winbar.querySelector('.red').style.height = `${red * 100}%`;
-    c.winbar.title = `红方胜率 ${Math.round(red * 100)}%`;
-    const state = m.paused ? '已暂停' : m.thinking ? `${SEAT_NAME[m.thinking]}思考中` : '等待中';
+    const first = Object.keys(m.players)[0];
+    c.winbar.title = `${m.seatNames?.[first] || ''}胜率 ${Math.round(red * 100)}%`;
+    const state = m.paused ? '已暂停' : m.thinking ? `${m.seatNames?.[m.thinking] || m.thinking}思考中` : '等待中';
     c.top.replaceChildren(
       h('span', { class: 'row', style: { gap: '6px' } }, h('span', { class: 'chip' }, m.gameName), h('span', { class: 'chip' }, MODE_NAMES[m.mode] || m.mode)),
       h('span', { class: 'label', style: { color: m.thinking && !m.paused ? 'var(--red)' : '' } }, `${state} · 第 ${m.plies} 步`));

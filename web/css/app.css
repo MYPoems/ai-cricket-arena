@@ -240,7 +240,7 @@ svg.board .hit { fill: transparent; cursor: pointer; }
   --pad: 14px;
   --gap: 18px;
   --side: 300px;
-  --below: 204px; /* 状态栏 40 + 走势 56 + 着法 84 + 间距 24 */
+  --below: 230px; /* 状态栏 66 + 走势 56 + 着法 84 + 间距 24 */
   --wb: 26px; /* 胜率条宽度 + 间距 */
   --aw: 572; --ah: 632; /* 游戏画面的宽高比，由各游戏模块提供 */
   --bh: min(calc(100vh - var(--top) - 2 * var(--pad) - var(--below)), calc((100vw - 2 * var(--side) - 2 * var(--gap) - 2 * var(--pad) - var(--wb)) * var(--ah) / var(--aw)));
@@ -251,7 +251,7 @@ svg.board .hit { fill: transparent; cursor: pointer; }
   gap: var(--gap);
   padding: var(--pad);
 }
-.arena.no-winbar { --below: 140px; --wb: 0px; }
+.arena.no-winbar { --below: 166px; --wb: 0px; }
 .camp-col { display: flex; flex-direction: column; gap: 12px; min-height: 0; min-width: 0; }
 .camp-col > .camp { flex: 1; }
 .stage { display: flex; flex-direction: column; gap: 8px; min-width: 0; min-height: 0; }
@@ -291,7 +291,11 @@ svg.board.gomoku .ghost { pointer-events: none; opacity: .4; }
 svg.board.gomoku .ghost.b { fill: #131311; }
 svg.board.gomoku .ghost.w { fill: #fbf8f1; stroke: #131311; }
 svg.board.gomoku.can-move { cursor: pointer; }
-.stage-bar { height: 40px; flex: none; display: flex; align-items: center; justify-content: space-between; gap: 8px; border-bottom: 2px solid var(--line); }
+.stage-bar { height: 66px; flex: none; display: flex; flex-direction: column; justify-content: center; gap: 4px; border-bottom: 2px solid var(--line); }
+.stage-bar .bar-info { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.stage-bar .bar-info .stage-state { flex: 1; min-width: 0; }
+.stage-bar .bar-ctrl { display: flex; align-items: center; gap: 2px; flex-wrap: nowrap; overflow: hidden; }
+.stage-bar .bar-ctrl .btn { margin-left: 4px; }
 .stage-state { font-weight: 700; font-size: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--red); }
 .stage-state.done { color: var(--text); }
 .icon-btn { width: 30px; height: 30px; border: 1px solid transparent; background: transparent; cursor: pointer; display: grid; place-items: center; color: var(--muted); font-size: 14px; flex: none; text-decoration: none; }
@@ -375,7 +379,7 @@ svg.board.gomoku.can-move { cursor: pointer; }
 .typing::after { content: '▍'; animation: pulse 1s infinite; margin-left: 1px; color: var(--red); }
 
 @media (max-width: 1100px) {
-  .arena { display: flex; flex-direction: column; height: auto; --bw: min(calc(100vw - 2 * var(--pad) - 26px), 560px); --bh: calc(var(--bw) * 632 / 572); }
+  .arena { display: flex; flex-direction: column; height: auto; --bw: min(calc(100vw - 2 * var(--pad) - var(--wb)), 560px); --bh: calc(var(--bw) * var(--ah) / var(--aw)); }
   .stage { order: -1; align-items: center; }
   .stage > * { width: 100%; max-width: calc(var(--bw) + var(--wb)); }
   .camp-thoughts { max-height: 60vh; }

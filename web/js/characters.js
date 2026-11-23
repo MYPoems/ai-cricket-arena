@@ -1,6 +1,6 @@
 // 选手：列表、新建、主页。
 
-import { h, api, post, patch, guard, toast, tierBadge, avatar, modelLine, fmtTime, fmtMs, fmtTokens, MODE_NAMES, resultText, dialog } from './ui.js';
+import { h, api, post, patch, guard, toast, tierBadge, avatar, modelLine, fmtTime, fmtMs, fmtTokens, MODE_NAMES, resultText, dialog, seatOutcome } from './ui.js';
 
 const EMOJIS = ['🦊', '🐯', '🐼', '🦁', '🐉', '🦅', '🐺', '🦉', '🐬', '🦄', '🐢', '🐲', '🦈', '🐙', '🦚', '🐝', '🐧', '🦝', '🐸', '🦋', '🐳', '🦜', '🐻', '🐨'];
 const STYLE_EXAMPLES = ['喜欢弃子抢攻，宁可冒险也不求和。', '稳健防守，先保证不丢子，再寻找对方破绽。', '偏爱炮的进攻，开局常走中炮。'];
@@ -170,7 +170,7 @@ function radar(metrics) {
 export async function profileView(root, id, { meta, go, reloadMeta }) {
   const p = await api(`/characters/${id}`);
   const c = p.character;
-  const g = p.games[0];
+  const g = p.games.slice().sort((a, b) => b.rating.played - a.rating.played)[0]; // 主页显示下得最多的游戏
   const r = g.rating;
   const mySeat = (m) => Object.entries(m.seats).find(([, x]) => x === c.id)?.[0];
 
@@ -240,11 +240,11 @@ export async function profileView(root, id, { meta, go, reloadMeta }) {
           h('tr', {}, h('th', {}, '时间'), h('th', {}, '对手'), h('th', {}, '执'), h('th', {}, '模式'), h('th', {}, '结果'), h('th', { class: 'num' }, '积分')),
           ...p.matches.map((x) => {
             const s = mySeat(x);
-            const opp = x.players[s === 'r' ? 'b' : 'r'];
-            const res = x.status === 'running' ? '进行中' : x.result?.aborted ? '中止' : !x.result?.winner ? '和' : x.result.winner === s ? '胜' : '负';
+            const opp = { name: Object.entries(x.players).filter(([seat]) => seat !== s).map(([, pl]) => pl?.name).join('、') };
+            const res = x.status === 'running' ? '进行中' : x.result?.aborted ? '中止' : ({ w: '胜', d: '和', l: '负' })[seatOutcome(x.result, s)];
             const delta = x.rating_changes?.[c.id]?.delta;
             return h('tr', { class: 'click', onclick: () => go(`#/match/${x.id}`) },
-              h('td', { class: 'muted' }, fmtTime(x.created_at)), h('td', {}, opp?.name || ''), h('td', {}, h('span', { class: `side-mark ${s}` })),
+              h('td', { class: 'muted' }, fmtTime(x.created_at)), h('td', {}, opp?.name || ''), h('td', {}, x.seatNames?.[s] || s),
               h('td', {}, MODE_NAMES[x.mode]), h('td', { title: resultText(x) }, res),
               h('td', { class: 'num' }, delta === undefined ? '' : h('span', { style: { color: delta >= 0 ? 'var(--good)' : 'var(--bad)' } }, delta >= 0 ? `+${delta}` : delta)));
           }))) : h('div', { class: 'empty' }, '还没有对局')),

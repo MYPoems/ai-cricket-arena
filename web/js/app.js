@@ -23,7 +23,7 @@ const go = (hash) => { location.hash = hash; };
 async function route() {
   cleanup?.();
   cleanup = null;
-  const parts = location.hash.replace(/^#\/?/, '').split('/').filter(Boolean);
+  const parts = location.hash.replace(/^#\/?/, '').split('?')[0].split('/').filter(Boolean);
   const [page = 'lobby', id] = parts;
   const navKey = { lobby: 'lobby', new: 'play', match: 'lobby', characters: 'characters', ladder: 'ladder', compare: 'compare', history: 'history', settings: 'settings' }[page] || 'lobby';
   document.querySelectorAll('#nav a').forEach((a) => a.classList.toggle('on', a.dataset.r === navKey));

@@ -78,7 +78,7 @@ export class Compare {
       } else if (c.kind === 'builtin') {
         action = game.id === 'xiangqi' ? (await this.arena.aiPool.run('move', game.fen(state), c.level || 3)).move : await game.builtinMove(state, seat, { level: c.level || 2, depth: c.level || 2 });
       } else if (c.kind === 'engine') {
-        action = await this.arena.evaluator.bestMove(spec, c.level || 200);
+        action = await this.arena.evaluator.bestMove(game.evalSpec(state), c.level || 200);
       } else {
         const acts = game.actions(state, seat);
         action = acts[Math.floor(Math.random() * acts.length)].id;

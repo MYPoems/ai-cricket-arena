@@ -3,6 +3,17 @@
 import { gameList } from '../games/index.js';
 import { leaderboard, tierOf } from './ladder/rating.js';
 
+/** 按名次判定某座位的结果：'w' 胜 / 'd' 和 / 'l' 负（支持团队和多人） */
+export function seatOutcome(result, seat) {
+  const ranks = result?.ranks;
+  if (!ranks || ranks[seat] === undefined) return result?.winner ? (result.winner === seat ? 'w' : 'l') : 'd';
+  const vals = Object.values(ranks);
+  const best = Math.min(...vals);
+  if (vals.every((r) => r === best)) return 'd';
+  return ranks[seat] === best ? 'w' : 'l';
+}
+
+
 export function characterProfile(db, arena, c) {
   const games = gameList().map((g) => {
     const row = leaderboard(db, g.id).find((r) => r.character_id === c.id);
@@ -25,8 +36,9 @@ export function characterProfile(db, arena, c) {
     for (const [seat, id] of Object.entries(m.seats)) {
       if (seat === mySeat || id === c.id) continue;
       const rec = h2h.get(id) || { opponent: m.players[seat], w: 0, d: 0, l: 0 };
-      if (!m.result.winner) rec.d++;
-      else if (m.result.winner === mySeat) rec.w++;
+      const o = seatOutcome(m.result, mySeat);
+      if (o === 'd') rec.d++;
+      else if (o === 'w') rec.w++;
       else rec.l++;
       h2h.set(id, rec);
     }
@@ -67,7 +79,7 @@ export function characterProfile(db, arena, c) {
   let best = null;
   for (const m of matches) {
     const mySeat = Object.entries(m.seats).find(([, id]) => id === c.id)?.[0];
-    if (m.status !== 'finished' || m.result.winner !== mySeat) continue;
+    if (m.status !== 'finished' || seatOutcome(m.result, mySeat) !== 'w') continue;
     const pm = perMatch.get(m.id);
     if (!pm || pm.n < 10) continue;
     const avg = pm.sum / pm.n;
