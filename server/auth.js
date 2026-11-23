@@ -105,6 +105,7 @@ export function userFromRequest(db, req) {
 
 const hits = new Map();
 function limit(key, max, windowMs) {
+  if (process.env.ARENA_DEV === '1' && !process.env.ARENA_TEST_LIMIT) return; // 本机开发模式不限流
   const t = Date.now();
   const arr = (hits.get(key) || []).filter((x) => t - x < windowMs);
   if (arr.length >= max) throw new HttpError(429, '操作太频繁，请稍后再试');
