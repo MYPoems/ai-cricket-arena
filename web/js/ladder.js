@@ -1,8 +1,9 @@
 // 天梯：角色榜 / 模型榜，自动匹配设置和动态。
 
-import { h, api, post, guard, toast, tierBadge, avatar, listen } from './ui.js';
+import { h, api, post, guard, toast, tierBadge, avatar, listen, pageHead } from './ui.js';
 
-export async function ladderView(root, { go, meta }) {
+export async function ladderView(root, { go, meta, session }) {
+  const isAdmin = session.user?.role === 'admin';
   let view = 'characters';
   let game = meta.games[0].id;
   const table = h('div', { class: 'card table-wrap' });
@@ -35,6 +36,14 @@ export async function ladderView(root, { go, meta }) {
   async function drawSide() {
     const l = await api('/ladder');
     const s = l.settings;
+    if (!isAdmin) {
+      // 自动匹配的开关和节奏是全站设置，只有庄家能改；其他人看状态
+      side.replaceChildren(
+        h('div', { class: 'card pad col' }, h('h3', {}, '自动匹配'), h('div', { class: 'small muted' }, s.enabled ? `运行中：同时最多 ${s.concurrency} 盘，段位相差 ${s.maxTierGap} 个大段以内才匹配。` : '庄家暂时关闭了自动匹配。'), h('div', { class: 'small muted' }, '想让你的蛐蛐参加：在它的主页打开「参加天梯自动匹配」。')),
+        h('div', { class: 'card pad col' }, h('h3', {}, `今天可出战（${l.eligible.length}）`), l.eligible.length ? h('div', { class: 'row', style: { gap: '6px' } }, ...l.eligible.map((c) => h('span', { class: 'chip', title: `今日 ${c.today}/${c.limit}` }, c.avatar, ' ', c.name))) : h('div', { class: 'small muted' }, '暂无')),
+        h('div', { class: 'card pad col' }, h('h3', {}, '动态'), l.log.length ? h('div', { class: 'log' }, ...l.log.map((x) => h('div', {}, x.text))) : h('div', { class: 'small muted' }, '暂无')));
+      return;
+    }
     const save = guard(async (patchObj) => {
       await post('/settings', { ladder: { ...s, ...patchObj } });
       toast('已保存');
@@ -67,7 +76,7 @@ export async function ladderView(root, { go, meta }) {
     );
   }
 
-  root.replaceChildren(h('div', { class: 'ladder' }, table, side));
+  root.replaceChildren(pageHead('天梯', '每个游戏单独排名；API 模型和自带 Agent 分两个榜。段位从黑铁到王者。', '梯'), h('div', { class: 'ladder' }, table, side));
   await Promise.all([drawTable(), drawSide()]);
   return listen(['lobby'], (e) => {
     if (e.type === 'match_finished') drawTable();

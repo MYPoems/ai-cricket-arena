@@ -88,8 +88,11 @@ function paintUser() {
   userBox.replaceChildren(u
     ? h('a', { class: 'user-chip', href: '#/account', title: '我的账号' }, h('span', { class: 'coin' }, (u.name || u.username).slice(0, 1)), h('span', {}, u.name || u.username))
     : h('a', { class: 'btn sm primary', href: '#/login' }, '登录'));
+  // 用 style.display 控制显示：.nav a 的 display:flex 会盖过 hidden 属性
   navAdmin.hidden = u?.role !== 'admin';
+  navAdmin.style.display = u?.role === 'admin' ? '' : 'none';
   pendingBadge.hidden = !session.pending;
+  pendingBadge.style.display = session.pending ? '' : 'none';
   pendingBadge.textContent = String(session.pending || '');
 }
 

@@ -2,7 +2,9 @@
 
 import { h, api, post, guard, avatar, modelLine, MODE_NAMES, listen } from './ui.js';
 
-export async function playView(root, { meta, characters, go }) {
+export async function playView(root, { meta, characters, go, session }) {
+  // 排位赛由天梯自动匹配产生；只有庄家能手动开排位（测试用）
+  const canRanked = session.user?.role === 'admin';
   const [liveMatches, puzzles] = await Promise.all([api('/matches?status=running&limit=30'), api('/puzzles')]);
   const games = meta.games;
   const pickable = characters.filter((c) => !c.archived);
@@ -66,7 +68,7 @@ export async function playView(root, { meta, characters, go }) {
         h('select', { style: { width: 'auto' }, onchange: (e) => { sel.players = Number(e.target.value); defaults(); redraw(); } },
           ...Array.from({ length: g.players.max - g.players.min + 1 }, (_, i) => g.players.min + i).map((n) => h('option', { value: n, selected: n === (sel.players || g.players.default) }, `${n} 人`))))
       : null);
-    modeSeg.replaceChildren(...[['casual', '娱乐赛'], ['ranked', '排位赛']].map(([v, l]) => h('button', { class: sel.mode === v ? 'on' : '', onclick: () => { sel.mode = v; redraw(); } }, l)));
+    modeSeg.replaceChildren(...[['casual', '娱乐赛'], ...(canRanked ? [['ranked', '排位赛']] : [])].map(([v, l]) => h('button', { class: sel.mode === v ? 'on' : '', onclick: () => { sel.mode = v; redraw(); } }, l)));
     seatsBox.replaceChildren(...seatIds().map((seat, i) => h('div', { class: 'col', style: { gap: '8px' } },
       h('div', { class: 'row', style: { gap: '8px' } }, h('span', { class: 'side-tag', style: { background: 'var(--text)' } }, g.seatNames[seat] || seat)),
       seatBox(seat))));
@@ -98,6 +100,7 @@ export async function playView(root, { meta, characters, go }) {
   root.replaceChildren(h('div', { class: 'setup' },
     h('div', { class: 'col', style: { gap: '22px' } },
       h('div', { class: 'section-title', style: { margin: 0 } }, h('h2', {}, '开一局'), modeSeg),
+      h('div', { class: 'small muted' }, '座位上可以放你自己的蛐蛐、你本人和系统选手。想和别人的蛐蛐斗，去「组局」。'),
       h('div', { class: 'row' }, gameSeg, playersSel),
       seatsBox,
       h('div', { class: 'grid2' },
