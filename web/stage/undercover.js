@@ -210,8 +210,9 @@ export default {
     for (const a of movable && Array.isArray(actions) ? actions : []) {
       if (/^p\d$/.test(a.id)) picks[a.id] = `${view.phase === 'revote' ? '重投' : '投票'}放逐 ${no(a.id)} 号`;
     }
-    const lastSpeech = {};
-    for (const sp of view.speeches || []) lastSpeech[sp.seat] = sp;
+    // 每个人的全部描述：对局页点座位后在焦点区按轮次列出
+    const saidBy = {};
+    for (const sp of view.speeches || []) (saidBy[sp.seat] ||= []).push({ tag: `第 ${sp.round} 轮${sp.tie ? ' · 加赛' : ''}`, text: sp.text });
     const outRound = Object.fromEntries((view.outInfo || []).map((o) => [o.seat, o.round]));
     const seats = {};
     for (const s of view.seats) {
@@ -222,9 +223,9 @@ export default {
       const r = view.identity?.[s];
       // 词：上帝视角全部；玩家视角只有自己的，别人的扣着
       const w = view.words?.[s];
-      const sp = lastSpeech[s];
       seats[s] = {
-        note: sp ? clip(sp.text) : s in outRound ? `第 ${outRound[s]} 轮出局` : '',
+        note: s in outRound ? `第 ${outRound[s]} 轮出局` : '',
+        said: saidBy[s] || [],
         state: st.join(' '),
         role: r ? { text: r, color: ROLE_COLOR[r] || null } : null,
         word: w ? { text: w, back: false, spy: r === '卧底' } : { back: true }, // spy：已知是卧底的词（对局页可用 .word.spy 标红）
@@ -297,7 +298,8 @@ export default {
         // ---------- 舞台 ----------
         body.replaceChildren(...[
           wordsBlock(view),
-          el('div', { class: 'panels' }, speechPanel(view), votePanel(view)),
+          // 描述改到对局页焦点区按人看，这里只留票型；描述阶段还没有票就不占地方
+          (view.phase === 'speak' || view.phase === 'tiespeak') && !(view.voteLog || []).some((v) => v.round >= view.round - 1) ? null : votePanel(view),
           historyBlock(view),
         ].filter(Boolean));
         for (const l of body.querySelectorAll('.uc-list')) l.scrollTop = l.scrollHeight; // 最新的在下面

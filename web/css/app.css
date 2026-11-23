@@ -716,6 +716,12 @@ pre.code { margin: 0; padding: 14px 80px 14px 16px; overflow-x: auto; border-rad
   padding: var(--pad);
 }
 .arena.no-winbar { --below: 190px; }
+/* 德州：牌桌是横向的，两侧选手栏收窄，把宽度让给牌桌 */
+.arena.g-poker { --side: 248px; }
+.arena.g-poker .camp-name .row { flex-wrap: wrap !important; row-gap: 4px !important; }
+.arena.g-poker .camp-name .row > b { order: -1; flex: 1 1 100%; min-width: 0; }
+.arena.g-poker .camp-head { padding: 12px 12px 13px; }
+.arena.g-poker .cs small { font-size: 9.5px; letter-spacing: -.02em; }
 .camp-col { display: flex; flex-direction: column; gap: 14px; min-height: 0; min-width: 0; padding-bottom: 4px; }
 .camp-col > .camp { flex: 1; }
 .stage { display: flex; flex-direction: column; gap: 10px; min-width: 0; min-height: 0; }
@@ -965,12 +971,113 @@ pre.code { margin: 0; padding: 14px 80px 14px 16px; overflow-x: auto; border-rad
 .act { display: grid; grid-template-columns: 5.6em minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 7px 0; border-top: 1px solid var(--rule); font-size: 13.5px; }
 .act:first-of-type { border-top: 0; }
 
+/* ---- 对称座位版式第二版：座位卡瘦身，发言收进焦点区 ----
+   座位列按每列人数（data-n：2–5）分档：人少时卡片大一点、列宽一点，人多时紧凑；中间舞台拿到更多宽度。 */
+.arena.duo { --seat-col: clamp(212px, 18vw, 268px); grid-template-columns: var(--seat-col) minmax(0, 1fr) var(--seat-col); }
+.arena.duo[data-n="2"], .arena.duo[data-n="3"] { --seat-col: clamp(220px, 19vw, 280px); }
+.arena.duo .seats { gap: 12px; }
+.arena.duo .seat { flex: 0 1 auto; min-height: 0; height: var(--seat-h, 88px); max-height: none; grid-template-columns: 24px auto minmax(0, 1fr) auto; gap: 10px; padding: 8px 12px 8px 8px; }
+.arena.duo .seat.mir { padding: 8px 8px 8px 12px; }
+.arena.duo .seat .no { width: 24px; height: 42px; font-size: 15px; }
+.arena.duo .seat .coin { width: 42px; height: 42px; font-size: 23px; margin: 0 1px 4px; }
+.arena.duo .seat .nm { font-size: 15px; }
+.arena.duo .seat .md { font-size: 11.5px; }
+.arena.duo .seat .cnt { margin-top: 4px; font: 600 11px/1 var(--sans); letter-spacing: .06em; color: var(--gold-2); opacity: .8; }
+.arena.duo .seat .side { gap: 5px; padding-bottom: 2px; }
+.arena.duo .seat .role { font-size: 11px; padding: 4px 7px; }
+.arena.duo .seat .word { font-size: 16px; padding: 5px 7px 6px; }
+.arena.duo .seat .votes { font-size: 12.5px; padding: 4px 7px; }
+/* 每列 2–3 人：卡片稍大，头像 48 */
+.arena.duo[data-n="2"] { --seat-h: 112px; }
+.arena.duo[data-n="3"] { --seat-h: 100px; }
+.arena.duo[data-n="2"] .seat .coin, .arena.duo[data-n="3"] .seat .coin { width: 48px; height: 48px; font-size: 26px; }
+.arena.duo[data-n="2"] .seat .no, .arena.duo[data-n="3"] .seat .no { height: 48px; }
+.arena.duo[data-n="2"] .seat .nm, .arena.duo[data-n="3"] .seat .nm { font-size: 16px; }
+/* 每列 4–5 人：按可用高度均分，最多 88 */
+.arena.duo[data-n="4"] { --seat-h: min(88px, calc((100vh - var(--top) - 2 * var(--pad) - 3 * 12px - 10px) / 4)); }
+.arena.duo[data-n="5"] { --seat-h: min(84px, calc((100vh - var(--top) - 2 * var(--pad) - 4 * 12px - 10px) / 5)); }
+.arena.duo[data-n="5"] .seat .md { display: none; }
+.arena.duo[data-n="5"] .seat .coin { width: 38px; height: 38px; font-size: 21px; }
+
+/* 焦点区：头像一行横排；下面「说的」（这个人的全部发言）和「想的」左右并排，各自滚动 */
+.arena.duo .stage > .focus { flex: 1 1 280px; min-height: 240px; overflow: hidden; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); align-content: stretch; gap: 10px 14px; padding: 2px 2px 4px; }
+.arena.duo .stage > .focus > .who { grid-column: 1 / -1; grid-row: auto; display: flex; align-items: center; gap: 12px; max-width: none; margin: 0; text-align: left; min-width: 0; }
+.arena.duo .stage > .focus > .who .coin.lg { width: 46px; height: 46px; font-size: 25px; flex: none; }
+.arena.duo .stage > .focus > .who .id { display: grid; gap: 3px; min-width: 0; }
+.arena.duo .stage > .focus > .who .id b { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.arena.duo .stage > .focus > .who .id small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.arena.duo .stage > .focus > .who .hint { margin-left: auto; font-size: 12px; color: var(--faint); white-space: nowrap; }
+.arena.duo .stage > .focus > .who .hint:empty { display: none; }
+.arena.duo .stage > .focus > .who .btn { margin-left: auto; flex: none; }
+.arena.duo .stage > .focus > .said, .arena.duo .stage > .focus > .thought2 { grid-column: auto; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.arena.duo .stage > .focus > .said { padding: 12px 16px 12px; font-size: 15px; }
+.arena.duo .stage > .focus > .said::before { display: none; }
+.said-list { flex: 1; min-height: 0; overflow-y: auto; display: grid; align-content: start; gap: 2px; scrollbar-width: thin; margin-right: -8px; padding-right: 8px; }
+.said-list .sp { display: grid; grid-template-columns: 5.2em minmax(0, 1fr); gap: 10px; align-items: baseline; padding: 6px 0; border-top: 1px solid rgb(120 84 30 / .18); }
+.said-list .sp:first-child { border-top: 0; }
+.said-list .tg { font: 600 11px/1.5 var(--sans); letter-spacing: .04em; color: rgb(110 72 22 / .85); white-space: nowrap; }
+.said-list .tx { font: 500 15px/1.6 var(--serif); color: #2a1209; overflow-wrap: anywhere; }
+.said-list .sp.last .tx { font-weight: 700; }
+.said-list .sp.act .tx { color: #8e2414; }
+.said-list .sp.live .tx { color: rgb(110 72 22 / .85); }
+.said-list .none { font: 500 14px/1.6 var(--serif); color: rgb(90 60 20 / .6); padding-top: 4px; }
+.arena.duo .stage > .focus > .thought2 { white-space: normal; }
+.thought2 .tt { flex: 1; min-height: 0; overflow-y: auto; white-space: pre-wrap; scrollbar-width: thin; }
+.arena.duo .duo-stage { flex: 0 1 auto; min-height: 0; max-height: 42%; }
+/* 全部记录：默认收起成一行 */
+.duo-log { flex: none; }
+.duo-log > summary { cursor: pointer; list-style: none; display: inline-flex; align-items: center; gap: 6px; font: 600 12.5px/1 var(--sans); letter-spacing: .08em; color: var(--muted); padding: 4px 2px; border-radius: var(--r-sm); }
+.duo-log > summary::-webkit-details-marker { display: none; }
+.duo-log > summary::before { content: '▸'; color: var(--gold-2); transition: rotate .2s; }
+.duo-log[open] > summary::before { rotate: 90deg; }
+.duo-log > summary:hover { color: var(--text); }
+.duo-log > summary:focus-visible { outline: 2px solid var(--gold-2); outline-offset: 2px; }
+.duo-log > .stage-moves { margin-top: 6px; }
+
+/* 可选目标（投票、刀人、查验、下毒、开枪）：金边呼吸，夜里被压暗的座位也要亮出来 */
+.seat.pickable { cursor: pointer; opacity: 1; filter: none; --edge-now: var(--edge-hi); box-shadow: var(--hi), 0 0 0 1px #040100, 0 0 0 3px var(--lac-2), 0 0 0 4px rgb(240 205 120 / .85), 0 0 18px 2px rgb(240 205 120 / .35), var(--e2); animation: pick-breathe 1.6s ease-in-out infinite; }
+.seat.pickable:hover { translate: 0 -2px; box-shadow: var(--hi), 0 0 0 1px #040100, 0 0 0 3px var(--lac-2), 0 0 0 4px #f6dc9c, 0 0 26px 4px rgb(240 205 120 / .55), var(--e3); }
+.seat.pickable:focus-visible { outline: 2px solid #f6dc9c; outline-offset: 4px; }
+@keyframes pick-breathe { 50% { box-shadow: var(--hi), 0 0 0 1px #040100, 0 0 0 3px var(--lac-2), 0 0 0 4px rgb(240 205 120 / .55), 0 0 8px 1px rgb(240 205 120 / .2), var(--e2); } }
+@media (prefers-reduced-motion: reduce) { .seat.pickable { animation: none; } }
+
+/* 没有想法可看时，「说的」占满整行 */
+.arena.duo .stage > .focus.solo { grid-template-columns: minmax(0, 1fr); }
+.arena.duo .stage > .focus > .who .chip { flex: none; }
+
+/* 窄屏（≤1100）：左右两列和中间舞台拆开重排——转播条、场景条、座位格、焦点、操作和面板、记录 */
 @media (max-width: 1100px) {
-  .arena.duo .seats { flex-direction: row; flex-wrap: wrap; }
-  .arena.duo .seat { flex: 1 1 280px; max-height: none; }
-  .arena.duo .stage > * { max-width: none; }
+  .arena.duo { display: grid; grid-template-columns: repeat(var(--cols, 4), minmax(0, 1fr)); gap: 10px; align-content: start; }
+  .arena.duo .seats, .arena.duo .stage { display: contents; }
+  .arena.duo .stage > * { grid-column: 1 / -1; max-width: none; min-width: 0; }
+  .arena.duo .stage-bar { order: 1; }
+  .arena.duo .scene { order: 2; }
+  .arena.duo .seat { order: 3; }
+  .arena.duo .stage > .focus { order: 4; flex: none; min-height: 0; grid-template-rows: auto auto; overflow: visible; }
+  .arena.duo .duo-stage { order: 5; max-height: none; overflow: visible; }
+  .arena.duo .duo-log { order: 6; }
+  .arena.duo .stage > .focus > .said .said-list, .arena.duo .stage > .focus > .thought2 .tt { max-height: 240px; }
+  /* 座位成头像格：号码牌贴在左上角，头像、名字、身份竖排 */
+  .arena.duo .seat, .arena.duo .seat.mir { direction: ltr; position: relative; height: auto; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr); justify-items: center; align-content: start; gap: 4px; padding: 10px 4px 8px; text-align: center; }
+  .arena.duo .seat .no { position: absolute; left: 4px; top: 4px; z-index: 1; width: 18px; height: 22px; font-size: 11px; }
+  .arena.duo .seat .coin { margin-top: 6px !important; }
+  .arena.duo .seat .coin, .arena.duo[data-n] .seat .coin { width: 40px; height: 40px; font-size: 22px; margin: 0; }
+  .arena.duo .seat .info, .arena.duo .seat.mir .info { width: 100%; text-align: center; }
+  .arena.duo .seat .nm, .arena.duo[data-n] .seat .nm { font-size: 12.5px; -webkit-line-clamp: 1; }
+  .arena.duo .seat .md, .arena.duo .seat .cnt { display: none; }
+  .arena.duo .seat .side { display: flex; flex-wrap: wrap; justify-content: center; gap: 3px; padding: 0; }
+  .arena.duo .seat .role { font-size: 10px; padding: 3px 5px; }
+  .arena.duo .seat .word { font-size: 13px; padding: 3px 5px 4px; }
+  .arena.duo .seat .votes { font-size: 10.5px; padding: 3px 6px; }
+  .arena.duo .seat .wave { position: absolute; right: 6px; top: 6px; height: 12px; }
 }
-@media (max-width: 640px) { .panels { grid-template-columns: 1fr; } .stage > .focus { gap: 12px 14px; padding-left: 4px; } .scene { padding: 0 12px; } .scene .t { font-size: 30px; } }
+@media (max-width: 640px) {
+  .panels { grid-template-columns: 1fr; }
+  .arena.duo { gap: 8px; }
+  .arena.duo .stage > .focus { grid-template-columns: minmax(0, 1fr); }
+  .arena.duo .stage > .focus > .who .hint { display: none; }
+  .scene { padding: 0 12px; } .scene .t { font-size: 30px; }
+}
 
 /* 高光大印：从大到小盖下来，落下时压一下 */
 .stamp-fx { position: fixed; left: 50%; top: 44%; z-index: 60; pointer-events: none; translate: -50% -50%; font: 400 120px/1 var(--brush); padding: 14px 34px 22px;
@@ -1043,3 +1150,24 @@ svg.board.gomoku.can-move { cursor: pointer; }
 
 /* HTML 画的桌面（斗地主、德州）自带投影，外层不再加滤镜，免得动画每帧重算 */
 .board-wrap:has(> .board-html) { filter: none; }
+/* 舞台里单独一块的面板（票型）也要内边距；座位名过长时折成两行，不再一律省略 */
+.duo-stage .panel { padding: 12px 16px 14px; }
+.arena.duo .seat .nm { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; line-height: 1.25; overflow-wrap: anywhere; }
+/* 扣着的词：牌背（漆底金格 + 问号），不再是一块空白 */
+.seat .word.back { min-width: 2.2em; display: inline-grid; place-items: center; color: rgb(246 220 156 / .9); font: 400 15px/1 var(--brush);
+  background: repeating-linear-gradient(45deg, rgb(240 205 120 / .16) 0 1px, transparent 1px 6px), repeating-linear-gradient(-45deg, rgb(240 205 120 / .16) 0 1px, transparent 1px 6px), linear-gradient(180deg, #6a1c12, #3a0c08);
+  box-shadow: inset 0 0 0 1px rgb(240 205 120 / .55), inset 0 0 0 3px rgb(58 12 8 / .9), 0 1px 0 #1a0402, 0 2px 3px rgb(0 0 0 / .45); }
+.seat .word.back::after { content: '？'; }
+/* 焦点区按内容撑开，内容多了才在各自框里滚动，不再拉出一大片空白宣纸 */
+.arena.duo .stage > .focus { flex: 0 1 auto; min-height: 0; }
+.arena.duo .stage > .focus > .said, .arena.duo .stage > .focus > .thought2 { max-height: 100%; }
+.arena.duo .stage > .focus > .said { min-height: 96px; }
+/* 矮屏（如 1280×720）：场景条压矮，焦点区至少留 150px，面板在自己的框里滚动 */
+@media (max-height: 820px) and (min-width: 1101px) {
+  .arena.duo .stage { gap: 9px; }
+  .arena.duo .scene { height: 74px; }
+  .arena.duo .scene .t { font-size: 30px; }
+  .arena.duo .stage > .focus { min-height: 150px; }
+  .arena.duo .stage > .focus > .who .coin.lg { width: 38px; height: 38px; font-size: 21px; }
+  .arena.duo .seats { gap: 9px; }
+}

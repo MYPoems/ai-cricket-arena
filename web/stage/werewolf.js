@@ -326,8 +326,9 @@ export default {
       for (const s of pend) lit.add(s);
       if (view.phase === 'wolf') for (const s of view.seats) if (view.identity?.[s] === 'wolf' && alive.has(s)) lit.add(s);
     }
-    const lastSpeech = {};
-    for (const sp of view.speeches || []) lastSpeech[sp.seat] = sp;
+    // 每个人的全部公开发言：对局页点座位后在焦点区按轮次列出
+    const saidBy = {};
+    for (const sp of view.speeches || []) (saidBy[sp.seat] ||= []).push({ tag: `第 ${sp.day} 天${sp.kind === 'last' ? ' · 遗言' : sp.kind === 'tie' ? ' · 平票' : ''}`, text: sp.text });
     const deathOf = Object.fromEntries((view.deaths || []).map((d) => [d.seat, d]));
     const seats = {};
     for (const s of view.seats) {
@@ -343,11 +344,10 @@ export default {
         const chk = (view.checks || []).findLast((c) => c.target === s);
         if (chk) role = chk.wolf ? { text: '查杀', color: ROLE_COLOR.狼人 } : { text: '金水', color: ROLE_COLOR.预言家 };
       }
-      const sp = lastSpeech[s];
       const d = deathOf[s];
-      const note = sp ? `${sp.kind === 'last' ? '遗言：' : ''}${clip(sp.text)}` : d ? `第 ${d.day} ${d.time === 'night' ? '夜' : '天'}出局` : '';
       seats[s] = {
-        note,
+        note: d ? `第 ${d.day} ${d.time === 'night' ? '夜' : '天'}出局` : '',
+        said: saidBy[s] || [],
         state: st.join(' '),
         role,
         word: null,
@@ -438,7 +438,8 @@ export default {
         const parts = [];
         if (view.phase === 'over') parts.push(newsBlock(view), el('div', { class: 'panels' }, rolesPanel(view), todayVotes(view).length ? votePanel(view) : deathsPanel(view)));
         else if (night) parts.push(el('div', { class: 'panels' }, nightPanel(view), deathsPanel(view)));
-        else parts.push(newsBlock(view), el('div', { class: 'panels' }, speechPanel(view), votePanel(view)));
+        // 白天：发言改到对局页焦点区按人看，这里只留公告和票型
+        else parts.push(newsBlock(view), todayVotes(view).length || isVoting(view) ? votePanel(view) : null);
         body.replaceChildren(...parts.filter(Boolean));
         for (const l of body.querySelectorAll('.ww-list')) l.scrollTop = l.scrollHeight; // 最新的在下面
       },

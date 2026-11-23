@@ -92,15 +92,20 @@ export async function matchView(root, id, { characters }) {
 
   const seatEls = Object.fromEntries(seats.map((s) => [s, h('div', { class: 'seat' })]));
   const sceneEl = h('div', { class: 'scene' });
+  const logSum = h('span', {}, '全部记录');
   const focusEl = h('div', { class: 'focus' });
   if (duo) {
-    root.replaceChildren(h('div', { class: `arena duo no-winbar${recordMode ? ' recording' : ''}` },
+    // 全部行动记录默认收起：发言在焦点区按人看，这里只留给想逐步翻的人
+    const logBox = h('details', { class: 'duo-log' }, h('summary', {}, logSum), moves);
+    // data-n：每列最多几个座位，样式按它给座位卡分档（4 人局每列 2 个，9 人局左列 5 个）
+    // --cols：窄屏时座位排成头像格，一行几个（5 人以内一行排完，再多分两行）
+    root.replaceChildren(h('div', { class: `arena duo no-winbar g-${d.game}${recordMode ? ' recording' : ''}`, 'data-n': Math.ceil(seats.length / 2), style: { '--cols': seats.length <= 5 ? seats.length : Math.ceil(seats.length / 2) } },
       h('div', { class: 'seats' }, ...leftSeats.map((s) => seatEls[s])),
-      h('section', { class: 'stage' }, statusBar, sceneEl, focusEl, h('div', { class: 'duo-stage' }, stage.el), moves),
+      h('section', { class: 'stage' }, statusBar, sceneEl, focusEl, h('div', { class: 'duo-stage' }, stage.el), logBox),
       h('div', { class: 'seats' }, ...rightSeats.map((s) => seatEls[s])),
     ));
   } else {
-    root.replaceChildren(h('div', { class: `arena${winbarOn ? '' : ' no-winbar'}${recordMode ? ' recording' : ''}`, style: { '--aw': aw, '--ah': ah } },
+    root.replaceChildren(h('div', { class: `arena g-${d.game}${winbarOn ? '' : ' no-winbar'}${recordMode ? ' recording' : ''}`, style: { '--aw': aw, '--ah': ah } },
       h('div', { class: 'camp-col' }, ...leftSeats.map((s) => camps[s].el)),
       h('section', { class: 'stage' },
         statusBar,
@@ -200,7 +205,7 @@ export async function matchView(root, id, { characters }) {
     const speaking = st.includes('speaking') || (thinking && partials.size <= 1);
     const cls = ['seat', rightSeats.includes(seat) ? 'mir' : '', st.replace('speaking', ''), speaking ? 'speaking' : '', focusOf() === seat ? 'focused' : '', info.pick ? 'pickable' : ''].filter(Boolean).join(' ');
     const el = h('div', {
-      class: cls, role: 'button', tabindex: 0, title: info.pick ? info.pickTitle || '选这个人' : '看这个人的想法',
+      class: cls, role: 'button', tabindex: 0, title: info.pick ? info.pickTitle || '选这个人' : `看 ${seats.indexOf(seat) + 1} 号的发言和想法`,
       onclick: () => {
         if (info.pick) {
           // 毒药不可撤回，先确认一次
@@ -215,7 +220,9 @@ export async function matchView(root, id, { characters }) {
     },
     h('span', { class: 'no' }, seats.indexOf(seat) + 1),
     h('span', { class: 'coin' }, c?.avatar || '？', st.includes('dead') ? h('span', { class: 'dead-mark' }, '亡') : null),
-    h('div', { class: 'info' }, h('b', { class: 'nm' }, c?.name || '？'), h('div', { class: 'md' }, modelLine(c)), info.note ? h('div', { class: 'note' }, info.note) : null),
+    // 发言不再铺在座位卡上，点座位在中间焦点区看；这里只标说过几句
+    h('div', { class: 'info' }, h('b', { class: 'nm' }, c?.name || '？'), h('div', { class: 'md' }, modelLine(c)),
+      info.said?.length ? h('div', { class: 'cnt' }, `发言 ${info.said.length}`) : null),
     h('div', { class: 'side' },
       info.role ? h('span', { class: 'role', style: { '--rc': info.role.color || 'var(--jade)' } }, info.role.text) : null,
       info.word ? h('span', { class: `word${info.word.back ? ' back' : ''}${info.word.spy ? ' spy' : ''}` }, info.word.back ? '' : info.word.text) : null,
@@ -245,13 +252,28 @@ export async function matchView(root, id, { characters }) {
       : live ? (live.text || live.reasoning || '思考中…')
         : a ? LINE_KEYS.filter((k) => a[k] && k !== '发言' && k !== '投票').map((k) => `${k}：${a[k]}`).join('\n') || t?.analysis || ''
           : t?.analysis || t?.reasoning || '';
+    // 「说的」：这个人全部的公开发言（按轮次），最后一步若不是发言（投票、用药）单列一行
+    const said = info.said || [];
+    const isSpeech = (label) => said.some((x) => label.includes(x.text) || x.text.includes(label));
+    const recent = !live && t?.label && !isSpeech(t.label) ? t.label : null;
+    const lines = said.map((x, i) => h('div', { class: `sp${i === said.length - 1 && !recent && !live ? ' last' : ''}` }, h('span', { class: 'tg' }, x.tag), h('span', { class: 'tx' }, x.text)));
+    if (recent) lines.push(h('div', { class: 'sp act last' }, h('span', { class: 'tg' }, '刚才'), h('span', { class: 'tx' }, recent)));
+    if (live) lines.push(h('div', { class: 'sp live' }, h('span', { class: 'tg' }, '此刻'), h('span', { class: 'tx' }, '正在想…')));
+    const saidBox = h('div', { class: 'said-list' }, ...(lines.length ? lines : [h('div', { class: 'none' }, '还没有开口')]));
+    // 没有想法可看（内置 AI 不写想法，或真人局里 AI 的想法要等终局）：「说的」占满整行，想法那栏收成一句说明
+    const solo = !live && (hidden || !thoughtText);
+    focusEl.className = `focus${solo ? ' solo' : ''}`;
     focusEl.replaceChildren(
-      // 结构按设计系统：.focus 的直接子元素依次是头像区、说的、想的
-      h('div', { class: 'who' }, h('span', { class: 'coin lg' }, c?.avatar || '？'), h('b', { class: 'gold-text' }, `${seats.indexOf(seat) + 1} 号 · ${c?.name || '？'}`), h('small', {}, modelLine(c)),
+      // 结构：头像行（横排）+「说的」+「想的」；宽屏时说的、想的左右并排
+      h('div', { class: 'who' }, h('span', { class: 'coin lg' }, c?.avatar || '？'),
+        h('div', { class: 'id' }, h('b', { class: 'gold-text' }, `${seats.indexOf(seat) + 1} 号 · ${c?.name || '？'}`), h('small', {}, modelLine(c))),
         info.role ? h('span', { class: 'role', style: { '--rc': info.role.color || 'var(--jade)' } }, info.role.text) : null,
+        hidden ? h('span', { class: 'chip' }, '想法对局结束后公开') : null,
+        h('span', { class: 'hint' }, focusSeat ? '' : '点座位换人看'),
         focusSeat ? h('button', { class: 'btn sm ghost', onclick: () => { focusSeat = null; seats.forEach(renderSeat); renderFocus(); } }, '跟随当前') : null),
-      h('div', { class: 'paper said' }, h('span', { class: 'lab' }, live ? '正在想' : '说的'), t?.label ? t.label : live ? '…' : '还没有开口'),
-      h('div', { class: `well thought2${live ? ' typing' : ''}` }, h('span', { class: 'lab' }, hidden || d.viewer ? '想的' : '想的 · 上帝视角'), thoughtText || '（点左右的座位，看其他人的发言和想法）'));
+      h('div', { class: 'paper said' }, h('span', { class: 'lab' }, said.length ? `说的 · ${said.length} 句` : '说的'), saidBox),
+      solo ? null : h('div', { class: `well thought2${live ? ' typing' : ''}` }, h('span', { class: 'lab' }, d.viewer ? '想的' : '想的 · 上帝视角'), h('div', { class: 'tt' }, thoughtText || '思考中…')));
+    saidBox.scrollTop = saidBox.scrollHeight;
   }
 
   function renderCamp(seat) {
@@ -424,6 +446,7 @@ export async function matchView(root, id, { characters }) {
     if (two) for (let i = 0; i < items.length; i += 2) els.push(h('span', { class: 'mvpair' }, h('em', {}, i / 2 + 1), cell(i), cell(i + 1)));
     else for (let i = 0; i < items.length; i++) els.push(h('span', { class: 'mvpair' }, h('em', {}, i + 1), cell(i)));
     moves.replaceChildren(...(els.length ? els : [h('span', { class: 'muted small' }, '还没有行动')]));
+    logSum.textContent = `全部记录 · ${items.length} 条`;
     if (viewPly === null) moves.scrollTop = moves.scrollHeight;
     else {
       const on = moves.querySelector('.mv.on');
