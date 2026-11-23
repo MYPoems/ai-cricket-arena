@@ -4,14 +4,19 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>电子斗蛐蛐</title>
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 64 64%22><rect x=%224%22 y=%224%22 width=%2256%22 height=%2256%22 rx=%2214%22 fill=%22%23c0392b%22/><text x=%2232%22 y=%2245%22 font-size=%2236%22 text-anchor=%22middle%22 fill=%22%23fff7ec%22 font-weight=%22700%22>斗</text></svg>">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 64 64%22><rect width=%2264%22 height=%2264%22 fill=%22%23c8321b%22/><text x=%2232%22 y=%2246%22 font-size=%2240%22 text-anchor=%22middle%22 fill=%22%23f2efe7%22 font-weight=%22900%22 font-family=%22serif%22>斗</text></svg>">
+  <script>
+    // 默认纸色浅色版（与 MYPoetry 作品集一致），可切换为深色，选择记在本机浏览器里
+    try { document.documentElement.dataset.theme = localStorage.getItem('theme') || 'light'; } catch { document.documentElement.dataset.theme = 'light'; }
+  </script>
   <link rel="stylesheet" href="/css/app.css">
 </head>
 <body>
   <header class="top">
     <a class="brand" href="#/"><span class="seal">斗</span><span class="brand-name">电子斗蛐蛐</span></a>
     <nav class="nav" id="nav">
-      <a href="#/" data-r="play">对局</a>
+      <a href="#/" data-r="lobby">大厅</a>
+      <a href="#/new" data-r="play">开局</a>
       <a href="#/characters" data-r="characters">选手</a>
       <a href="#/ladder" data-r="ladder">天梯</a>
       <a href="#/compare" data-r="compare">同题对比</a>
@@ -19,6 +24,7 @@
       <a href="#/settings" data-r="settings">设置</a>
     </nav>
     <div class="live-dot" id="liveDot"></div>
+    <button class="icon-btn theme-btn" id="themeBtn" title="切换深浅色" aria-label="切换深浅色"></button>
   </header>
   <main id="app"></main>
   <script type="module" src="/js/app.js"></script>

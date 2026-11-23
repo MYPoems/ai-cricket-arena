@@ -15,6 +15,7 @@ import { Compare } from './compare.js';
 import { ensureSystemCharacters, ensureEngineCharacter } from './characters.js';
 import { routes } from './api.js';
 import { setCliWorkRoot } from './providers/cli.js';
+import { lobbyRoutes } from './lobby.js';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 if (existsSync(join(ROOT, '.env'))) process.loadEnvFile(join(ROOT, '.env'));
@@ -52,8 +53,11 @@ arena.onFinish = () => matchmaker.tick().catch(() => {});
 
 const router = new Router();
 routes(router, { db, hub, arena, matchmaker, compare, evaluator, ownerId: OWNER });
+lobbyRoutes(router, { db, arena });
 
-const server = createServer(handler(router, [['/games/', join(ROOT, 'games')], ['/', join(ROOT, 'web')]]));
+// 字体与 MYPoetry 作品集相同，自托管（SIL OFL），不依赖外部字体服务
+const FONTS = join(ROOT, 'node_modules', '@fontsource-variable');
+const server = createServer(handler(router, [['/games/', join(ROOT, 'games')], ['/fonts/', FONTS], ['/', join(ROOT, 'web')]]));
 server.listen(PORT, HOST, () => {
   console.log(`电子斗蛐蛐已启动：http://${HOST === '0.0.0.0' ? 'localhost' : HOST}:${PORT}`);
   if (HOST !== '127.0.0.1' && HOST !== 'localhost' && !process.env.ARENA_PASSWORD) {

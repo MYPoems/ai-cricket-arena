@@ -2,6 +2,7 @@
 
 import { api, toast, listen } from './ui.js';
 import { playView } from './play.js';
+import { lobbyView } from './lobby.js';
 import { matchView } from './match.js';
 import { charactersView, profileView } from './characters.js';
 import { ladderView } from './ladder.js';
@@ -23,12 +24,12 @@ async function route() {
   cleanup?.();
   cleanup = null;
   const parts = location.hash.replace(/^#\/?/, '').split('/').filter(Boolean);
-  const [page = 'play', id] = parts;
-  const navKey = { match: 'play', characters: 'characters', ladder: 'ladder', compare: 'compare', history: 'history', settings: 'settings' }[page] || 'play';
+  const [page = 'lobby', id] = parts;
+  const navKey = { lobby: 'lobby', new: 'play', match: 'lobby', characters: 'characters', ladder: 'ladder', compare: 'compare', history: 'history', settings: 'settings' }[page] || 'lobby';
   document.querySelectorAll('#nav a').forEach((a) => a.classList.toggle('on', a.dataset.r === navKey));
   document.body.dataset.page = page === 'match' && id ? 'match' : page;
   try {
-    const characters = ['play', 'match', 'compare'].includes(page) ? await api('/characters') : [];
+    const characters = ['new', 'match', 'compare'].includes(page) ? await api('/characters') : [];
     const ctx = { meta, characters, go, reloadMeta };
     let r;
     if (page === 'match' && id) r = await matchView(app, id, ctx);
@@ -39,7 +40,8 @@ async function route() {
     else if (page === 'compare') r = await compareNewView(app, ctx);
     else if (page === 'history') r = await historyView(app, ctx);
     else if (page === 'settings') r = await settingsView(app, ctx);
-    else r = await playView(app, ctx);
+    else if (page === 'new') r = await playView(app, ctx);
+    else r = await lobbyView(app, ctx);
     cleanup = typeof r === 'function' ? r : null;
     window.scrollTo(0, 0);
   } catch (e) {
@@ -47,6 +49,17 @@ async function route() {
     toast(e.message, true);
   }
 }
+
+// 深浅色切换
+const themeBtn = document.getElementById('themeBtn');
+const paintTheme = () => { themeBtn.textContent = document.documentElement.dataset.theme === 'dark' ? '☀' : '☾'; };
+themeBtn.addEventListener('click', () => {
+  const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+  document.documentElement.dataset.theme = next;
+  try { localStorage.setItem('theme', next); } catch { /* 无法保存时只在本次生效 */ }
+  paintTheme();
+});
+paintTheme();
 
 // 顶栏：进行中的对局数
 const dot = document.getElementById('liveDot');
