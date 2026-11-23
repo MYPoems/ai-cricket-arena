@@ -82,5 +82,8 @@ const shutdown = () => {
   db.close();
   process.exit(0);
 };
+// 兜底：单个请求或对局里的意外错误不能让整个服务退出
+process.on('unhandledRejection', (err) => console.error('未处理的异步错误：', err));
+process.on('uncaughtException', (err) => console.error('未捕获的错误：', err));
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);

@@ -359,13 +359,31 @@ export function parseActionText(text) {
     .replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0))
     .replace(/(\d),(\d{3})/g, '$1$2')
     .replace(/[*`_]/g, '');
-  if (/全下|全押|梭哈|all[\s-]*in|shove|jam/i.test(t)) return { kind: 'allin' };
-  const r = RAISE_RE.exec(t);
-  if (r) return { kind: 'raise', to: cnToInt(r[1]) };
-  if (/弃牌|弃掉|盖牌|\bfold\b|^\s*弃\s*$/i.test(t)) return { kind: 'fold' };
-  if (/跟注|\bcall\b|^\s*跟\s*$|跟进|跟\s*\d/i.test(t)) return { kind: 'call' };
-  if (/过牌|让牌|\bcheck\b|^\s*过\s*$|看牌/i.test(t)) return { kind: 'check' };
-  if (/加注|下注|raise|\bbet\b/i.test(t)) return { kind: 'raise', to: null };
+  // 去掉括号里的说明（「弃牌（对手全下，赔率不够）」），再取最先出现的行动词，避免说明里的词抢先
+  const u = t.replace(/[（(【\[][^）)】\]]*[）)】\]]/g, ' ');
+  const cands = [
+    ['allin', /全下|全押|梭哈|all[\s-]*in|shove|jam/i],
+    ['raise', RAISE_RE],
+    ['fold', /弃牌|弃掉|盖牌|\bfold\b|^\s*弃\s*$/i],
+    ['call', /跟注|\bcall\b|^\s*跟\s*$|跟进|跟\s*\d/i],
+    ['check', /过牌|让牌|\bcheck\b|^\s*过\s*$|看牌/i],
+    ['raise?', /加注|下注|raise|\bbet\b/i],
+  ];
+  let best = null;
+  for (const [kind, re] of cands) {
+    // 跳过被否定的词：「不加注，跟注」是跟注
+    const g = new RegExp(re.source, re.flags.includes('g') ? re.flags : `${re.flags}g`);
+    let m;
+    while ((m = g.exec(u))) {
+      if (!/[不别没]\s*$/.test(u.slice(Math.max(0, m.index - 2), m.index))) break;
+      if (!m[0].length) g.lastIndex++;
+    }
+    if (m && (!best || m.index < best.m.index)) best = { kind, m };
+  }
+  if (!best) return null;
+  if (best.kind === 'raise') return { kind: 'raise', to: cnToInt(best.m[1]) };
+  if (best.kind === 'raise?') return { kind: 'raise', to: null };
+  return { kind: best.kind };
   return null;
 }
 

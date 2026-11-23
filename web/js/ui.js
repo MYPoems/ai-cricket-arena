@@ -41,8 +41,8 @@ export const $ = (sel, root = document) => root.querySelector(sel);
 export async function api(path, { method = 'GET', body } = {}) {
   const res = await fetch(`/api${path}`, {
     method,
-    headers: body ? { 'Content-Type': 'application/json' } : {},
-    body: body ? JSON.stringify(body) : undefined,
+    headers: method !== 'GET' ? { 'Content-Type': 'application/json' } : {}, // 服务端要求写操作带 JSON 类型，防跨站表单
+    body: method !== 'GET' ? JSON.stringify(body || {}) : undefined,
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || `请求失败（${res.status}）`);

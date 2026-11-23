@@ -45,6 +45,7 @@ export const PRESETS = {
       return budget ? { enable_thinking: true, thinking_budget: budget } : {};
     }),
     echoReasoning: false,
+    baseURLPattern: /^https:\/\/([a-z0-9-]+\.)+aliyuncs\.com\//i, // 只能改成阿里云自己的地址（工作空间专属地址）
     note: '百炼新版推荐用工作空间专属地址 https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1，可在选手配置里改。',
   },
   glm: {
@@ -174,15 +175,27 @@ export function cliAvailable(api) {
   return api === 'claude-cli' ? !!findClaudeCli() : !!findCodexCli();
 }
 
+/** 按 id 取平台（只认自己的键，'__proto__' 之类返回 null） */
+export const presetOf = (id) => (typeof id === 'string' && Object.hasOwn(PRESETS, id) ? PRESETS[id] : null);
+
+/** 只有自定义接口和本地 Ollama 可以改地址；有密钥的预置平台永远用官方地址，避免密钥被发到别处 */
+export function canSetBaseURL(id, url) {
+  const p = presetOf(id);
+  if (!p || p.cli) return false;
+  if (p.custom || p.local) return true;
+  return !!(p.baseURLPattern && url && p.baseURLPattern.test(url));
+}
+export const baseURLFor = (id, given) => (given && canSetBaseURL(id, given) ? given : presetOf(id)?.baseURL);
+
 /** 排位赛只允许平台列出的云端模型；本地 Ollama 和自定义接口只能下娱乐赛 */
 export const rankedAllowed = (providerId) => {
-  const p = PRESETS[providerId];
+  const p = presetOf(providerId);
   return !!p && !p.local && !p.custom;
 };
 
 export function presetList() {
   return Object.entries(PRESETS).filter(([, p]) => !p.cli || cliAvailable(p.api)).map(([id, p]) => ({
-    id, name: p.name, api: p.api, baseURL: p.baseURL, models: p.models,
+    id, name: p.name, api: p.api, baseURL: p.baseURL, models: p.models, customBaseURL: !!(p.custom || p.local || p.baseURLPattern),
     needsKey: !!p.keyEnv || p.custom, ranked: rankedAllowed(id), note: p.note || '',
     showsReasoning: !!p.reasoningField,
     canDisableThinking: !!p.thinkingParams?.canOff,

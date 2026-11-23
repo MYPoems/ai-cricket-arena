@@ -1,6 +1,6 @@
 // 模型调用统一入口：选手配置 → 对应平台适配器。
 
-import { PRESETS } from './presets.js';
+import { presetOf, baseURLFor } from './presets.js';
 import { streamOpenAI, listOpenAIModels } from './openai-compat.js';
 import { streamAnthropic } from './anthropic.js';
 import { streamClaudeCli, streamCodexCli } from './cli.js';
@@ -9,11 +9,13 @@ import { getKey } from '../secrets.js';
 
 /** 选手配置 → 适配器参数 */
 export function confFor(db, ch) {
-  const preset = PRESETS[ch.provider];
+  const preset = presetOf(ch.provider);
   if (!preset) throw new Error(`未知平台：${ch.provider}`);
   const apiKey = getKey(db, ch.owner_id, ch.provider);
   if (preset.keyEnv && !apiKey) throw new Error(`${preset.name} 还没有配置 API Key`);
-  return { preset, apiKey, baseURL: ch.base_url || preset.baseURL, model: ch.model, effort: ch.effort || 'default' };
+  const baseURL = baseURLFor(ch.provider, ch.base_url);
+  if (preset.custom && !baseURL) throw new Error('自定义接口没有填写地址');
+  return { preset, apiKey, baseURL, model: ch.model, effort: ch.effort || 'default' };
 }
 
 /**
@@ -32,11 +34,13 @@ export async function callModel(db, ch, system, messages, onDelta = () => {}, si
 }
 
 export async function listModels(db, ownerId, provider, baseURL) {
-  const preset = PRESETS[provider];
+  const preset = presetOf(provider);
   if (!preset) throw new Error(`未知平台：${provider}`);
   if (preset.api !== 'openai') return preset.models;
   const apiKey = getKey(db, ownerId, provider);
-  return listOpenAIModels({ preset, apiKey, baseURL: baseURL || preset.baseURL });
+  const url = baseURLFor(provider, baseURL);
+  if (!url) throw new Error('请先填写接口地址');
+  return listOpenAIModels({ preset, apiKey, baseURL: url });
 }
 
 // ---------- 模拟模型（只在开发和自动测试时使用） ----------

@@ -6,7 +6,7 @@ import { createCipheriv, createDecipheriv, randomBytes, createHash } from 'node:
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { now } from './db.js';
-import { PRESETS } from './providers/presets.js';
+import { PRESETS, presetOf } from './providers/presets.js';
 
 let master = null;
 
@@ -57,7 +57,7 @@ export function getKey(db, ownerId, provider) {
       return null; // 主密钥变了，旧密钥无法解开
     }
   }
-  const env = PRESETS[provider]?.keyEnv;
+  const env = presetOf(provider)?.keyEnv;
   return env ? process.env[env] || null : null;
 }
 

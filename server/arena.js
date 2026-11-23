@@ -127,7 +127,8 @@ export class Arena {
       options: {
         showLegal: options.showLegal !== false,
         delayMs: Math.max(0, Math.min(10000, Number(options.delayMs ?? (mode === 'casual' ? 600 : 0)))),
-        hideThoughts: options.hideThoughts ?? humans.length > 0,
+        // 隐藏信息游戏里有玩家本人时强制隐藏思考（模型会在思考里写自己的牌、词、身份）
+        hideThoughts: humans.length > 0 && game.features?.hidden ? true : options.hideThoughts ?? humans.length > 0,
         ...(options.series ? { series: options.series } : {}),
       },
       seats: Object.fromEntries(seatIds.map((s) => [s, seats[s]])),
@@ -366,7 +367,9 @@ export class Arena {
     const showLegal = !!ch.show_legal && m.options.showLegal;
     let conv = m.conversations[seat];
     if (!conv) {
-      const notes = ch.memory
+      // 同一副牌的系列赛：不带复盘笔记，免得把上一盘记下的牌带进这一盘
+      const sameDeck = m.options.series && game.rankedSeries?.sameSeed;
+      const notes = ch.memory && !sameDeck
         ? this.db.all('SELECT text FROM notes WHERE character_id = ? ORDER BY created_at DESC LIMIT ?', ch.id, NOTES_IN_PROMPT).map((n) => n.text)
         : [];
       let system = game.systemPrompt(seat, { style: ch.style, showLegal, players: Object.keys(m.seats).length, state });
@@ -511,7 +514,7 @@ ${game.noun || '行动'}：${act}`;
     let game = null;
     try { game = getGame(m.game); } catch { /* 游戏已下线 */ }
     return {
-      ...m, options: undefined, series: m.options?.series || null, plies: m.actions.length, actions: undefined, players, live: this.live.has(m.id),
+      ...m, options: undefined, series: m.options?.series ? { ...m.options.series, seed: undefined } : null, plies: m.actions.length, actions: undefined, players, live: this.live.has(m.id),
       gameName: game?.name || m.game, seatNames: Object.fromEntries(Object.keys(m.seats).map((s) => [s, game?.seatName(s) || s])),
     };
   }
@@ -538,7 +541,8 @@ ${game.noun || '行动'}：${act}`;
     return {
       ...sum,
       options: m.options,
-      record: { ...record, actions: (game.features?.hidden && human && running) ? null : record.actions },
+      // 有玩家本人的隐藏信息对局进行中：不给记录、种子和开局参数（拿种子就能在浏览器里重放出所有人的牌）
+      record: hiddenLive ? { players: record.players, actions: null } : record,
       startFen: m.start_fen,
       viewer: v,
       view: game.view(state, v),

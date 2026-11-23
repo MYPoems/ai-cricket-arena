@@ -39,7 +39,10 @@ export async function matchView(root, id, { characters }) {
   const seats = d.seatOrder;
   const two = seats.length === 2;
   const partials = new Map((d.partials || []).map((p) => [p.seat, { ...p }]));
-  let viewPly = null; // null 表示跟随最新局面
+  // null 表示跟随最新局面；录制模式从第 0 步开始，首帧不能是终局画面
+  let viewPly = recordMode && d.status !== 'running' ? 0 : null;
+  // 回放和录制时不剧透：着法列表、走势图只画到当前步
+  const noSpoil = () => !!replaying || recordMode;
   let paused = d.paused;
   let waitingHuman = d.waitingHuman;
   let offerNext = false;
@@ -142,9 +145,10 @@ export async function matchView(root, id, { characters }) {
     const ranks = d.result?.ranks;
     const won = atEnd && d.status === 'finished' && ranks && ranks[seat] === Math.min(...Object.values(ranks)) && !Object.values(ranks).every((r) => r === ranks[seat]);
     const lastQ = s.last?.eval?.quality;
-    const role = d.view?.roles?.[seat];
+    const cv = atEnd ? d.view : viewAt(viewPly); // 身份、出局都按当前回放到的那一步
+    const role = cv?.roles?.[seat];
     camps[seat].el.classList.toggle('active', thinking);
-    camps[seat].el.classList.toggle('out', !!d.view?.out?.includes?.(seat));
+    camps[seat].el.classList.toggle('out', !!cv?.out?.includes?.(seat));
     camps[seat].head.replaceChildren(
       h('div', { class: 'camp-id' },
         h('div', { class: 'camp-avatar' }, c?.avatar || '？', thinking ? h('i', { class: 'pulse' }) : null),
@@ -242,9 +246,10 @@ export async function matchView(root, id, { characters }) {
     const n = totalPlies();
     const W = 600, H = 60;
     const pts = [];
-    for (let p = 0; p <= n; p++) { const e = e0At(p); if (e !== null) pts.push([p, e]); }
+    const upto = noSpoil() ? (viewPly ?? n) : n;
+    for (let p = 0; p <= upto; p++) { const e = e0At(p); if (e !== null) pts.push([p, e]); }
     const self = [];
-    for (let p = 1; p <= n; p++) {
+    for (let p = 1; p <= upto; p++) {
       const t = turns.get(p);
       if (t?.self_winrate === null || t?.self_winrate === undefined) continue;
       const s = t.self_winrate / 100;
@@ -280,7 +285,8 @@ export async function matchView(root, id, { characters }) {
   }
 
   function renderMoves() {
-    const items = moveItems();
+    const all = moveItems();
+    const items = noSpoil() && viewPly !== null ? all.slice(0, viewPly) : all;
     const cur = viewPly ?? items.length;
     const els = [];
     const cell = (j) => {
@@ -373,6 +379,7 @@ export async function matchView(root, id, { characters }) {
     else viewPly = Math.max(0, Math.min(n, ply));
     renderStatus();
     renderStage(!!replaying);
+    seats.forEach(renderCamp);
     renderMoves();
     renderCurve();
     renderThoughts();
@@ -523,6 +530,7 @@ export async function matchView(root, id, { characters }) {
         renderStage(false);
         break;
       case 'end':
+        d.viewer = null; // 结束后看上帝视角
         await refresh();
         partials.clear();
         waitingHuman = null;

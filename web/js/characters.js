@@ -74,7 +74,7 @@ export function createDialog({ meta, reloadMeta, base = null, onDone }) {
             const r = await post('/keys', { provider: f.provider, key: keyInput.value.trim() });
             keys = r.keys; meta.keys = r.keys; reloadMeta?.(); toast('密钥已加密保存'); draw();
           }) }, '保存'))) : null,
-        ['custom', 'ollama', 'qwen'].includes(f.provider) ? h('label', { class: 'field' }, h('span', {}, '接口地址'),
+        p.customBaseURL ? h('label', { class: 'field' }, h('span', {}, '接口地址'),
           h('input', { type: 'text', value: f.base_url || '', placeholder: p.baseURL || 'https://…/v1', oninput: (e) => { f.base_url = e.target.value; } }),
           p.note ? h('span', {}, p.note) : null) : null,
         !p.ranked ? h('div', { class: 'small muted' }, '这个平台的选手只能下娱乐赛，不参加排位。') : null,

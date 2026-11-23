@@ -1,7 +1,7 @@
 // 选手（AI 角色）管理。配置创建后锁定，想改模型或参数就「派生」新选手。
 
 import { newId, now } from './db.js';
-import { PRESETS, rankedAllowed, EFFORTS } from './providers/presets.js';
+import { presetOf, canSetBaseURL, rankedAllowed, EFFORTS } from './providers/presets.js';
 import { HttpError } from './http.js';
 
 const AVATARS = ['🦊', '🐯', '🐼', '🦁', '🐉', '🦅', '🐺', '🦉', '🐬', '🦄', '🐢', '🐲', '🦈', '🐙', '🦚', '🐝'];
@@ -27,7 +27,7 @@ export function canRank(db, c) {
 export function publicCharacter(db, c) {
   return {
     ...c,
-    providerName: c.provider ? PRESETS[c.provider]?.name || (c.provider === 'mock' ? '模拟模型' : c.provider) : null,
+    providerName: c.provider ? presetOf(c.provider)?.name || (c.provider === 'mock' ? '模拟模型' : c.provider) : null,
     effortName: c.effort ? EFFORTS[c.effort] : null,
     ranked: canRank(db, c),
   };
@@ -63,16 +63,18 @@ export function createCharacter(db, ownerId, input, { system = false } = {}) {
   };
   if (kind === 'model') {
     const allowMock = process.env.ARENA_DEV === '1';
-    if (!PRESETS[input.provider] && !(allowMock && input.provider === 'mock')) throw new HttpError(400, '请选择模型平台');
+    if (!presetOf(input.provider) && !(allowMock && input.provider === 'mock')) throw new HttpError(400, '请选择模型平台');
     c.provider = input.provider;
     c.model = clean(input.model, 120);
     if (!c.model) throw new HttpError(400, '请填写模型 ID');
     const base = clean(input.base_url, 300);
     if (input.provider === 'custom' && !base) throw new HttpError(400, '自定义接口需要填写地址');
-    c.base_url = base && base !== PRESETS[input.provider]?.baseURL ? base : null;
+    const official = presetOf(input.provider)?.baseURL;
+    if (base && base !== official && !canSetBaseURL(input.provider, base)) throw new HttpError(400, `${presetOf(input.provider).name}只能用官方地址；要走代理或中转请选「自定义 OpenAI 兼容接口」`);
+    c.base_url = base && base !== official ? base : null;
     c.effort = EFFORTS[input.effort] ? input.effort : 'low';
-    if (c.effort === 'off' && !PRESETS[c.provider]?.thinkingParams?.canOff && c.provider !== 'mock') {
-      throw new HttpError(400, `${PRESETS[c.provider]?.name || c.provider} 不能关闭思考`);
+    if (c.effort === 'off' && !presetOf(c.provider)?.thinkingParams?.canOff && c.provider !== 'mock') {
+      throw new HttpError(400, `${presetOf(c.provider)?.name || c.provider} 不能关闭思考`);
     }
   } else {
     c.style = '';

@@ -110,16 +110,29 @@ export class Matchmaker {
    * 上一盘结束后接着开下一盘，座位整体轮转一位。
    */
   onFinished(sum) {
-    const ser = sum?.series;
-    if (!ser || sum.status !== 'finished' || ser.leg >= ser.of) return null;
+    if (!sum?.series || sum.status !== 'finished') return null;
+    const row = this.db.get('SELECT options, setup FROM matches WHERE id = ?', sum.id);
+    const ser = row?.options?.series;
+    if (!ser || ser.leg >= ser.of) return null;
     const game = getGame(sum.game);
     const seatIds = Object.keys(sum.seats);
     const ids = seatIds.map((sid) => sum.seats[sid]);
     const rotated = [ids[ids.length - 1], ...ids.slice(0, -1)];
     const seats = Object.fromEntries(seatIds.map((sid, i) => [sid, rotated[i]]));
     const next = { ...ser, leg: ser.leg + 1 };
+    // 有玩家本人时每盘换一副牌：上一盘结束后是上帝视角，同一副牌等于知道了所有人的牌
+    const human = Object.values(sum.players || {}).some((p) => p?.kind === 'human');
+    const sameDeck = game.rankedSeries?.sameSeed && !human;
+    const options = {
+      series: next,
+      ...(sameDeck ? { seed: ser.seed } : {}),
+      ...(row.setup?.setup && Object.keys(row.setup.setup).length ? { setup: row.setup.setup } : {}),
+      ...(row.options.showLegal === false ? { showLegal: false } : {}),
+      ...(row.options.delayMs ? { delayMs: row.options.delayMs } : {}),
+      ...(row.options.hideThoughts !== undefined ? { hideThoughts: row.options.hideThoughts } : {}),
+    };
     try {
-      const id = this.arena.createMatch({ game: sum.game, seats, mode: 'ranked', options: { series: next, ...(game.rankedSeries?.sameSeed ? { seed: ser.seed } : {}) } });
+      const id = this.arena.createMatch({ game: sum.game, seats, mode: 'ranked', options });
       this.#log(`${game.name}系列赛第 ${next.leg}/${next.of} 盘开始`);
       return id;
     } catch (e) {

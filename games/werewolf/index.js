@@ -570,7 +570,8 @@ const game = {
   /** 这一步行动是否只有本人（狼人行动时还有狼队友）和上帝视角能看到；供框架在有玩家本人时隐藏 */
   secret(state, seat, action) {
     if (NIGHT.has(state.phase)) return true;
-    if (state.phase === 'hunter') return normalize(state, action) === 'none';
+    // 猎人阶段：还不知道开不开枪时（action 为空，例如轮到他行动时）先隐藏；不开枪的话这一步一直不公开
+    if (state.phase === 'hunter') return action === null || action === undefined || normalize(state, action) === 'none';
     return false;
   },
 
@@ -720,9 +721,13 @@ const game = {
       return err ? fail(err, shown) : { action: r.action, attempted: shown, winrate, error: null };
     }
     let act;
-    if (NONE_RE[p]?.test(v)) act = 'none';
+    // 去掉括号里的说明；「不投」之类只在开头，或者整句找不到座位号时才算放弃（「投票：3号（不投 5 号）」投的是 3 号）
+    const core = v.replace(/[（(【[][^）)】\]]*[）)】\]]/g, ' ').trim();
+    const none = NONE_RE[p]?.exec(core);
+    const ref0 = parseSeatRef(core);
+    if (none && (none.index <= 1 || !ref0)) act = 'none';
     else {
-      const ref = parseSeatRef(v);
+      const ref = ref0 || parseSeatRef(v);
       if (!ref) return fail(`无法识别「${v}」（应写成${EXAMPLE[p]}）`, v || null);
       if (typeof ref !== 'string') return fail(`本局没有 ${ref.invalid} 号`, v);
       act = ref;

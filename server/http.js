@@ -37,13 +37,22 @@ export class Router {
     for (const r of this.routes) {
       if (r.method !== method) continue;
       const m = r.re.exec(path);
-      if (m) return { handler: r.handler, params: Object.fromEntries(r.keys.map((k, i) => [k, decodeURIComponent(m[i + 1])])) };
+      if (!m) continue;
+      try {
+        return { handler: r.handler, params: Object.fromEntries(r.keys.map((k, i) => [k, decodeURIComponent(m[i + 1])])) };
+      } catch {
+        throw new HttpError(400, '请求地址不合法');
+      }
     }
     return null;
   }
 }
 
 async function readJson(req) {
+  // 只接受 JSON：跨站的表单提交带不了这个类型（浏览器会自动带上 Basic 认证，不能只靠密码）
+  if (!/^application\/json\b/i.test(req.headers['content-type'] || '')) throw new HttpError(415, '请求必须是 JSON');
+  const sameOrigin = !req.headers.origin || (() => { try { return new URL(req.headers.origin).host === req.headers.host; } catch { return false; } })();
+  if (!sameOrigin) throw new HttpError(403, '不接受跨站请求');
   const chunks = [];
   let size = 0;
   for await (const c of req) {
@@ -52,11 +61,14 @@ async function readJson(req) {
     chunks.push(c);
   }
   if (!chunks.length) return {};
+  let body;
   try {
-    return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
   } catch {
     throw new HttpError(400, '请求体不是合法的 JSON');
   }
+  if (!body || typeof body !== 'object' || Array.isArray(body)) throw new HttpError(400, '请求体必须是 JSON 对象');
+  return body;
 }
 
 export function sendJson(res, status, data) {
@@ -100,7 +112,14 @@ function authorized(req) {
 
 export function handler(router, mounts) {
   return async (req, res) => {
-    const url = new URL(req.url, 'http://localhost');
+    let url;
+    try {
+      url = new URL(req.url, 'http://localhost');
+    } catch {
+      res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end('请求地址不合法');
+      return;
+    }
     if (!authorized(req)) {
       res.writeHead(401, { 'WWW-Authenticate': 'Basic realm="AI Arena", charset="UTF-8"', 'Content-Type': 'text/plain; charset=utf-8' });
       res.end('需要访问密码');
@@ -110,7 +129,7 @@ export function handler(router, mounts) {
       if (url.pathname.startsWith('/api/')) {
         const m = router.match(req.method, url.pathname);
         if (!m) throw new HttpError(404, '接口不存在');
-        const body = ['POST', 'PATCH', 'PUT'].includes(req.method) ? await readJson(req) : {};
+        const body = ['POST', 'PATCH', 'PUT', 'DELETE'].includes(req.method) ? await readJson(req) : {};
         const out = await m.handler({ req, res, params: m.params, query: Object.fromEntries(url.searchParams), body });
         if (out !== undefined && !res.headersSent) sendJson(res, 200, out);
         return;
