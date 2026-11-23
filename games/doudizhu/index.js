@@ -4,7 +4,7 @@
 
 import {
   RANKS, TYPE_NAMES, GROUP_ORDER, deal, mulberry32, parseCards, legalPlays, hasCards, removeCards,
-  classify, toCounts, namesOf, cardsId, comboText, sortCards, fullDeck,
+  classify, toCounts, namesOf, cardsId, comboText, sortCards, fullDeck, showOrder, fxDuration,
 } from './rules.js';
 import { chooseBid, choosePlay } from './ai.js';
 
@@ -92,6 +92,17 @@ function newState(seed = 0, setup = {}) {
 }
 
 const clone = (s) => JSON.parse(JSON.stringify(s));
+
+/** 给 fxDuration 的局面摘要 */
+function fxSummary(state) {
+  if (!state) return null;
+  const over = state.phase === 'over';
+  const st = over && state.landlord ? settle(state) : null;
+  return { landlord: !!state.landlord, plays: state.plays.length, last: state.plays.at(-1)?.type || null, over, banner: !!(st && (st.spring || st.anti)) };
+}
+
+/** 一手牌在画面上的顺序：主体在前、带的牌在后，各部分从大到小 */
+const showNames = (p) => showOrder(p.cards, p.type).map((r) => RANKS[r]);
 
 function legalFor(state, seat) {
   if (state.phase !== 'play' || seat !== state.turn) return new Map();
@@ -253,6 +264,15 @@ const game = {
 
   /** 每家出牌后至少停多久（毫秒），让大家看清这一手再轮到下一家 */
   turnPause: 1400,
+
+  /**
+   * 画面特效要求的停顿（毫秒）：定地主后底牌翻开飞给地主、飞机、王炸、炸弹、春天 / 反春横幅。
+   * 没有特效返回 0（对局按 turnPause 停）；有特效时至少停 turnPause，并多留一点余量。
+   */
+  interlude(prev, next) {
+    const d = fxDuration(fxSummary(prev), fxSummary(next));
+    return d ? Math.max(game.turnPause, d + 300) : 0;
+  },
 
   actions(state, seat) {
     if (state.phase === 'over' || seat !== state.turn) return [];
@@ -460,7 +480,7 @@ const game = {
     const see = (x) => viewer === null || viewer === undefined || viewer === x || over;
     const trickPlays = (n) => {
       const m = {};
-      for (const p of state.plays) if (p.trick === n) m[p.seat] = p.cards ? { cards: namesOf(p.cards), type: TYPE_NAMES[p.type] } : { pass: true };
+      for (const p of state.plays) if (p.trick === n) m[p.seat] = p.cards ? { cards: showNames(p), type: TYPE_NAMES[p.type] } : { pass: true };
       return m;
     };
     let table = {}, stale = false;
@@ -483,19 +503,20 @@ const game = {
       first: state.first,
       deals: state.deals,
       bids: state.bids.map((b) => ({ seat: b.seat, bid: b.bid })),
-      // 出过的牌是公开信息：本局记录按轮列出
-      plays: state.plays.map((p) => ({ seat: p.seat, trick: p.trick, cards: p.cards ? namesOf(p.cards) : null, type: p.cards ? TYPE_NAMES[p.type] : null })),
+      // 出过的牌是公开信息：本局记录按轮列出。牌按画面顺序：主体在前、带的牌在后，各部分从大到小
+      plays: state.plays.map((p) => ({ seat: p.seat, trick: p.trick, cards: p.cards ? showNames(p) : null, type: p.cards ? TYPE_NAMES[p.type] : null })),
       landlord: state.landlord,
       bid: state.landlord ? state.bid : maxBid(state),
       multiplier: st ? st.multiplier : bombMult(state),
       bombs: state.bombs,
       turn: over ? null : state.turn,
-      lead: state.trick?.last ? { seat: state.trick.last.seat, cards: namesOf(state.trick.last.cards), type: TYPE_NAMES[state.trick.last.type] } : null,
+      lead: state.trick?.last ? { seat: state.trick.last.seat, cards: showNames(state.trick.last), type: TYPE_NAMES[state.trick.last.type] } : null,
       table, stale,
       trickNo: state.trick?.n || 0,
       roles: state.landlord ? Object.fromEntries(SEATS.map((x) => [x, roleOf(state, x)])) : {},
       out: [],
-      result: st ? { winner: state.winner, ...st } : null,
+      // 结算：每家得失分（地主一家顶两家：±2 × 每家分数）
+      result: st ? { winner: state.winner, ...st, bid: state.bid, bombs: state.bombs, scores: Object.fromEntries(SEATS.map((x) => [x, (x === state.landlord ? 2 : -1) * (st.landlordWins ? 1 : -1) * st.score])) } : null,
     };
   },
 };

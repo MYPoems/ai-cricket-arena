@@ -20,6 +20,7 @@ import { setCliWorkRoot } from './providers/cli.js';
 import { lobbyRoutes } from './lobby.js';
 import { agentRoutes } from './agent-api.js';
 import { Recorder } from './recorder.js';
+import { ladderRoutes } from './ladder/stats.js';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 if (existsSync(join(ROOT, '.env'))) process.loadEnvFile(join(ROOT, '.env'));
@@ -64,6 +65,7 @@ authRoutes(router, { db, hub, onApproved: (u) => {
   if (!db.get("SELECT 1 FROM characters WHERE kind = 'human' AND owner_id = ?", u.id)) createCharacter(db, u.id, { kind: 'human', name: u.name || u.username, avatar: '🙂' });
 } });
 routes(router, { db, hub, arena, matchmaker, compare, evaluator });
+ladderRoutes(router, { db }); // 天梯：分数可信度、分阵营、对位热力图
 roomRoutes(router, { db, hub, arena });
 lobbyRoutes(router, { db, arena, matchmaker });
 agentRoutes(router, { db, arena });

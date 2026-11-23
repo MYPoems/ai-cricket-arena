@@ -76,9 +76,11 @@ export function createFold({ arena, stageCol, focusEl, panelRoot, logBox, moves,
     if (!ratios.length) return;
     const focus1 = focusEl.clientHeight;
     let k = Math.min(1.8, Math.max(1, Math.floor((0.97 / Math.max(...ratios)) * 50) / 50));
-    for (let i = 0; i < 6 && k > 1; i++) {
+    for (let i = 0; i < 14 && k > 1; i++) {
       arena.style.setProperty('--k', String(k));
-      const over = stageCol.scrollHeight > stageCol.clientHeight + 1 || focusEl.clientHeight < focus1 - 2 || cols.some((c) => span(c) > c.clientHeight + 1);
+      // 横向也要放得下：座位卡里的名字不能被头像、身份牌挤成一条竖缝（8、9 人局的座位栏不随放大变宽）
+      const squeezed = cols.some((c) => [...c.querySelectorAll('.seat')].some((s) => s.scrollWidth > s.clientWidth + 1 || (s.querySelector('.nm')?.clientWidth ?? 99) < 84));
+      const over = squeezed || stageCol.scrollHeight > stageCol.clientHeight + 1 || focusEl.clientHeight < focus1 - 2 || cols.some((c) => span(c) > c.clientHeight + 1);
       if (!over) return;
       k = Math.max(1, Math.round((k - 0.06) * 100) / 100);
     }

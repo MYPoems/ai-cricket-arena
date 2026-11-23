@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import game from '../games/doudizhu/index.js';
 import { replay } from '../games/index.js';
-import { classify, beats, deal, parseCards, cardsId, fullDeck, allCombos } from '../games/doudizhu/rules.js';
+import { classify, beats, deal, parseCards, cardsId, fullDeck, allCombos, showOrder, RANKS, FX } from '../games/doudizhu/rules.js';
 
 // 自定义发牌并跳过叫分：hands 为 { p1: '3 3 …' }，地主先出
 const make = (hands, { landlord = 'p1', bid = 1, bottom = '' } = {}) => game.create({ seed: 1, setup: { hands, landlord, bid, bottom } });
@@ -392,4 +392,67 @@ test('牌面文字解析与 id 规范', () => {
   assert.equal(cardsId(parseCards('大王，小王').cards), '小王 大王');
   assert.match(parseCards('1 0').error, /无法识别/);
   assert.ok(allCombos(parseCards('3 3 4 4 5 5').cards).some((c) => c.type === 'pairs'));
+});
+
+test('摆牌顺序：主体在前、带的牌在后，各部分从大到小', () => {
+  const order = (txt) => {
+    const k = classify(parseCards(txt).cards);
+    return showOrder(k.cards, k.type).map((r) => RANKS[r]).join(' ');
+  };
+  assert.equal(order('3 K K K'), 'K K K 3');
+  assert.equal(order('3 3 K K K'), 'K K K 3 3');
+  assert.equal(order('3 4 K K K A A A'), 'A A A K K K 4 3');
+  assert.equal(order('3 3 4 4 5 5 5 6 6 6'), '6 6 6 5 5 5 4 4 3 3');
+  assert.equal(order('3 3 3 4 4 4 5 5 5 6 6 6'), '6 6 6 5 5 5 4 4 4 3 3 3', '纯飞机');
+  assert.equal(order('3 5 9 9 9 9'), '9 9 9 9 5 3');
+  assert.equal(order('3 3 3 3 5 5 5 5'), '5 5 5 5 3 3 3 3', '四带两对：按大的四张算主体');
+  assert.equal(order('3 4 5 6 7'), '7 6 5 4 3');
+  assert.equal(order('小王 大王'), '大王 小王');
+  // 带的三张和机身不连：机身是连着的那几组
+  assert.equal(showOrder(parseCards('3 3 3 4 4 4 5 5 5 9 9 9').cards, 'plane1').map((r) => RANKS[r]).join(' '), '5 5 5 4 4 4 3 3 3 9 9 9');
+});
+
+test('视图：出牌按摆牌顺序（本轮各家、桌心、本局记录）', () => {
+  let s = make({ p1: '3 4 K K K Q', p2: 'A A', p3: '2' }, { bid: 2 });
+  s = game.apply(s, 'p1', '3 K K K');
+  const v = game.view(s, null);
+  assert.deepEqual(v.lead.cards, ['K', 'K', 'K', '3']);
+  assert.deepEqual(v.table.p1.cards, ['K', 'K', 'K', '3']);
+  assert.deepEqual(v.plays[0].cards, ['K', 'K', 'K', '3']);
+});
+
+test('结算：地主得失是每家农民的两倍', () => {
+  let s = make({ p1: '3 3 3 3 5', p2: '6 7', p3: '4 4 K' }, { bid: 3 });
+  s = play(s, '3 3 3 3', '不出', '不出', '5');
+  const r = game.view(s, 'p2').result;
+  assert.equal(r.score, 12);
+  assert.equal(r.bid, 3);
+  assert.equal(r.bombs, 1);
+  assert.deepEqual(r.scores, { p1: 24, p2: -12, p3: -12 });
+  let t = make({ p1: '3 5 7', p2: '2', p3: 'K K' }, { bid: 1 });
+  t = play(t, '3', '2');
+  assert.deepEqual(game.view(t, null).result.scores, { p1: -4, p2: 2, p3: 2 });
+});
+
+test('特效停顿：定地主、飞机、王炸、炸弹、春天要等画面演完，普通出牌按 turnPause', () => {
+  const { fly, handover, plane, rocket, bomb, banner, bannerDelay, card } = FX;
+  let s = game.create({ seed: 5 });
+  assert.equal(game.interlude(null, s), 0);
+  const b = game.apply(s, s.turn, '叫3');
+  assert.ok(game.interlude(s, b) >= handover, '底牌交接');
+  let p = make({ p1: '3 3 3 4 4 4 5 6 7 8 9 10 J 小王 大王 Q', p2: '9 9', p3: '2 2' });
+  const p1 = game.apply(p, 'p1', '3 3 3 4 4 4 5 6');
+  assert.equal(game.interlude(p, p1), Math.max(game.turnPause, fly + plane + 300), '飞机');
+  const p2 = game.apply(p1, 'p2', '不出');
+  assert.equal(game.interlude(p1, p2), 0, '不出：按 turnPause');
+  const p3 = play(p2, '不出', '小王 大王');
+  assert.equal(game.interlude(play(p2, '不出'), p3), Math.max(game.turnPause, fly + rocket + 600), '王炸');
+  const q = make({ p1: '3 3 3 3 5', p2: '6 7', p3: '4 4 K' }, { bid: 3 });
+  const q1 = game.apply(q, 'p1', '3 3 3 3');
+  assert.equal(game.interlude(q, q1), Math.max(game.turnPause, 300 + bomb + 300), '炸弹');
+  const q2 = play(q1, '不出', '不出');
+  const q3 = game.apply(q2, 'p1', '5');
+  assert.equal(game.interlude(q2, q3), bannerDelay + banner + card + 300, '春天横幅');
+  const r = game.apply(make({ p1: '3 4', p2: '5', p3: '6' }), 'p1', '3');
+  assert.equal(game.interlude(make({ p1: '3 4', p2: '5', p3: '6' }), r), 0, '普通单张');
 });

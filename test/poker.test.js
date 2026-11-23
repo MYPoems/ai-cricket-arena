@@ -407,5 +407,88 @@ test('每手结束、新一手开始的停顿：服务端和牌桌按同一份�
   assert.equal(streetsBetween(0, 5), 3);
   assert.equal(t.last.showdown, true);
   if (!t.over) assert.equal(g.view(t, null).last.showdown, true);
-  assert.equal(g.interlude(before, t), endDur({ showdown: true, streets: 3 }) + (t.over ? 0 : T.DEAL));
+  // 两人各 200 全下：底池 400 = 200 个大盲，算大底池，转牌、河牌前各多停 BIG_WAIT；两家亮牌、一个池
+  const info = { showdown: true, streets: 3, shown: 2, pots: 1, big: true };
+  assert.equal(g.interlude(before, t), endDur(info) + (t.over ? 0 : T.DEAL));
+  assert.equal(endDur(info) - endDur({ ...info, big: false }), 2 * T.BIG_WAIT);
+});
+
+test('结算时刻表：一家一家亮牌、补翻、抬牌、按池分发、结算卡依次排开', async () => {
+  const { T, schedule, endDur } = await import('../games/poker/timing.js');
+  const S = schedule({ showdown: true, streets: 2, shown: 3, pots: 2, big: true });
+  assert.deepEqual(S.reveal, [T.REVEAL_AT, T.REVEAL_AT + T.REVEAL_GAP, T.REVEAL_AT + 2 * T.REVEAL_GAP]);
+  // 亮完三家（最后一家第二张翻完）才补翻；转牌、河牌前各多停 BIG_WAIT
+  assert.equal(S.streetAt[0], S.reveal[2] + T.CARD_GAP + T.FLIP + T.RUNOUT_GAP + T.BIG_WAIT);
+  assert.equal(S.streetAt[1], S.streetAt[0] + T.STREET + T.BIG_WAIT);
+  assert.ok(S.liftAt > S.streetAt[1] + T.FLIP);
+  assert.deepEqual(S.push, [S.liftAt + T.BADGE, S.liftAt + T.BADGE + T.PUSH]);
+  assert.ok(S.cardAt >= S.push[1] + T.PUSH);
+  assert.equal(S.end, S.cardAt + T.HOLD_SHOWDOWN);
+  // 河牌摊牌：不用补翻；弃牌：收注后推一个池
+  const R = schedule({ showdown: true, streets: 0, shown: 2, pots: 1 });
+  assert.equal(R.streetAt.length, 0);
+  assert.equal(R.liftAt, R.reveal[1] + T.CARD_GAP + T.FLIP + T.LIFT);
+  assert.equal(endDur({ showdown: false }), T.FOLD_PUSH + T.PUSH + T.CARD_AT + T.HOLD_FOLD);
+});
+
+/** 和牌桌（web/stage/poker.js 的 pickView）一样，只用浏览器数据算停顿 */
+const pickView = (v) => v && ({
+  handNo: v.handNo, boardLen: v.board.length, over: !!v.over, bb: v.blinds?.bb,
+  last: v.last ? { showdown: !!v.last.showdown, boardLen: v.last.board.length, shown: Object.keys(v.last.shown || {}).length, pots: v.last.pots?.length || 1, pot: v.last.pot ?? 0 } : null,
+  done: v.result ? { showdown: !!v.result.showdown, boardLen: v.board.length, shown: v.result.shown?.length ?? 0, pots: v.result.pots?.length || 1, pot: v.pot } : null,
+});
+
+test('服务端停顿和牌桌、回放按浏览器数据算出来的一样（各种视角）', async () => {
+  const { pauseBetween } = await import('../games/poker/timing.js');
+  for (const [n, seed] of [[2, 3], [3, 11], [6, 21]]) {
+    let s = make(n, { hands: 12, stacks: Array.from({ length: n }, (_, j) => 60 + j * 70) }, seed);
+    let guard = 0;
+    while (!poker.outcome(s).over && guard++ < 3000) {
+      const [seat] = poker.pending(s);
+      const t = poker.apply(s, seat, poker.builtinMove(s, seat, { level: 2 }));
+      for (const viewer of [null, 'p1', '*']) {
+        assert.equal(pauseBetween(pickView(poker.view(s, viewer)), pickView(poker.view(t, viewer))), poker.interlude(s, t));
+      }
+      s = t;
+    }
+  }
+});
+
+test('分池给浏览器：每个池的赢家和分到的数，加起来等于这手的净输赢', () => {
+  let s = make(3, { stacks: [50, 100, 200], hands: 2 });
+  s = rig(s, { p1: 'As Ad', p2: 'Ks Kd', p3: '7c 2h' }, '3s 8d 9c Jh 4c');
+  s = run(s, [['p1', 'allin'], ['p2', 'allin'], ['p3', 'call']]);
+  const v = poker.view(s, 'p3');
+  assert.equal(v.handNo, 2);
+  assert.equal(v.last.pot, 250);
+  assert.deepEqual(v.last.pots.map((p) => [p.amount, p.winners, p.shares, p.uncalled]), [[150, ['p1'], [150], false], [100, ['p2'], [100], false]]);
+  assert.equal(v.last.pots[0].hand, '一对 A');
+  // 新一手里其他人的底牌仍然看不到
+  assert.deepEqual(v.players.map((p) => !!p.cards), [false, false, true]);
+  // 退回未被跟注的部分单独一个池
+  let u = make(2, { stacks: [200, 50], hands: 1 });
+  u = rig(u, { p1: '7c 2h', p2: 'As Ad' }, '3s 8d 9c Jh 4c');
+  u = run(u, [['p1', 'allin'], ['p2', 'call']]);
+  const r = poker.view(u, null).result;
+  assert.deepEqual(r.pots.map((p) => [p.amount, p.winners, p.uncalled]), [[100, ['p2'], false], [150, ['p1'], true]]);
+  assert.deepEqual(r.shown, ['p1', 'p2']);
+});
+
+test('整场统计：入池、翻前加注、摊牌、最大底池、累计盈亏，只在终局给', () => {
+  let s = make(3, { hands: 2 });
+  // 第 1 手：1 号位加注，2 号位跟注，3 号位弃牌，翻牌后 2 号位弃牌
+  s = run(s, [['p1', 'raise:6'], ['p2', 'call'], ['p3', 'fold'], ['p2', 'check'], ['p1', 'raise:8'], ['p2', 'fold']]);
+  assert.equal(poker.view(s, null).stats, null, '没打完不给统计');
+  // 第 2 手：2 号位庄位，3 号位小盲、1 号位大盲；都弃牌给大盲
+  s = run(s, [['p2', 'fold'], ['p3', 'fold']]);
+  const st = poker.view(s, 'p2').stats;
+  assert.equal(st.hands, 2);
+  const by = Object.fromEntries(st.players.map((p) => [p.seat, p]));
+  assert.deepEqual([by.p1.vpip, by.p1.pfr, by.p2.vpip, by.p2.pfr, by.p3.vpip], [1, 1, 1, 0, 0]);
+  assert.deepEqual(st.players.map((p) => p.played), [2, 2, 2]);
+  assert.deepEqual(by.p1.curve, [8, 9]);
+  assert.equal(by.p1.net, 9);
+  assert.equal(by.p1.best, 14, '第 1 手赢下的底池：6 + 6 + 大盲 2');
+  assert.equal(by.p2.net + by.p3.net + by.p1.net, 0);
+  assert.equal(by.p1.sd, 0);
 });

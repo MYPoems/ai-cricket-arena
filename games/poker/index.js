@@ -176,9 +176,10 @@ function showdown(s) {
     const best = Math.max(...p.eligible.map((j) => scores[j]));
     const winners = clockwiseFromButton(s, p.eligible.filter((j) => scores[j] === best));
     const share = Math.floor(p.amount / winners.length);
-    for (const w of winners) payouts[w] += share;
-    payouts[winners[0]] += p.amount - share * winners.length; // 余数给庄位左侧第一位赢家
-    pots.push({ amount: p.amount, winners, eligible: p.eligible, hand: p.eligible.length > 1 ? handName(best) : null });
+    const shares = winners.map(() => share);
+    shares[0] += p.amount - share * winners.length; // 余数给庄位左侧第一位赢家
+    winners.forEach((w, k) => { payouts[w] += shares[k]; });
+    pots.push({ amount: p.amount, winners, shares, eligible: p.eligible, uncalled: p.eligible.length === 1, hand: p.eligible.length > 1 ? handName(best) : null });
   }
   const hands = {};
   for (const j of lv) hands[j] = { name: handName(scores[j]), best: bestFive([...h.hole[j], ...h.board]) };
@@ -190,7 +191,7 @@ function winUncontested(s, w) {
   const h = s.hand;
   const payouts = new Array(s.n).fill(0);
   payouts[w] = potTotal(h);
-  h.result = { showdown: false, pots: [{ amount: payouts[w], winners: [w], eligible: [w], hand: null }], shown: [], hands: {}, payouts };
+  h.result = { showdown: false, pots: [{ amount: payouts[w], winners: [w], shares: [payouts[w]], eligible: [w], uncalled: false, hand: null }], shown: [], hands: {}, payouts };
   finishHand(s, payouts);
 }
 
@@ -209,6 +210,36 @@ function handSummary(s, h) {
   return parts.join('；');
 }
 
+/** 整场统计的初值：起始筹码、入池（VPIP）、翻牌前加注（PFR）、摊牌次数和赢的次数、赢过的最大底池、每手结束后的累计盈亏 */
+function newStats(stacks) {
+  const n = stacks.length;
+  const zero = () => new Array(n).fill(0);
+  return { start: stacks.slice(), vpip: zero(), pfr: zero(), sd: zero(), sdWon: zero(), best: zero(), curve: Array.from({ length: n }, () => []) };
+}
+
+/** 一手结束后累计统计（只用公开信息：行动记录、摊牌、分池） */
+function tally(s, h) {
+  const st = (s.stats ||= newStats(s.stacks.map((v, j) => v - (h.result.net?.[j] || 0))));
+  const r = h.result;
+  for (let j = 0; j < s.n; j++) {
+    if (h.inHand[j]) {
+      const pre = h.log.filter((e) => e.i === j && e.st === 0);
+      if (pre.some((e) => e.kind === 'call' || e.kind === 'raise')) st.vpip[j]++;
+      if (pre.some((e) => e.kind === 'raise')) st.pfr[j]++;
+      if (r.showdown && r.shown.includes(j)) {
+        st.sd[j]++;
+        if (r.pots.some((p) => !p.uncalled && p.winners.includes(j))) st.sdWon[j]++;
+      }
+      // 赢下的底池不算自己没被跟的那部分（其他人弃牌时，最后一注没人跟）
+      let won = 0;
+      for (const p of r.pots) if (!p.uncalled) p.winners.forEach((w, k) => { if (w === j) won += p.shares[k]; });
+      if (!r.showdown && won) won -= Math.max(0, h.contrib[j] - Math.max(0, ...h.contrib.filter((_, k) => k !== j)));
+      st.best[j] = Math.max(st.best[j], won);
+    }
+    st.curve[j].push(s.stacks[j] - st.start[j]);
+  }
+}
+
 function finishHand(s, payouts) {
   const h = s.hand;
   for (let j = 0; j < s.n; j++) s.stacks[j] += payouts[j];
@@ -216,12 +247,14 @@ function finishHand(s, payouts) {
   h.toAct = -1;
   h.result.net = h.contrib.map((c, j) => (h.inHand[j] ? payouts[j] - c : 0));
   h.result.text = handSummary(s, h);
+  tally(s, h);
   s.bb100 = s.stacks.map((v, j) => (s.played[j] ? Math.round(((v - s.cfg.stack) / s.cfg.bb / s.played[j]) * 1000) / 10 : 0));
   s.last = {
     no: h.no, button: h.button, board: h.board.slice(), showdown: h.result.showdown,
     shown: Object.fromEntries(h.result.shown.map((j) => [j, h.hole[j].slice()])),
     hands: Object.fromEntries(Object.entries(h.result.hands).map(([j, v]) => [j, v.name])),
-    net: h.result.net.slice(), text: h.result.text,
+    net: h.result.net.slice(), text: h.result.text, pot: potTotal(h),
+    pots: h.result.pots.map((p) => ({ amount: p.amount, winners: p.winners.slice(), shares: p.shares.slice(), uncalled: !!p.uncalled, hand: p.hand })),
   };
   const alive = s.stacks.filter((v) => v > 0).length;
   if (s.handNo >= s.cfg.hands || alive < 2) {
@@ -407,6 +440,21 @@ function liveEquity(s) {
 
 // ---------- 游戏定义 ----------
 
+/** 一个池给浏览器：金额、赢家（座位）和各自分到多少、是否退回未被跟注的部分、赢的牌型 */
+const potView = (p) => ({ amount: p.amount, winners: p.winners.map(seatId), shares: (p.shares || p.winners.map(() => Math.floor(p.amount / p.winners.length))).slice(), uncalled: !!p.uncalled, hand: p.hand || null });
+
+/** 整场统计（终局时给浏览器）：都是公开信息 */
+function statsView(s) {
+  const st = s.stats;
+  return {
+    hands: s.handNo,
+    players: s.stacks.map((v, j) => ({
+      seat: seatId(j), name: nameOf(j), net: v - st.start[j], played: s.played[j],
+      vpip: st.vpip[j], pfr: st.pfr[j], sd: st.sd[j], sdWon: st.sdWon[j], best: st.best[j], curve: st.curve[j].slice(),
+    })),
+  };
+}
+
 const game = {
   id: 'poker',
   name: '德州扑克',
@@ -431,7 +479,7 @@ const game = {
     const s = {
       n, seed: (Number(seed) || 0) >>> 0, rng: (Number(seed) || 0) >>> 0,
       cfg: { hands, stack, sb, bb }, stacks, played: new Array(n).fill(0), bb100: new Array(n).fill(0),
-      handNo: 0, button: -1, hand: null, last: null, over: false,
+      handNo: 0, button: -1, hand: null, last: null, over: false, stats: newStats(stacks),
     };
     startHand(s);
     return s;
@@ -673,8 +721,9 @@ const game = {
   /** 两个局面之间对局要停多久（毫秒）：每一手结束演结算、新一手弹开局提示；prev 为 null 是开局 */
   interlude(prev, next) {
     const pick = (s) => s && ({
-      handNo: s.hand.no, boardLen: s.hand.board.length, over: s.over, showdown: !!(s.hand.done && s.hand.result?.showdown),
-      last: s.last ? { no: s.last.no, showdown: !!s.last.showdown, boardLen: s.last.board.length } : null,
+      handNo: s.hand.no, boardLen: s.hand.board.length, over: s.over, bb: s.cfg.bb,
+      last: s.last && s.last.no !== s.hand.no ? { showdown: !!s.last.showdown, boardLen: s.last.board.length, shown: Object.keys(s.last.shown).length, pots: s.last.pots?.length || 1, pot: s.last.pot ?? 0 } : null,
+      done: s.hand.done && s.hand.result ? { showdown: !!s.hand.result.showdown, boardLen: s.hand.board.length, shown: s.hand.result.shown.length, pots: s.hand.result.pots.length, pot: potTotal(s.hand) } : null,
     });
     return pauseBetween(pick(prev), pick(next));
   },
@@ -715,6 +764,7 @@ const game = {
       net: Object.fromEntries(s.last.net.map((v, j) => [seatId(j), v])),
       shown: Object.fromEntries(Object.entries(s.last.shown).map(([j, c]) => [seatId(Number(j)), c.map(code)])),
       hands: Object.fromEntries(Object.entries(s.last.hands).map(([j, v]) => [seatId(Number(j)), v])),
+      pot: s.last.pot ?? null, pots: (s.last.pots || []).map(potView),
     } : null;
     const roles = {};
     for (const [j, p] of Object.entries(pos)) if (!s.over) roles[seatId(Number(j))] = p;
@@ -728,10 +778,14 @@ const game = {
       legal: L ? { toCall: L.toCall, owe: L.owe, minTo: L.minTo, maxTo: L.maxTo, canRaise: L.canRaise, canCheck: L.canCheck, bet: h.bet[h.toAct] } : null,
       players,
       log: h.log.map((e) => ({ seat: seatId(e.i), street: STREET_ID[e.st], text: e.text, ...(e.kind === 'sb' || e.kind === 'bb' ? { blind: true } : {}) })),
-      result: h.done ? { text: h.result.text, showdown: h.result.showdown, winners: [...new Set(h.result.pots.flatMap((p) => p.winners))].map(seatId) } : null,
+      result: h.done ? {
+        text: h.result.text, showdown: h.result.showdown, winners: [...new Set(h.result.pots.flatMap((p) => p.winners))].map(seatId),
+        shown: h.result.shown.map(seatId), pots: h.result.pots.map(potView),
+      } : null,
       last: lastHand,
       over: s.over,
       roles, out,
+      stats: s.over && s.stats ? statsView(s) : null,
     };
   },
 };

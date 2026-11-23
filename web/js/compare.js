@@ -1,6 +1,6 @@
 // 同题对比：同一个局面交给多个选手，并排比较分析和选择。
 
-import { h, api, post, guard, avatar, modelLine, fmtMs, fmtTokens, pct, fmtTime, listen } from './ui.js';
+import { h, api, post, guard, avatar, modelLine, fmtMs, fmtTokens, pct, fmtTime, listen, pressed, setTitle } from './ui.js';
 import { Board } from './board.js';
 import { parseFen, inCheck } from '/games/xiangqi/rules.js';
 
@@ -14,9 +14,9 @@ export async function compareNewView(root, { characters, go }) {
   const ai = characters.filter((c) => c.kind !== 'human' && !c.archived);
   const sel = { puzzle: puzzles[1] || puzzles[0], fen: '', ids: new Set(ai.filter((c) => c.kind === 'model').slice(0, 4).map((c) => c.id)) };
   const board = new Board();
-  const pz = h('div', { class: 'puzzles' });
-  const picks = h('div', { class: 'seat-pick' });
-  const fenInput = h('input', { type: 'text', placeholder: '或粘贴 FEN', oninput: (e) => { sel.fen = e.target.value.trim(); drawBoard(); } });
+  const pz = h('div', { class: 'puzzles', role: 'group', 'aria-label': '题目' });
+  const picks = h('div', { class: 'seat-pick', role: 'group', 'aria-label': '参加对比的选手' });
+  const fenInput = h('input', { type: 'text', placeholder: '或粘贴 FEN', 'aria-label': '自定义局面 FEN', oninput: (e) => { sel.fen = e.target.value.trim(); drawBoard(); } });
 
   function drawBoard() {
     const fen = sel.fen || sel.puzzle?.fen;
@@ -25,9 +25,9 @@ export async function compareNewView(root, { characters, go }) {
     } catch { /* FEN 还没输完 */ }
   }
   function draw() {
-    pz.replaceChildren(...puzzles.map((p) => h('div', { class: `puzzle${sel.puzzle === p && !sel.fen ? ' on' : ''}`, onclick: () => { sel.puzzle = p; sel.fen = ''; fenInput.value = ''; draw(); } }, h('b', {}, p.title), h('small', {}, p.desc))));
-    picks.replaceChildren(...ai.map((c) => h('div', { class: `pick${sel.ids.has(c.id) ? ' on' : ''}`, onclick: () => { sel.ids.has(c.id) ? sel.ids.delete(c.id) : sel.ids.add(c.id); draw(); } },
-      avatar(c, 'sm'), h('div', { class: 't' }, h('span', {}, c.name), h('small', {}, c.kind === 'model' ? c.model : modelLine(c))))));
+    pz.replaceChildren(...puzzles.map((p) => h('button', { type: 'button', class: `puzzle${sel.puzzle === p && !sel.fen ? ' on' : ''}`, ...pressed(sel.puzzle === p && !sel.fen), onclick: () => { sel.puzzle = p; sel.fen = ''; fenInput.value = ''; draw(); } }, h('b', {}, p.title), h('small', {}, p.desc))));
+    picks.replaceChildren(...ai.map((c) => h('button', { type: 'button', class: `pick${sel.ids.has(c.id) ? ' on' : ''}`, ...pressed(sel.ids.has(c.id)), onclick: () => { sel.ids.has(c.id) ? sel.ids.delete(c.id) : sel.ids.add(c.id); draw(); } },
+      avatar(c, 'sm'), h('span', { class: 't' }, h('span', {}, c.name), h('small', {}, c.kind === 'model' ? c.model : modelLine(c))))));
     drawBoard();
   }
 
@@ -36,13 +36,13 @@ export async function compareNewView(root, { characters, go }) {
     h('div', { class: 'col' },
       h('div', { class: 'card pad col' }, h('h2', {}, '同题对比'), pz, fenInput),
       h('div', { class: 'card pad col' }, h('h3', {}, '参加对比的选手'), picks,
-        h('div', {}, h('button', { class: 'btn primary', onclick: guard(async () => {
+        h('div', {}, h('button', { class: 'btn primary', type: 'button', onclick: guard(async () => {
           const fen = sel.fen || sel.puzzle.fen;
           const r = await post('/compares', { fen, title: sel.fen ? '自定义局面' : sel.puzzle.title, characterIds: [...sel.ids] });
           go(`#/compare/${r.id}`);
         }) }, '开始对比'))),
-      past.length ? h('div', { class: 'card pad col' }, h('h3', {}, '以往的对比'),
-        ...past.slice(0, 12).map((c) => h('a', { href: `#/compare/${c.id}`, class: 'row', style: { justifyContent: 'space-between' } }, h('span', {}, c.title), h('span', { class: 'small muted' }, fmtTime(c.created_at))))) : null,
+      past.length ? h('div', { class: 'card quiet pad col' }, h('h3', {}, '以往的对比'),
+        h('div', { class: 'side-list' }, ...past.slice(0, 12).map((c) => h('a', { href: `#/compare/${c.id}`, class: 'it two' }, h('span', {}, c.title), h('span', { class: 'small muted' }, fmtTime(c.created_at)))))) : null,
     ),
   ));
   draw();
@@ -50,6 +50,7 @@ export async function compareNewView(root, { characters, go }) {
 
 export async function compareView(root, id, { characters }) {
   let d = await api(`/compares/${id}`);
+  setTitle(d.title, '同题对比');
   const chars = new Map(characters.map((c) => [c.id, c]));
   const answers = new Map(d.answers.map((a) => [a.character_id, { ...a, text: a.analysis || '', reasoning: a.reasoning || '' }]));
   let evalBefore = null;

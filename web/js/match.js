@@ -2,10 +2,11 @@
 // 回放：从对局记录在浏览器里重建每一步，可以播放、调速、拖动进度。
 // 录制版式：地址带 ?record=1 时隐藏导航、自动从头播放，播完设置 window.__replayDone = true（供服务端录成视频）。
 
-import { h, api, post, listen, toast, guard, tierBadge, fmtMs, fmtTokens, pct, MODE_NAMES, resultText, modelLine } from './ui.js';
+import { h, api, post, listen, toast, guard, tierBadge, fmtMs, fmtTokens, pct, MODE_NAMES, resultText, modelLine, dialog, confirmDialog, icon } from './ui.js';
 import { loadRenderer, PALETTE } from '../stage/index.js';
 import { createFold } from './fold.js';
 import { createSpot } from './spot.js';
+import { sfx, nudgeTurn, soundOn, setSound } from './sound.js';
 
 const LINE_KEYS = ['判断', '威胁', '理由', '推断', '计划'];
 const QUALITY_CLASS = { 最佳: 'good', 好棋: 'good', 缓着: 'warn', 失误: 'warn', 大漏着: 'bad' };
@@ -20,6 +21,19 @@ function parseAnalysis(text) {
     if (m) out[k] = m[1].trim();
   }
   return Object.keys(out).length >= 2 ? out : null;
+}
+
+/** 单步准确率（lichess AccuracyPercent）：按这一步的胜率损失（百分点）折算成 0–100 */
+function moveAccuracy(loss) {
+  const d = Math.max(0, loss * 100);
+  return Math.max(0, Math.min(100, 103.1668 * Math.exp(-0.04354 * d) - 3.1669 + 1));
+}
+/** 整局准确率：算术平均和调和平均再取平均（调和平均让一次大漏着更显眼）；没有评估时返回 null */
+function gameAccuracy(list) {
+  if (!list.length) return null;
+  const mean = list.reduce((a, b) => a + b, 0) / list.length;
+  const harm = list.length / list.reduce((a, b) => a + 1 / Math.max(b, 1), 0);
+  return Math.round((mean + harm) / 2);
 }
 
 function qualityChip(q) {
@@ -88,6 +102,14 @@ export async function matchView(root, id, { characters }) {
   let spotPly = null;
   stage.setFlipped?.(flipped);
 
+  // 票型弧线的画布（狼人杀、谁是卧底），画法见下面的 drawVotes
+  const SVGNS = 'http://www.w3.org/2000/svg';
+  const voteSvg = document.createElementNS(SVGNS, 'svg');
+  voteSvg.setAttribute('class', 'vote-arcs');
+  voteSvg.setAttribute('aria-hidden', 'true');
+  voteSvg.innerHTML = '<defs><marker id="vote-head" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="currentColor"/></marker></defs><g></g>';
+  let voteState = { key: null, shown: new Set(), until: 0, links: [] };
+
   // ---------- 布局 ----------
   const camps = {};
   for (const seat of seats) {
@@ -125,6 +147,8 @@ export async function matchView(root, id, { characters }) {
     ));
     // 放不下时把面板收成胶囊按钮（见 fold.js）；按钮条放在面板的位置上
     const arenaEl = root.firstElementChild;
+    arenaEl.append(voteSvg);
+    new ResizeObserver(() => drawVotes(null, true)).observe(arenaEl);
     fold = createFold({ arena: arenaEl, stageCol: arenaEl.querySelector('.stage'), focusEl, panelRoot: stage.el, logBox, moves, logLabel: () => logSum.textContent.replace(/^全部记录\s*·\s*/, '') });
     logBox.before(fold.el);
   } else if (hud) {
@@ -159,6 +183,16 @@ export async function matchView(root, id, { characters }) {
     document.body.append(el);
     setTimeout(() => el.remove(), 2500);
   }
+  /** 这一步配什么音效 */
+  function soundFor(label = '', view = null) {
+    const t = String(label || '');
+    if (d.game === 'poker') return /弃牌|过牌/.test(t) ? 'card' : 'chip';
+    if (d.game === 'doudizhu') return /炸弹|王炸/.test(t) ? 'bomb' : 'card';
+    if (d.game === 'werewolf' || d.game === 'undercover' || d.game === 'dilemma') return null;
+    const st = stampFor(t, view);
+    if (st === '杀' || st === '将') return 'check';
+    return /吃|x|×/.test(t) ? 'capture' : 'move';
+  }
   function stampFor(label = '', view = null) {
     const t = String(label || '');
     // 斗地主、德州的画面自己演炸弹金光和 ALL IN 横幅，不再叠盖大印
@@ -190,20 +224,23 @@ export async function matchView(root, id, { characters }) {
     return ev ? ev.e0 ?? ev.redE ?? null : null;
   }
 
-  function seatStats(seat) {
-    const limit = viewPly ?? Infinity;
+  function seatStats(seat, whole = false) {
+    const limit = whole ? Infinity : viewPly ?? Infinity;
     const ts = [...turns.values()].filter((t) => t.seat === seat && t.label && t.ply <= limit);
     const tags = { 失误: 0, 大漏着: 0 };
     let lat = 0, tok = 0, illegal = 0, last = null;
+    const accs = [];
     for (const t of ts) {
       lat += t.latency_ms || 0;
       tok += (t.usage?.input || 0) + (t.usage?.output || 0);
       if (t.attempts?.length) illegal += t.attempts.length;
-      const tag = t.eval?.quality?.tag;
+      const q = t.eval?.quality;
+      const tag = q?.tag;
       if (tag in tags) tags[tag]++;
+      if (q && typeof q.loss === 'number') accs.push(moveAccuracy(q.loss));
       if (!last || t.ply > last.ply) last = t;
     }
-    return { n: ts.length, avg: ts.length ? lat / ts.length : 0, tok, illegal, tags, last };
+    return { n: ts.length, avg: ts.length ? lat / ts.length : 0, tok, illegal, tags, last, acc: gameAccuracy(accs) };
   }
 
   // ---------- 渲染 ----------
@@ -233,10 +270,10 @@ export async function matchView(root, id, { characters }) {
     const cls = ['seat', rightSeats.includes(seat) ? 'mir' : '', st.replace('speaking', ''), speaking ? 'speaking' : '', focusOf() === seat ? 'focused' : '', info.pick ? 'pickable' : ''].filter(Boolean).join(' ');
     const el = h('div', {
       class: cls, role: 'button', tabindex: 0, title: info.pick ? info.pickTitle || '选这个人' : `看 ${seats.indexOf(seat) + 1} 号的发言和想法`,
-      onclick: () => {
+      onclick: async () => {
         if (info.pick) {
           // 毒药不可撤回，先确认一次
-          if (String(info.pick).startsWith('poison:') && !confirm(`${info.pickTitle || '用毒药'}？毒药只有一瓶，用了不能撤回。`)) return;
+          if (String(info.pick).startsWith('poison:') && !(await confirmDialog({ title: info.pickTitle || '用毒药', body: '毒药只有一瓶，用了不能撤回。', okText: '用毒药', danger: true }))) return;
           doAction(info.pick);
           return;
         }
@@ -281,7 +318,7 @@ export async function matchView(root, id, { characters }) {
     const limit = viewPly ?? Infinity;
     const live = viewPly === null && d.status === 'running' ? partials.get(seat) : null;
     const t = live || [...turns.values()].filter((x) => x.seat === seat && x.ply <= limit).sort((a, b) => b.ply - a.ply)[0];
-    const hidden = d.options?.hideThoughts && d.status === 'running' && (c?.kind === 'model' || c?.kind === 'agent');
+    const hidden = (d.options?.hideThoughts || d.viewer === '*') && d.status === 'running' && (c?.kind === 'model' || c?.kind === 'agent');
     const a = t && !live ? parseAnalysis(t.analysis) : null;
     const thoughtText = hidden ? '对局结束后公开'
       : live ? (live.text || live.reasoning || '思考中…')
@@ -447,7 +484,7 @@ export async function matchView(root, id, { characters }) {
             c?.tier ? tierBadge(c.tier) : null,
             change ? h('span', { class: change.delta >= 0 ? 'delta-up' : 'delta-down' }, `${change.before} → ${change.after}（${change.delta >= 0 ? '+' : ''}${change.delta}）`) : null) : null)),
       two ? h('div', { class: 'camp-stats' },
-        stat('步数', s.n),
+        s.acc !== null ? stat('准确率', `${s.acc}%`, '按 lichess 的算法：每步按胜率损失折算 0–100 分，整局取算术平均和调和平均的平均（一次大漏着会明显拉低）') : stat('步数', s.n),
         stat('平均用时', s.n ? fmtMs(Math.round(s.avg)) : '—'),
         stat('tokens', fmtTokens(s.tok)),
         stat('失误', s.tags.失误 + s.tags.大漏着, s.tags.大漏着 ? `其中大漏着 ${s.tags.大漏着}` : ''),
@@ -469,7 +506,8 @@ export async function matchView(root, id, { characters }) {
     const status = running
       ? (paused ? '已暂停' : waitingHuman ? '轮到你' : thinkingSeats.length > 1 ? `${thinkingSeats.length} 人同时思考中` : thinkingSeats.length ? `${seatName(thinkingSeats[0])}思考中` : '…')
       : viewPly !== null && viewPly < n ? (replaying ? '回放中' : '复盘中') : resultText(d, d.seatNames);
-    const btn = (label, title, fn) => h('button', { class: 'icon-btn', title, onclick: guard(fn) }, label);
+    // 图标键：统一用 SVG 图标（icons.js），提示里写快捷键；读屏用 aria-label
+    const btn = (ic, title, fn) => h('button', { class: 'icon-btn', title, 'aria-label': title, onclick: guard(fn) }, icon(ic));
     const po = pendingOffer();
     const reviewing = viewPly !== null;
     const prevStatus = lastStatus;
@@ -482,28 +520,93 @@ export async function matchView(root, id, { characters }) {
         h('span', { class: 'muted small', style: { whiteSpace: 'nowrap' } }, reviewing ? `${replaying ? '回放' : '复盘'} ${viewPly}/${n}` : `已走 ${n} 步`)),
       h('div', { class: 'bar-ctrl' },
         canReview() && n ? [
-          btn(replaying ? '⏸' : '⏵', replaying ? '暂停回放（空格）' : '从头回放（空格）', () => (replaying ? stopReplay() : startReplay(reviewing && viewPly < n ? viewPly : 0))),
+          btn(replaying ? 'pause' : 'play', replaying ? '暂停回放（空格）' : '从头回放（空格）', () => (replaying ? stopReplay() : startReplay(reviewing && viewPly < n ? viewPly : 0))),
           h('select', { class: 'speed', title: '回放速度', onchange: (e) => { speed = Number(e.target.value); } },
             ...SPEEDS.map((s) => h('option', { value: s, selected: s === speed }, `${s}×`))),
-          reviewing ? btn('◀', '上一步（←）', () => { stopReplay(); goto(Math.max(0, viewPly - 1)); }) : null,
-          reviewing ? btn('▶', '下一步（→）', () => { stopReplay(); goto(Math.min(n, viewPly + 1)); }) : null,
-          reviewing && running ? btn('⟳', '回到最新', () => { stopReplay(); goto(null); }) : null,
+          reviewing ? btn('prev', '上一步（←）', () => { stopReplay(); goto(Math.max(0, viewPly - 1)); }) : null,
+          reviewing ? btn('next', '下一步（→）', () => { stopReplay(); goto(Math.min(n, viewPly + 1)); }) : null,
+          reviewing && running ? btn('skip', '回到最新', () => { stopReplay(); goto(null); }) : null,
         ] : null,
-        running && !hasHuman ? btn(paused ? '▶' : '⏸', paused ? '继续' : '暂停', () => post(`/matches/${id}/control`, { op: paused ? 'resume' : 'pause' })) : null,
-        running && paused ? btn('⏭', '单步', () => post(`/matches/${id}/control`, { op: 'step' })) : null,
+        running && !hasHuman ? btn(paused ? 'play' : 'pause', paused ? '继续' : '暂停', () => post(`/matches/${id}/control`, { op: paused ? 'resume' : 'pause' })) : null,
+        // 不剧透：没有真人的狼人杀、谁是卧底、斗地主、德扑，观众可以只看公共信息（身份、底牌、夜间行动、思考先不看）
+        running && !hasHuman && d.features?.hidden ? h('button', { class: `btn sm${d.viewer === '*' ? ' primary' : ''}`, title: d.viewer === '*' ? '现在只看公共信息；点一下换回上帝视角' : '只看公共信息：身份、底牌、夜间行动和思考先不看，结束后再揭晓', onclick: guard(togglePov) }, d.viewer === '*' ? '不剧透 ✓' : '不剧透') : null,
+        running && paused ? btn('skip', '单步', () => post(`/matches/${id}/control`, { op: 'step' })) : null,
         running && waitingHuman && po && po.seat !== waitingHuman ? h('button', { class: 'btn sm primary', onclick: guard(() => post(`/matches/${id}/control`, { op: 'accept_draw' })) }, '接受和棋') : null,
         running && waitingHuman && d.features?.draw && !po ? h('button', { class: `btn sm${offerNext ? ' primary' : ''}`, title: '走下一步时同时向对方提出和棋', onclick: () => { offerNext = !offerNext; renderStatus(); } }, offerNext ? '走棋时提和 ✓' : '提和') : null,
-        running && waitingHuman ? btn('🏳', '认输', async () => { if (confirm('确定认输？')) await post(`/matches/${id}/control`, { op: 'resign' }); }) : null,
-        running && d.mode === 'casual' ? btn('■', '中止对局', async () => { if (confirm('中止这盘？')) await post(`/matches/${id}/control`, { op: 'abort' }); }) : null,
-        stage.setFlipped ? btn('⇅', '翻转（F）', () => { flipped = !flipped; stage.setFlipped(flipped); renderStage(false); }) : null,
-        !running && canReview() && n ? btn('⏺', '录成视频（按当前回放速度）', async () => { await post(`/matches/${id}/record`, { speed }); toast(`已开始录制（${speed}×），完成后在「对局记录」里下载`); }) : null,
-        h('a', { class: 'icon-btn', title: '导出记录', href: `/api/matches/${id}/export` }, '⤓'),
+        running && waitingHuman ? btn('flag', '认输', async () => { if (await confirmDialog({ title: '认输', body: '确定认输？这盘会直接判负。', okText: '认输', danger: true })) await post(`/matches/${id}/control`, { op: 'resign' }); }) : null,
+        running && d.mode === 'casual' ? btn('stop', '中止对局', async () => { if (await confirmDialog({ title: '中止对局', body: '中止这盘？不计胜负，已经下的部分保留。', okText: '中止', danger: true })) await post(`/matches/${id}/control`, { op: 'abort' }); }) : null,
+        stage.setFlipped ? btn('flip', '翻转（F）', () => { flipped = !flipped; stage.setFlipped(flipped); renderStage(false); }) : null,
+        !running && winbarOn && n ? h('button', { class: 'btn sm', onclick: showReport }, '战报') : null,
+        !running && canReview() && n ? btn('record', '录成视频（按当前回放速度）', async () => { await post(`/matches/${id}/record`, { speed }); toast(`已开始录制（${speed}×），完成后在「对局记录」里下载`); }) : null,
+        btn(soundOn() ? 'sound' : 'mute', soundOn() ? '关掉音效' : '打开音效（走子、出牌、筹码、轮到你）', () => { setSound(!soundOn()); renderStatus(); }),
+        h('a', { class: 'icon-btn', title: '导出记录', 'aria-label': '导出记录', href: `/api/matches/${id}/export` }, icon('download')),
+        btn('link', '复制这一步的链接（打开就停在这一步）', async () => {
+          const url = `${location.origin}/#/match/${id}${viewPly !== null && canReview() ? `?turn=${viewPly}` : ''}`;
+          try { await navigator.clipboard.writeText(url); toast('链接已复制'); } catch { toast(url); }
+        }),
       ),
     );
     if (winbarOn) statusBar.append(tug);
     if (reviewing && canReview() && n) {
       statusBar.append(h('input', { class: 'scrub', type: 'range', min: 0, max: n, value: viewPly, oninput: (e) => { stopReplay(); goto(Number(e.target.value)); } }));
     }
+  }
+
+  // ---------- 票型弧线（狼人杀、谁是卧底） ----------
+  // 投票人座位 → 被投的人座位画一道弧（往场地中间拱），箭头指向被投的人；新的票一道一道画出来。
+  // 投完后的票型只在刚揭晓时画（停 6 秒淡去），打开页面时不补画旧的
+  function drawVotes(view, relayout = false) {
+    if (!renderer.voteLinks) return;
+    const g = voteSvg.querySelector('g');
+    if (!relayout) {
+      let v = null;
+      try { v = view ? renderer.voteLinks(view) : null; } catch (err) { console.error(err); }
+      const fresh = v && v.key !== voteState.key;
+      if (fresh) {
+        const first = voteState.key === null;
+        voteState = { key: v.key, shown: v.live ? voteState.shown : new Set(), links: v.links, live: !!v.live, out: v.out || null, until: v.live ? Infinity : first ? 0 : Date.now() + 6000 };
+        if (!v.live) setTimeout(() => drawVotes(null, true), 6100);
+      } else if (!v) voteState = { key: null, shown: new Set(), until: 0, links: [] };
+    }
+    const show = viewPly === null && Date.now() < voteState.until;
+    const box = voteSvg.parentElement?.getBoundingClientRect();
+    if (!show || !box?.width) { g.replaceChildren(); return; }
+    voteSvg.setAttribute('viewBox', `0 0 ${box.width} ${box.height}`);
+    const cx0 = box.width / 2, cy0 = box.height / 2;
+    const center = (seat) => {
+      const r = seatEls[seat]?.getBoundingClientRect();
+      return r && r.width ? [r.left - box.left + r.width / 2, r.top - box.top + r.height / 2, r] : null;
+    };
+    const kids = [];
+    voteState.links.forEach((l, i) => {
+      const a = center(l.from), b = center(l.to);
+      if (!a || !b || l.from === l.to) return;
+      // 从座位卡边上出发、到目标卡边上停：沿连线方向缩进半张卡
+      const dx = b[0] - a[0], dy = b[1] - a[1];
+      const len = Math.hypot(dx, dy) || 1;
+      const ux = dx / len, uy = dy / len;
+      const inset = (r) => Math.min(r.width, r.height) * 0.42;
+      const x1 = a[0] + ux * inset(a[2]), y1 = a[1] + uy * inset(a[2]);
+      const x2 = b[0] - ux * inset(b[2]), y2 = b[1] - uy * inset(b[2]);
+      // 控制点：中点往场地中央方向拱出去，拱高 = 距离 × 0.3
+      let nx = -uy, ny = ux;
+      const mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
+      if ((cx0 - mx) * nx + (cy0 - my) * ny < 0) { nx = -nx; ny = -ny; }
+      const k = Math.max(40, len * 0.3);
+      const path = document.createElementNS(SVGNS, 'path');
+      path.setAttribute('d', `M${x1.toFixed(1)} ${y1.toFixed(1)} Q${(mx + nx * k).toFixed(1)} ${(my + ny * k).toFixed(1)} ${x2.toFixed(1)} ${y2.toFixed(1)}`);
+      path.setAttribute('marker-end', 'url(#vote-head)');
+      const id = `${l.from}>${l.to}`;
+      const isNew = !relayout && !voteState.shown.has(id);
+      // 揭晓时：投给出局者的票用朱红，其余的票淡金，主线一眼看清
+      const hit = !voteState.live && voteState.out && l.to === voteState.out;
+      path.setAttribute('class', `arc${voteState.live ? ' live' : hit ? ' hit' : ' miss'}${isNew ? ' draw' : ''}`);
+      if (isNew) path.style.animationDelay = `${(voteState.live ? 0 : i) * 120}ms`;
+      voteState.shown.add(id);
+      kids.push(path);
+    });
+    g.replaceChildren(...kids);
+    voteSvg.classList.toggle('fading', !voteState.live);
   }
 
   let lastAnnView = null;
@@ -513,6 +616,7 @@ export async function matchView(root, id, { characters }) {
     col.querySelector('.announce')?.remove();
     const card = h('div', { class: `announce ${a.kind || ''}`, role: 'status' }, h('b', {}, a.title), a.sub ? h('span', {}, a.sub) : null);
     col.append(card);
+    sfx('out');
     setTimeout(() => card.remove(), 2700);
   }
   function renderStage(animate = true) {
@@ -526,6 +630,8 @@ export async function matchView(root, id, { characters }) {
     }
     const movable = latest && d.status === 'running' && waitingHuman && !paused ? waitingHuman : null;
     stage.render(view, { movable, actions: movable ? d.humanActions : null, arrows, animate, replay: !!replaying, viewer: d.viewer, players: playerInfo, clock: latest && d.status === 'running' ? Object.fromEntries(clock) : {} });
+    // 棋类快速回放：走子动画跟着倍速加快，不会一步还没走完下一步就来了（牌桌游戏的动画和停顿是对齐好的，不动）
+    if (!hud && !duo && replaying && speed > 1) for (const a of stage.el.getAnimations?.({ subtree: true }) || []) a.playbackRate = Math.min(8, speed);
     // 场上公告（天亮死讯、有人出局）：画面往前走了一步才弹，复盘往回翻、第一次打开时不弹
     if (renderer.announce && animate && lastAnnView && view !== lastAnnView && (latest || replaying)) {
       let a = null;
@@ -538,6 +644,7 @@ export async function matchView(root, id, { characters }) {
       renderScene();
       seats.forEach(renderSeat);
       fold?.update();
+      drawVotes(view);
     }
     if (winbarOn) {
       let e = null;
@@ -549,6 +656,57 @@ export async function matchView(root, id, { characters }) {
       tugR.textContent = `${Math.round((1 - v) * 100)}% ${seatName(seats[1])}`;
       tug.title = `${seatName(seats[0])}胜率 ${Math.round(v * 100)}%（${d.options?.startEval?.source === 'builtin' ? '内置粗略' : '引擎'}评估）`;
     }
+  }
+
+  /** 战报（棋类）：双方准确率、失误分布、用时和 token，外加胜率波动最大的三个关键时刻（点一下跳过去） */
+  function showReport() {
+    const n = totalPlies();
+    const swings = [];
+    let prev = e0At(0);
+    for (let p = 1; p <= n; p++) {
+      const e = e0At(p);
+      if (e === null) continue;
+      if (prev !== null) swings.push({ p, d: e - prev });
+      prev = e;
+    }
+    const top = swings.sort((a, b) => Math.abs(b.d) - Math.abs(a.d)).slice(0, 3).sort((a, b) => a.p - b.p);
+    const row = (seat) => {
+      const c = seatChar(seat);
+      const st = seatStats(seat, true);
+      const q = { 大漏着: 0, 失误: 0, 缓着: 0 };
+      for (const t of turns.values()) if (t.seat === seat && t.eval?.quality?.tag in q) q[t.eval.quality.tag]++;
+      return h('div', { class: 'rp-row' },
+        h('span', { class: 'coin' }, c?.avatar || '？'),
+        h('div', { class: 'rp-id' }, h('b', {}, c?.name || seatName(seat)), h('small', {}, seatName(seat))),
+        h('div', { class: 'rp-acc' }, h('b', {}, st.acc ?? '—'), h('small', {}, '准确率')),
+        h('div', { class: 'rp-q' }, h('span', { class: 'q-大漏着' }, `大漏着 ${q.大漏着}`), h('span', { class: 'q-失误' }, `失误 ${q.失误}`), h('span', { class: 'q-缓着' }, `缓着 ${q.缓着}`)),
+        h('div', { class: 'rp-meta' }, `${st.n} 步 · 平均 ${st.n ? fmtMs(Math.round(st.avg)) : '—'} · ${fmtTokens(st.tok)} tokens`));
+    };
+    const dlg = dialog('战报', h('div', { class: 'report' },
+      h('div', { class: 'rp-res' }, resultText(d, d.seatNames)),
+      ...seats.map(row),
+      top.length ? h('div', { class: 'rp-keys' }, h('h4', {}, '关键时刻'), ...top.map((k) => {
+        const t = turns.get(k.p);
+        return h('button', { class: 'rp-key', type: 'button', onclick: () => { dlg.close(); stopReplay(); goto(k.p); } },
+          h('span', { class: 'no' }, `#${k.p}`), h('b', {}, `${seatName(t?.seat)} ${t?.label || ''}`),
+          h('span', { class: k.d > 0 ? 'up' : 'dn' }, `${seatName(seats[0])}胜率 ${k.d > 0 ? '+' : '−'}${Math.round(Math.abs(k.d) * 100)}%`),
+          t?.eval?.quality ? qualityChip(t.eval.quality) : null);
+      })) : null));
+  }
+
+  /** 关键时刻：这一步前后胜率变化超过 10% 的步 */
+  function keyMoments() {
+    const out = [];
+    const n = totalPlies();
+    const upto = noSpoil() ? (viewPly ?? n) : n;
+    let prev = e0At(0);
+    for (let p = 1; p <= upto; p++) {
+      const e = e0At(p);
+      if (e === null) continue;
+      if (prev !== null && Math.abs(e - prev) > 0.1) out.push(p);
+      prev = e;
+    }
+    return out;
   }
 
   function renderCurve() {
@@ -579,13 +737,35 @@ export async function matchView(root, id, { characters }) {
       ${pts.length > 1 ? `<path class="area-r" d="${path(pts)} L ${X(pts[pts.length - 1][0])} ${H} L ${X(pts[0][0])} ${H} Z"/><path class="line" d="${path(pts)}"/>` : ''}
       ${self.length > 1 ? `<path class="self" d="${path(self)}"/>` : ''}
       ${n ? `<line class="cursor" x1="${X(cur)}" y1="0" x2="${X(cur)}" y2="${H}"/>` : ''}`;
+    // 失误点：大漏着红、失误橙、缓着蓝（lichess 配色），悬停看是哪一步
+    const QCOL = { 大漏着: '#db3031', 失误: '#e69d00', 缓着: '#4da3d5' };
+    // 曲线是拉伸的 SVG，圆点用 HTML 按百分比定位，不会被压扁；点一下跳到那一步
+    const dots = [];
+    for (let p = 1; p <= upto; p++) {
+      const q = turns.get(p)?.eval?.quality;
+      const e = e0At(p);
+      if (!q || !QCOL[q.tag] || e === null) continue;
+      dots.push(h('i', { class: `qdot${q.tag === '大漏着' ? ' big' : ''}${p === cur ? ' on' : ''}`, style: { left: `${(X(p) / W) * 100}%`, top: `${(Y(e) / H) * 100}%`, background: QCOL[q.tag] },
+        title: `第 ${p} 步 ${seatName(turns.get(p).seat)} ${turns.get(p).label || ''} · ${q.tag}（胜率 −${Math.round(q.loss * 100)}%）`,
+        onclick: (ev) => { ev.stopPropagation(); if (canReview()) { stopReplay(); goto(p); } } }));
+    }
     svgEl.addEventListener('click', (e) => {
       if (!n || !canReview()) return;
       const r = svgEl.getBoundingClientRect();
       stopReplay();
       goto(Math.round(((e.clientX - r.left) / r.width) * n));
     });
-    curve.replaceChildren(svgEl, h('div', { class: 'curve-legend' }, h('span', { class: 'lg-engine' }, `${seatName(seats[0])}胜率`), h('span', { class: 'lg-self' }, '自评')));
+    // 关键时刻：一步之内胜率变化超过 10%（lichess 的标准），可以在它们之间跳
+    const keys = keyMoments();
+    const at = viewPly ?? n;
+    const prevK = [...keys].reverse().find((p) => p < at);
+    const nextK = keys.find((p) => p > at);
+    const jump = (p) => (e) => { e.stopPropagation(); if (p && canReview()) { stopReplay(); goto(p); } };
+    curve.replaceChildren(svgEl, ...dots, h('div', { class: 'curve-legend' }, h('span', { class: 'lg-engine' }, `${seatName(seats[0])}胜率`), h('span', { class: 'lg-self' }, '自评')),
+      keys.length && canReview() ? h('div', { class: 'curve-keys' },
+        h('button', { type: 'button', disabled: !prevK, title: '上一个关键时刻（J）', onclick: jump(prevK) }, '‹'),
+        h('span', {}, `关键时刻 ${keys.length}`),
+        h('button', { type: 'button', disabled: !nextK, title: '下一个关键时刻（K）', onclick: jump(nextK) }, '›')) : null);
   }
 
   function moveItems() {
@@ -737,6 +917,8 @@ export async function matchView(root, id, { characters }) {
       goto(viewPly + 1);
       const t = turns.get(viewPly);
       stampFx(stampFor(t?.label, viewAt(viewPly)));
+      const so = soundFor(t?.label, viewAt(viewPly));
+      if (so) sfx(so, { fast: speed > 2 });
       const base = Math.min(5000, Math.max(900, (t?.latency_ms || 900) * 0.6 + (t?.analysis ? 600 : 0)));
       // 游戏要求的停顿（德州每手结算、开局提示）不随倍速缩短，画面要演完
       const extra = renderer.pauseAfter ? renderer.pauseAfter(viewAt(viewPly - 1), viewAt(viewPly)) || 0 : 0;
@@ -781,6 +963,24 @@ export async function matchView(root, id, { characters }) {
     }));
   }
 
+  /** 上帝视角 ⇄ 不剧透（公共视角） */
+  async function togglePov() {
+    d.viewer = d.viewer === '*' ? null : '*';
+    await syncFromServer();
+    toast(d.viewer === '*' ? '已切到不剧透：只看公共信息' : '已切回上帝视角');
+  }
+  /** 重新拿对局详情，正在想的人也按服务端的为准（不剧透时事件里的内容不能用） */
+  async function syncFromServer() {
+    await refresh();
+    partials.clear();
+    for (const p of d.partials || []) partials.set(p.seat, { ...p });
+    turns.clear();
+    for (const t of d.turns) turns.set(t.ply, t);
+    waitingHuman = d.waitingHuman;
+    renderAll();
+  }
+  let povTimer = null;
+
   async function refresh() {
     d = await api(`/matches/${id}${d.viewer ? `?viewer=${d.viewer}` : ''}`);
     viewCache.clear();
@@ -788,15 +988,27 @@ export async function matchView(root, id, { characters }) {
   }
 
   renderAll();
+  // 链接参数：?turn=N 打开就停在第 N 步，?autoplay=1 自动回放，?speed= 倍速，?embed=1 嵌入（不显示导航）
+  const qTurn = query.has('turn') ? Number(query.get('turn')) : null;
+  if (query.get('embed') === '1') document.body.classList.add('embed-mode');
   if (recordMode) setTimeout(() => startReplay(0), 1200);
+  else if (query.get('autoplay') === '1' && canReview()) setTimeout(() => startReplay(Number.isFinite(qTurn) ? qTurn : 0), 800);
+  else if (Number.isFinite(qTurn) && canReview()) goto(qTurn);
   else if (d.status !== 'running' && canReview()) goto(totalPlies());
 
   // ---------- 实时事件 ----------
   const stop = listen([`match:${id}`], async (e) => {
+    // 不剧透时，事件里带着上帝视角的局面和夜间行动：一律不用，攒一下再向服务端要公共视角
+    if (d.viewer === '*' && d.status === 'running' && e.type !== 'end') {
+      if (e.type === 'delta') return;
+      clearTimeout(povTimer);
+      povTimer = setTimeout(() => syncFromServer().catch(() => {}), 250);
+      return;
+    }
     switch (e.type) {
       case 'turn_start':
         clock.set(e.seat, Date.now());
-        if (e.seat && e.seat === humanSeat) { partials.delete(e.seat); await refresh(); waitingHuman = d.waitingHuman; }
+        if (e.seat && e.seat === humanSeat) { partials.delete(e.seat); await refresh(); waitingHuman = d.waitingHuman; if (waitingHuman) nudgeTurn(); }
         else partials.set(e.seat, { ply: e.ply, seat: e.seat, characterId: e.characterId, character_id: e.characterId, text: '', reasoning: '', attempts: [] });
         seats.forEach(renderCamp);
         renderStatus();
@@ -808,7 +1020,7 @@ export async function matchView(root, id, { characters }) {
         // 只有轮到我自己的座位才进入「轮到你」；别的真人在想时和模型一样显示思考中
         await refresh();
         waitingHuman = d.waitingHuman;
-        if (waitingHuman && !clock.has(waitingHuman)) clock.set(waitingHuman, Date.now() - (d.waitingElapsed || 0));
+        if (waitingHuman && !clock.has(waitingHuman)) { clock.set(waitingHuman, Date.now() - (d.waitingElapsed || 0)); nudgeTurn(); }
         if (e.seat && e.seat !== humanSeat && !partials.has(e.seat)) partials.set(e.seat, { ply: null, seat: e.seat, text: '', reasoning: '', attempts: [] });
         renderAll();
         break;
@@ -840,7 +1052,7 @@ export async function matchView(root, id, { characters }) {
         if (Array.isArray(d.record?.actions)) d.record.actions.push({ seat: e.seat, action: e.action });
         if (e.view) d.view = e.view;
         else await refresh();
-        if (viewPly === null) { renderAll(); stampFx(stampFor(e.label, d.view)); }
+        if (viewPly === null) { renderAll(); stampFx(stampFor(e.label, d.view)); const so = soundFor(e.label, d.view); if (so) sfx(so); }
         else { seats.forEach(renderCamp); renderStatus(); renderMoves(); }
         break;
       }
@@ -878,7 +1090,9 @@ export async function matchView(root, id, { characters }) {
         renderAll();
         if (!recordMode && canReview()) goto(totalPlies());
         if (!recordMode) toast(resultText(d, d.seatNames));
-        if (d.status === 'finished') stampFx(d.result?.ranks && Object.values(d.result.ranks).every((r) => r === 1) ? '和' : '终', true);
+        if (d.status === 'finished') sfx('win');
+        if (d.status === 'finished' && winbarOn && !recordMode) setTimeout(showReport, 1800);
+        if (d.status === 'finished' && !hud) stampFx(d.result?.ranks && Object.values(d.result.ranks).every((r) => r === 1) ? '和' : '终', true);
         break;
     }
   });
@@ -898,9 +1112,14 @@ export async function matchView(root, id, { characters }) {
     else if (e.key === 'End') { stopReplay(); goto(d.status === 'running' ? null : n); }
     else if (e.key === ' ' && canReview() && n) { if (replaying) stopReplay(); else startReplay(viewPly !== null && viewPly < n ? viewPly : 0); }
     else if ((e.key === 'f' || e.key === 'F') && stage.setFlipped) { flipped = !flipped; stage.setFlipped(flipped); renderStage(false); }
+    else if ((e.key === 'j' || e.key === 'k') && winbarOn && canReview()) {
+      const keys = keyMoments();
+      const p = e.key === 'j' ? [...keys].reverse().find((x) => x < at) : keys.find((x) => x > at);
+      if (p) { stopReplay(); goto(p); }
+    }
     else used = false;
     if (used) e.preventDefault();
   };
   document.addEventListener('keydown', onKey);
-  return () => { document.removeEventListener('keydown', onKey); stop(); stopReplay(); fold?.destroy(); document.body.classList.remove('record-mode'); };
+  return () => { document.removeEventListener('keydown', onKey); stop(); stopReplay(); fold?.destroy(); document.body.classList.remove('record-mode', 'embed-mode'); };
 }

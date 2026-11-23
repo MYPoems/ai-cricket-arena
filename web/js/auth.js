@@ -1,6 +1,6 @@
 // 登录、注册（等庄家审批）、我的账号、庄家审批页。
 
-import { h, api, post, guard, toast, fmtTime, pageHead } from './ui.js';
+import { h, api, post, guard, toast, fmtTime, pageHead, emptyState, icon } from './ui.js';
 
 const nextOf = () => decodeURIComponent(new URLSearchParams(location.hash.split('?')[1] || '').get('next') || '#/');
 
@@ -76,7 +76,9 @@ export async function accountView(root, { session }) {
         h('div', {}, h('button', { class: 'btn primary', type: 'submit' }, '保存新密码'))),
       h('div', { class: 'card pad row', style: { justifyContent: 'space-between' } },
         h('div', { class: 'small muted' }, `注册于 ${fmtTime(u.created_at)}`),
-        h('button', { class: 'btn', onclick: guard(async () => { await post('/auth/logout'); location.hash = '#/'; location.reload(); }) }, '退出登录'))));
+        h('button', { class: 'btn', type: 'button', onclick: guard(async () => {
+          await post('/auth/logout'); location.hash = '#/'; location.reload();
+        }) }, icon('logout', 16), '退出登录'))));
 }
 
 const STATUS = { pending: ['待审批', 'warn'], active: ['已通过', 'good'], rejected: ['已拒绝', ''], disabled: ['已停用', 'bad'] };
@@ -84,11 +86,11 @@ const STATUS = { pending: ['待审批', 'warn'], active: ['已通过', 'good'], 
 export async function adminView(root, { reloadSession }) {
   let status = 'pending';
   const body = h('div');
-  const tabs = h('div', { class: 'tabs' });
+  const tabs = h('div', { class: 'tabs', role: 'tablist', 'aria-label': '用户分类' });
   async function draw() {
     const users = await api(`/admin/users${status === 'all' ? '' : `?status=${status}`}`);
-    tabs.replaceChildren(...[['pending', '待审批'], ['active', '已通过'], ['all', '全部']].map(([k, l]) => h('button', { class: status === k ? 'on' : '', onclick: () => { status = k; draw(); } }, l)));
-    const act = (u, op, label, cls = 'btn sm') => h('button', { class: cls, onclick: guard(async () => {
+    tabs.replaceChildren(...[['pending', '待审批'], ['active', '已通过'], ['all', '全部']].map(([k, l]) => h('button', { type: 'button', role: 'tab', 'aria-selected': status === k ? 'true' : 'false', class: status === k ? 'on' : '', onclick: guard(async () => { status = k; await draw(); }) }, l)));
+    const act = (u, op, label, cls = 'btn sm') => h('button', { class: cls, type: 'button', onclick: guard(async () => {
       await post(`/admin/users/${u.id}/${op}`);
       toast(`${u.username}：${label}`);
       await reloadSession();
@@ -108,7 +110,9 @@ export async function adminView(root, { reloadSession }) {
             u.status === 'pending' ? [act(u, 'approve', '通过', 'btn sm primary'), act(u, 'reject', '拒绝')] : null,
             u.status === 'active' ? act(u, 'disable', '停用') : null,
             u.status === 'disabled' || u.status === 'rejected' ? act(u, 'enable', '恢复') : null)));
-      }))) : h('div', { class: 'empty card' }, status === 'pending' ? '没有待审批的申请' : '没有用户'));
+      }))) : status === 'pending'
+      ? emptyState('没有待审批的申请。', { wm: '批', action: h('button', { class: 'btn primary', type: 'button', onclick: guard(async () => { status = 'all'; await draw(); }) }, '看全部用户') })
+      : emptyState('没有用户。', { wm: '批' }));
   }
   root.replaceChildren(pageHead('审批', '新用户注册后在这里等你通过；通过后自动有自己的真人角色。', '批'), tabs, body);
   await draw();

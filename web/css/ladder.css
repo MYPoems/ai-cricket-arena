@@ -1,0 +1,106 @@
+/* 天梯：排名表（积分的不确定性、阵营战绩、出手统计）和对位热力图。令牌都来自 app.css。 */
+
+/* 主栏用 minmax(0, 1fr)：宽表格在自己的卡片里横向滚动，不把整页撑宽 */
+.ladder { grid-template-columns: minmax(0, 1fr) 340px; }
+@media (max-width: 1000px) { .ladder { grid-template-columns: minmax(0, 1fr); } }
+.ladder > *, .ladder-main > * { min-width: 0; }
+.ladder-main { gap: 26px; }
+.ladder-main > div:empty { display: none; }
+
+/* 表格卡片和 .card.table-wrap 一样用安静的漆面 */
+.ladder-board, .heat-card { background: var(--glint), var(--surface-quiet), var(--edge-now) border-box; }
+.table-scroll { overflow-x: auto; overscroll-behavior-x: contain; }
+.ladder-head { flex-wrap: wrap; row-gap: 12px; }
+.ladder-head .switch { color: var(--muted); gap: 8px; }
+
+/* ---------- 排名表 ---------- */
+.ladder-table td { vertical-align: middle; }
+.ladder-table .who-in { display: flex; align-items: center; gap: 8px; }
+.ladder-table .who .nm { overflow: hidden; text-overflow: ellipsis; }
+.ladder-table th.num .th-info { display: inline-flex; align-items: center; gap: 6px; }
+
+/* 「积分怎么看」小圆钮 */
+.info-dot { width: 17px; height: 17px; padding: 0; border-radius: 50%; border: 0; cursor: pointer; flex: none;
+  font: italic 700 11px/17px var(--serif); letter-spacing: 0; color: var(--gold-2);
+  background: var(--well-bg); box-shadow: inset 0 0 0 1px rgb(201 162 74 / .55), 0 1px 0 var(--groove-l); transition: color 160ms, box-shadow 160ms; }
+.info-dot:hover, .info-dot:focus-visible { color: var(--on-gold); background: var(--gold-metal); box-shadow: var(--gold-key-sh); outline: none; }
+
+/* 积分：保守分 + 估计实力 ± 误差，左边一根「把握」条（σ 越小越满） */
+.ladder-table td.score { line-height: 1.15; }
+.ladder-table td.score b { display: block; font-size: 17px; }
+.ladder-table .unc { display: inline-flex; align-items: center; gap: 6px; margin-top: 3px; font: 500 11.5px/1 var(--num); color: var(--faint); }
+.ladder-table .sure { position: relative; width: 26px; height: 4px; border-radius: 2px; background: var(--well-bg); box-shadow: inset 0 0 0 1px var(--rule); overflow: hidden; }
+.ladder-table .sure::after { content: ''; position: absolute; inset: 0 auto 0 0; width: calc(var(--s) * 100%); border-radius: 2px; background: var(--gold-rim); }
+
+/* 阵营：胜率 + 战绩 */
+.ladder-table td.side { line-height: 1.15; }
+.ladder-table td.side b { display: block; font-weight: 600; }
+.ladder-table td.side b.up { color: var(--good); }
+.ladder-table td.side b.down { color: var(--bad); }
+.ladder-table td.side .sub { font-size: 11.5px; color: var(--faint); }
+.ladder-table .wdl .w { color: var(--good); }
+.ladder-table .wdl .l { color: var(--bad); }
+.ladder-table .wdl { color: var(--faint); }
+.ladder-table .wdl span { color: var(--text); }
+.ladder-table .wdl span.w { color: var(--good); }
+.ladder-table .wdl span.l { color: var(--bad); }
+.ladder-table .warn { color: var(--warn); }
+
+/* ---------- 积分说明 ---------- */
+.ladder-explain { gap: 10px; }
+.ladder-explain p { margin: 0; line-height: 1.75; color: var(--muted); }
+.ladder-explain b { color: var(--text); }
+
+/* ---------- 对位热力图 ---------- */
+.heat-legend { display: inline-flex; align-items: center; gap: 8px; }
+.heat-legend i { width: 72px; height: 8px; border-radius: 4px; background: linear-gradient(90deg, var(--bad), var(--gold), var(--good)); box-shadow: inset 0 0 0 1px rgb(0 0 0 / .25); }
+.heat-scroll { padding: 0 20px 20px; }
+table.heat { border-collapse: separate; border-spacing: 3px; margin: 0 auto 0 0; }
+table.heat th { font: 600 12px/1 var(--sans); color: var(--muted); white-space: nowrap; }
+table.heat .idx { font: 500 11px/1 var(--num); color: var(--faint); min-width: 14px; text-align: right; }
+table.heat th.colh { padding: 0 0 4px; vertical-align: bottom; }
+table.heat th.colh { text-align: center; }
+table.heat th.colh .idx { display: block; text-align: center; margin-bottom: 4px; }
+table.heat th.colh .avatar { margin: 0 auto; }
+table.heat th.rowh { padding: 0 8px 0 0; text-align: left; }
+table.heat th.rowh { display: flex; align-items: center; gap: 6px; height: 38px; }
+table.heat th.rowh .nm { max-width: 9em; overflow: hidden; text-overflow: ellipsis; color: var(--text); font-weight: 500; }
+table.heat td { width: 50px; min-width: 50px; height: 38px; padding: 0; border-radius: var(--r-sm); text-align: center; font: 500 13px/1 var(--num); font-variant-numeric: tabular-nums; }
+table.heat td.self { background: repeating-linear-gradient(135deg, transparent 0 5px, var(--rule) 5px 6px); opacity: .6; }
+table.heat td.none { color: var(--faint); background: var(--well-bg); box-shadow: inset 0 0 0 1px rgb(0 0 0 / .2); }
+table.heat td.hit { cursor: pointer; color: var(--text); text-shadow: 0 1px 1px rgb(0 0 0 / .45);
+  background: color-mix(in oklab, color-mix(in oklab, var(--to) var(--k), var(--from)) var(--a), transparent);
+  box-shadow: inset 0 1px 0 rgb(255 240 210 / .14), inset 0 0 0 1px rgb(0 0 0 / .18); transition: transform 120ms var(--ease), box-shadow 120ms; }
+table.heat td.hit:hover { transform: translateY(-1px); box-shadow: inset 0 0 0 1px var(--gold-2), 0 3px 6px rgb(0 0 0 / .35); }
+:root[data-theme="light"] table.heat td.hit { text-shadow: 0 1px 0 rgb(255 255 255 / .5); }
+
+/* 两人交手记录（弹窗） */
+.pair-sum { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.pair-sum b { font-size: 26px; }
+.pair-list { display: flex; flex-direction: column; border-radius: var(--r); background: var(--well-bg); box-shadow: var(--well-sh); }
+.pair-row { display: flex; align-items: center; gap: 12px; padding: 9px 14px; color: var(--text); text-decoration: none; border-top: 1px solid var(--rule); }
+.pair-row:first-child { border-top: 0; }
+.pair-row:hover { background: rgb(240 205 120 / .07); text-decoration: none; }
+.pair-row .go { margin-left: auto; color: var(--gold-2); font-size: var(--fs-sm); }
+
+/* ---------- 窄屏：表格在卡片里横向滚，选手列钉在左边 ---------- */
+@media (max-width: 760px) {
+  .ladder-table th, .ladder-table td { padding: 10px 10px; }
+  .ladder-table .who { position: sticky; left: 0; z-index: 1; background: var(--panel); box-shadow: 1px 0 0 var(--rule), 8px 0 10px -8px rgb(0 0 0 / .6); }
+  .ladder-table tr.click:hover td.who { background: linear-gradient(rgb(240 205 120 / .07), rgb(240 205 120 / .07)), var(--panel); }
+  .ladder-table .who .nm { max-width: 6.5em; }
+  .ladder-table .who .small.muted { display: none; }
+  .ladder-table .rank-no { width: 22px; font-size: 15px; }
+  .ladder-table .rank-no.top1, .ladder-table .rank-no.top2, .ladder-table .rank-no.top3 { width: 24px; height: 24px; line-height: 24px; }
+  .heat-scroll { padding: 0 12px 14px; }
+  table.heat th.rowh .nm { max-width: 5em; }
+  table.heat td { width: 44px; min-width: 44px; height: 34px; font-size: 12px; }
+  table.heat th.rowh { height: 34px; }
+}
+
+/* 热力格里的按钮：铺满整格，键盘也能打开交手记录 */
+table.heat td.hit { padding: 0; }
+.heat-btn { display: grid; place-items: center; width: 100%; height: 100%; min-height: inherit; padding: 0; border: 0; border-radius: inherit; background: transparent; color: inherit; font: inherit; cursor: pointer; }
+.heat-btn:focus-visible { outline-offset: -2px; }
+/* 窄屏选手列被钉住时，行链接的铺满层只到这一格：别的格子由行点击接手 */
+.ladder-table tr.click { cursor: pointer; }

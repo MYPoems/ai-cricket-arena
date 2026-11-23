@@ -1,14 +1,20 @@
 // 斗地主画面：俯视一张深色漆木牌桌（金边、嵌金线），地主坐下方，两名农民在上方左右。
 // 观众是上帝视角，三家手牌摊成扇形；玩家本人只看到自己的牌，另两家是朱漆描金的牌背。
-// 顶部中间一块牌匾：底分、倍数（书法大字）、三张底牌。桌心是本轮最近的一手，它压过的上一手淡显在后面。
-// 动效：出牌从手里飞到桌心按牌型排开；「不出」气泡；剩余张数跳动，剩 2 张以下标红「报单/报双」；炸弹时桌心炸开金光、倍数翻滚。
-// 玩家本人行动时：手牌放大；点选或横着划过一串牌连选（选中的牌抬高），按钮「不出」「提示」「重选」「出牌」，
+// 顶部中间一块牌匾：底分、倍数（书法大字）、三张底牌。桌心是本轮最近的一手（主体在前、带的牌在后）；
+// 被压过的牌缩小退到出牌人面前，轮到他再出或这一轮结束时收走；「不出」是气泡。
+// 动效：出牌从手里飞到桌心按牌型排开；剩余张数跳动，剩 2 张以下标红「报单/报双」；炸弹时桌心炸开金光、倍数翻滚；
+// 定地主时三张底牌在桌心翻开、飞给地主（地主在下方时新到的三张抬起一会儿再落下）；飞机横穿牌桌、王炸火箭升空并震桌、
+// 顺子 / 连对一道光扫过；春天 / 反春先打横幅再出结算卡。结算卡写清叫分 × 炸弹 × 春天 = 每家分数，和每家得失。
+// 这些特效的时长在 games/doudizhu/rules.js 的 FX 里，服务端按同一份时长停顿（interlude），回放按 pauseAfter 停顿。
+// 玩家本人行动时：手牌放大，按钮左边一圈 30 秒软倒计时（只提醒，不会自动出牌）；点选或横着划过一串牌连选（选中的牌抬高），按钮「不出」「提示」「重选」「出牌」，
 // 按钮上方实时说明选中的是什么牌型、能不能出；「提示」依次给出能出的牌（小的先，炸弹最后）。
 // 叫分阶段为「不叫」「1 分」「2 分」「3 分」。
 //
 // 画面用 HTML 画：根节点是尺寸容器，里面一块固定比例的桌面，桌面上的东西一律用 em 定位（横版 80×50em，竖版 50×70em），
 // 所以大厅缩略图、对局页、手机竖屏都是同一套画法等比缩放。动画按「开始时刻」续播：重画时用负的 animation-delay 接上，
 // 所以对局推进、点选手牌导致的重画不会打断正在飞的牌。
+
+import { FX, fxDuration, TYPE_NAMES } from '/games/doudizhu/rules.js';
 
 const SEATS = ['p1', 'p2', 'p3'];
 const RANKS = ['3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A', '2', '小王', '大王'];
@@ -18,35 +24,41 @@ const COLORS = ['var(--red)', 'var(--black-side)', '#3559b5']; // 选手卡上�
 // 斗地主不分花色，牌面上的花色只是装饰：同一组牌里同点数的第 k 张依次用 ♠♥♣♦
 const SUITS = [['♠', 'b'], ['♥', 'r'], ['♣', 'b'], ['♦', 'r']];
 const EASE = 'cubic-bezier(.2,.75,.1,1)';
+const TYPE_KEY = Object.fromEntries(Object.entries(TYPE_NAMES).map(([k, v]) => [v, k])); // 「飞机带单」→ plane1
+const CD_SECS = 30; // 真人出手的软倒计时
+const reduced = () => typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 // ---------- 版式（单位 em） ----------
-// 每个座位：plate 名牌左上角，hand 手牌（cx 中心、y 顶边、cw 牌宽、maxW 最大总宽），bubble 气泡（ax 为 'l'/'r' 对齐），from 出牌起飞点
+// 每个座位：plate 名牌左上角，hand 手牌（cx 中心、y 顶边、cw 牌宽、maxW 最大总宽），bubble 气泡（ax 为 'l'/'r' 对齐），from 出牌起飞点，
+// front 面前那一手（x 为对齐边、al 为 'l'/'r'，牌宽 frontCw、最大总宽 frontMaxW）。ban 春天横幅的中线
 const LAYOUTS = {
   land: {
     w: 80, h: 50, plateW: 17.5,
     plaque: { cx: 40, y: 1.3 },
-    left: { plate: [1.6, 1.6], hand: { cx: 15, y: 9.4, cw: 3.3, maxW: 26.5 }, bubble: [20.2, 2.6, 'l'], from: [15, 12] },
-    right: { plate: [80 - 1.6 - 17.5, 1.6], hand: { cx: 65, y: 9.4, cw: 3.3, maxW: 26.5 }, bubble: [80 - 20.2, 2.6, 'r'], from: [65, 12] },
-    bottom: { plate: [1.6, 40.6], hand: { cx: 44.8, y: 38.4, cw: 5.1, maxW: 47.6 }, bubble: [2.2, 35.2, 'l'], from: [44.8, 42] },
+    left: { plate: [1.6, 1.6], hand: { cx: 15, y: 9.4, cw: 3.3, maxW: 26.5 }, bubble: [20.2, 2.6, 'l'], from: [15, 12], front: { x: 3.4, y: 15.9, al: 'l' } },
+    right: { plate: [80 - 1.6 - 17.5, 1.6], hand: { cx: 65, y: 9.4, cw: 3.3, maxW: 26.5 }, bubble: [80 - 20.2, 2.6, 'r'], from: [65, 12], front: { x: 80 - 3.4, y: 15.9, al: 'r' } },
+    bottom: { plate: [1.6, 40.6], hand: { cx: 44.8, y: 38.4, cw: 5.1, maxW: 47.6 }, bubble: [2.2, 35.2, 'l'], from: [44.8, 42], front: { x: 2.4, y: 34.6, al: 'l' } },
+    frontCw: 2.4, frontMaxW: 19,
     // 轮到玩家本人出牌时的手牌：放大、铺宽，整张露出更多，好点
     mine: { cx: 49.6, y: 36.6, cw: 6.2, maxW: 55 }, ctlMine: 31.5,
-    prev: { cx: 40, y: 13.6, cw: 3.1, maxW: 30 },
     lead: { cx: 40, y: 19.2, cw: 4.7, maxW: 44 },
     ctl: { cx: 40, y: 32.6 },
-    res: { cx: 40, y: 15.5 },
+    res: { cx: 40, y: 11.4, w: 34 },
+    ban: 22.5,
     counter: { cx: 40, y: 8.2 },
   },
   port: {
     w: 50, h: 70, plateW: 23.6,
     plaque: { cx: 25, y: 1 },
-    left: { plate: [0.9, 8.2], hand: { cx: 12.7, y: 15.4, cw: 2.75, maxW: 23 }, bubble: [1.4, 21.4, 'l'], from: [12.7, 18] },
-    right: { plate: [50 - 0.9 - 23.6, 8.2], hand: { cx: 37.3, y: 15.4, cw: 2.75, maxW: 23 }, bubble: [50 - 1.4, 21.4, 'r'], from: [37.3, 18] },
-    bottom: { plate: [0.9, 47.4], hand: { cx: 25, y: 56, cw: 5.2, maxW: 48.4 }, bubble: [50 - 1.4, 48.4, 'r'], from: [25, 60] },
+    left: { plate: [0.9, 8.2], hand: { cx: 12.7, y: 15.4, cw: 2.75, maxW: 23 }, bubble: [1.4, 21.4, 'l'], from: [12.7, 18], front: { x: 1.4, y: 21.4, al: 'l' } },
+    right: { plate: [50 - 0.9 - 23.6, 8.2], hand: { cx: 37.3, y: 15.4, cw: 2.75, maxW: 23 }, bubble: [50 - 1.4, 21.4, 'r'], from: [37.3, 18], front: { x: 50 - 1.4, y: 21.4, al: 'r' } },
+    bottom: { plate: [0.9, 47.4], hand: { cx: 25, y: 56, cw: 5.2, maxW: 48.4 }, bubble: [50 - 1.4, 48.4, 'r'], from: [25, 60], front: { x: 50 - 1.4, y: 48.6, al: 'r' } },
+    frontCw: 2.1, frontMaxW: 21.6,
     mine: { cx: 25, y: 54.6, cw: 5.9, maxW: 49 }, ctlMine: 40.4,
-    prev: { cx: 25, y: 24.6, cw: 2.6, maxW: 36 },
     lead: { cx: 25, y: 29.4, cw: 4, maxW: 46 },
     ctl: { cx: 25, y: 41.6 },
-    res: { cx: 25, y: 26 },
+    res: { cx: 25, y: 25.2, w: 42 },
+    ban: 33,
   },
 };
 
@@ -115,9 +127,9 @@ const CSS = `
 .ddz-c.sel { translate: 0 -1.3em; box-shadow: inset 0 0 0 .05em rgb(110 76 28 / .5), inset 0 0 0 .14em #e0b454, inset 0 .07em 0 #fff,
   0 .06em 0 #e4d7b6, 0 .12em 0 #c6b388, 0 .16em 0 rgb(60 36 8 / .55), 0 .6em .8em -.05em rgb(0 0 0 / .55), 0 0 .9em rgb(240 205 120 / .55); }
 .ddz-c.sel.pick:hover { translate: 0 -1.5em; }
-.ddz-play.stale .ddz-c, .ddz-play.prev .ddz-c { filter: none; }
-.ddz-play.prev { opacity: .5; }
 .ddz-play.stale { opacity: .42; }
+/* 面前那一手：小一号、阴影浅一些 */
+.ddz-play.front .ddz-c { box-shadow: inset 0 0 0 .05em rgb(110 76 28 / .5), inset 0 .07em 0 #fff, 0 .08em 0 #c6b388, 0 .12em 0 rgb(60 36 8 / .55), 0 .3em .4em -.05em rgb(0 0 0 / .5); }
 
 /* 牌匾：底分、倍数、底牌 */
 .ddz-plq { display: flex; align-items: center; gap: 1.1em; padding: .55em 1.1em .6em 1.3em; border-radius: 1em; translate: -50% 0; border: .14em solid transparent; white-space: nowrap;
@@ -129,6 +141,8 @@ const CSS = `
 .ddz-plq .mult.hot { background: linear-gradient(180deg, #ffd9b0 0%, #ff7a5a 40%, #d23a26 62%, #f2604a 100%); -webkit-background-clip: text; background-clip: text; }
 .ddz-plq .bot { display: flex; gap: .35em; padding: .35em .45em; border-radius: .6em; background: var(--well-bg); box-shadow: var(--well-sh); }
 .ddz-plq .bot .ddz-c { position: relative; }
+.ddz-plq .bot .ddz-fw { position: relative; width: 5em; height: 7em; }
+.ddz-plq .bot .ddz-fw .ddz-c { position: absolute; }
 .ddz-plq .sep { width: .1em; align-self: stretch; margin: .3em 0; background: linear-gradient(180deg, transparent, var(--groove-d), transparent); box-shadow: .08em 0 0 var(--groove-l); }
 
 /* 名牌：一块小漆板。轮到谁，谁的金边变亮、外面套一圈光 */
@@ -192,14 +206,68 @@ const CSS = `
   background: repeating-conic-gradient(from 0deg, rgb(255 226 150 / .5) 0deg 4deg, transparent 4deg 18deg);
   -webkit-mask: radial-gradient(closest-side, transparent 18%, #000 30%, transparent 72%); mask: radial-gradient(closest-side, transparent 18%, #000 30%, transparent 72%); }
 
-/* 结果 */
-.ddz-res { translate: -50% 0; display: grid; justify-items: center; gap: .5em; pointer-events: none; text-align: center; isolation: isolate; z-index: 5; }
-/* 结算字下垫一层暗漆晕，把最后一手牌压下去，字和牌不再打架 */
-.ddz-res::before { content: ''; position: absolute; inset: -1.6em -5em; z-index: -1; border-radius: 50%; background: radial-gradient(closest-side, rgb(26 6 3 / .9), rgb(26 6 3 / .66) 62%, transparent); }
-:root[data-theme="light"] .ddz-res::before { background: radial-gradient(closest-side, rgb(40 10 5 / .86), rgb(40 10 5 / .6) 62%, transparent); }
-.ddz-res b { font: 400 6.4em/1.05 var(--brush); background: var(--gold-text); -webkit-background-clip: text; background-clip: text; color: transparent; padding: 0 .1em;
-  filter: drop-shadow(0 .03em 0 rgb(40 12 2 / .9)) drop-shadow(0 .08em .1em rgb(0 0 0 / .6)); }
-.ddz-res span { font: 600 1.4em/1.3 var(--sans); color: #f2e3c2; letter-spacing: .14em; padding: .35em 1em; border-radius: 1em; background: rgb(10 3 2 / .55); box-shadow: inset 0 .05em .2em rgb(0 0 0 / .6), 0 .06em 0 rgb(255 224 176 / .14); }
+/* 结算卡：一张宣纸。标题（谁胜）、倍数算式、每家得失 */
+.ddz-res { translate: -50% 0; z-index: 7; display: grid; gap: .75em; padding: 1em 1.5em 1.25em; border-radius: 1.2em; pointer-events: none; color: #3a1a0c;
+  background: var(--paper-face);
+  box-shadow: inset 0 .06em 0 rgb(255 255 255 / .85), inset 0 0 0 .06em rgb(120 84 30 / .45), 0 0 0 .3em rgb(42 11 8 / .55), 0 0 0 .38em rgb(226 186 96 / .55),
+    0 .15em 0 .38em #6a4a14, 0 1.2em 2.4em rgb(0 0 0 / .6); }
+.ddz-res .hd { display: flex; align-items: center; justify-content: center; gap: .5em; }
+.ddz-res .hd b { font: 400 4.3em/1.05 var(--brush); color: #a3261a; letter-spacing: .04em; }
+.ddz-res .hd em { font: 700 1.05em/1 var(--sans); font-style: normal; letter-spacing: .12em; color: #fff4e0; padding: .38em .55em; border-radius: .3em; rotate: -8deg;
+  background: linear-gradient(180deg, #d23a26, #8e1b12); box-shadow: inset 0 0 0 .1em rgb(255 220 200 / .35), 0 .1em .2em rgb(0 0 0 / .3); }
+.ddz-res .fx { display: flex; justify-content: center; align-items: baseline; flex-wrap: wrap; gap: .35em .5em; padding: .55em .8em; border-radius: .6em;
+  font: 600 1.1em/1.3 var(--sans); color: #6a4a2a; background: rgb(120 84 30 / .08); box-shadow: inset 0 0 0 .06em rgb(120 84 30 / .28); white-space: nowrap; }
+.ddz-res .fx b { font: 700 1.5em/1 var(--num); color: #3a1a0c; margin-left: .15em; }
+.ddz-res .fx small { font-size: .8em; color: #8a6a4a; }
+.ddz-res .fx i { font-style: normal; color: #a08060; font-weight: 400; }
+.ddz-res .fx .tot b { color: #a3261a; }
+.ddz-res .rows { display: grid; gap: .3em; }
+.ddz-res .row { display: grid; grid-template-columns: 2em minmax(0, 1fr) auto 1.6em 4.2em; align-items: center; gap: .6em; padding: .4em .8em .4em .6em; border-radius: .6em; }
+.ddz-res .row.win { background: linear-gradient(90deg, rgb(226 186 96 / .42), rgb(226 186 96 / .1)); box-shadow: inset .25em 0 0 #c8983c; }
+.ddz-res .row .n { width: 1.8em; height: 1.8em; border-radius: 50%; display: grid; place-items: center; font: 700 1.05em/1 var(--num); color: #fbe8c8; background: #6a2a14; }
+.ddz-res .row .nm { font: 700 1.3em/1.2 var(--serif); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ddz-res .row .rl { font: 700 .95em/1 var(--sans); letter-spacing: .1em; padding: .3em .5em; border-radius: .3em; color: #6a4a2a; background: rgb(120 84 30 / .12); }
+.ddz-res .row .rl.ll { color: #fff4e0; background: #a3261a; }
+.ddz-res .row .w { font: 400 1.6em/1 var(--brush); color: #a3261a; text-align: center; }
+.ddz-res .row .sc { font: 700 1.75em/1 var(--num); text-align: right; font-variant-numeric: tabular-nums; color: #6a5a4a; }
+.ddz-res .row.win .sc { color: #b4241a; }
+
+/* 春天 / 反春横幅：结算卡之前横着打开一条朱红绸带 */
+.ddz-ban { left: 50%; translate: -50% -50%; z-index: 8; pointer-events: none; display: grid; justify-items: center; gap: .2em; padding: .5em 7em .8em; white-space: nowrap;
+  background:
+    linear-gradient(90deg, transparent, #e6bd5c 18%, #f6dc94 50%, #e6bd5c 82%, transparent) top / 100% .16em no-repeat,
+    linear-gradient(90deg, transparent, #e6bd5c 18%, #f6dc94 50%, #e6bd5c 82%, transparent) bottom / 100% .16em no-repeat,
+    linear-gradient(90deg, transparent, rgb(142 27 18 / .97) 16%, rgb(190 46 30) 50%, rgb(142 27 18 / .97) 84%, transparent); }
+.ddz-ban b { font: 400 7em/1.05 var(--brush); letter-spacing: .1em; background: var(--gold-text); -webkit-background-clip: text; background-clip: text; color: transparent; padding: 0 .1em;
+  filter: drop-shadow(0 .03em 0 rgb(40 12 2 / .9)) drop-shadow(0 .06em .1em rgb(0 0 0 / .6)); }
+.ddz-ban span { font: 600 1.3em/1.2 var(--sans); letter-spacing: .2em; color: #fbe8c8; }
+
+/* 特效层：和桌面一样大、裁掉出界的部分（飞机从桌外飞进来，火箭冲出桌面） */
+.ddz-fxc { inset: 1.7em 1.7em 2.3em; border-radius: 1.5em; overflow: hidden; pointer-events: none; z-index: 4; }
+.ddz-fxc > * { position: absolute; }
+.ddz-jet { left: 0; width: 24em; height: 5em; display: flex; align-items: center; }
+.ddz-jet i { flex: 1; height: .45em; border-radius: .5em; background: linear-gradient(90deg, transparent, rgb(255 236 190 / .22) 35%, rgb(255 240 200 / .9)); }
+.ddz-jet svg { width: 9em; height: 4.5em; flex: none; margin-left: -.6em; filter: drop-shadow(0 .3em .3em rgb(0 0 0 / .5)); }
+.ddz-rkt { width: 3.6em; height: 12em; translate: -50% 0; }
+.ddz-rkt svg { display: block; width: 3.6em; height: 7.6em; filter: drop-shadow(0 0 .6em rgb(255 190 110 / .7)); }
+.ddz-rkt i { display: block; width: 1.6em; height: 4.4em; margin: -2.7em auto 0; border-radius: 50% 50% 50% 50% / 25% 25% 75% 75%;
+  background: radial-gradient(60% 50% at 50% 15%, #fffbe8, #ffd56a 40%, rgb(255 110 50 / .8) 70%, transparent); transform-origin: 50% 0; animation: ddz-flame .12s ease-in-out infinite alternate; }
+.ddz-sweep { overflow: hidden; border-radius: .5em; pointer-events: none; }
+.ddz-sweep i { position: absolute; top: -10%; bottom: -10%; left: 0; width: 40%; background: linear-gradient(90deg, transparent, rgb(240 176 60 / .38) 25%, rgb(255 214 120 / .7) 50%, rgb(240 176 60 / .38) 75%, transparent); }
+
+/* 底牌交接：桌心三张牌翻开，再飞给地主 */
+.ddz-give { width: 5em; height: 7em; z-index: 6; }
+.ddz-give > .ddz-c { left: 0; top: 0; }
+
+/* 真人出手的软倒计时：一圈慢慢走空，≤10 秒琥珀、≤5 秒红；只提醒，不会自动出牌 */
+.ddz-cd { position: relative; flex: none; width: 2.7em; height: 2.7em; display: grid; place-items: center; align-self: center; --cd: #f0cd78; }
+.ddz-cd svg { position: absolute; inset: 0; width: 100%; height: 100%; rotate: -90deg; overflow: visible; }
+.ddz-cd circle { stroke-width: 3.4; }
+.ddz-cd .bg { fill: rgb(10 3 2 / .62); stroke: rgb(240 205 120 / .16); }
+.ddz-cd .fg { fill: none; stroke: var(--cd); stroke-linecap: round; transition: stroke .3s; }
+.ddz-cd b { position: relative; font: 700 1.2em/1 var(--num); color: var(--cd); font-variant-numeric: tabular-nums; transition: color .3s; }
+.ddz-cd.amber { --cd: #f09a3c; }
+.ddz-cd.red { --cd: #ff6a4a; animation: tmr-pulse 1s ease-in-out infinite; }
 
 /* 操作按钮：用设计系统的漆木键，尺寸跟着桌面缩放 */
 .ddz-ctl { translate: -50% 0; display: flex; gap: .9em; padding-bottom: .4em; animation: ddz-rise .35s ${EASE} both; }
@@ -233,18 +301,34 @@ const CSS = `
 .ddz.can-move .ddz-c.pick { touch-action: none; }
 .ddz-c.pick { transition: translate .16s cubic-bezier(.2,1.2,.4,1), box-shadow .16s; }
 
-@keyframes ddz-fly { from { transform: translate(var(--fx), var(--fy)) rotate(var(--fr, 0deg)) scale(.72); opacity: .25; } 60% { opacity: 1; } }
+@keyframes ddz-fly { from { transform: translate(var(--fx), var(--fy)) rotate(var(--fr, 0deg)) scale(var(--fs, .72)); opacity: var(--fo, .25); } 60% { opacity: 1; } }
 @keyframes ddz-deal { from { transform: translate(var(--fx), var(--fy)) scale(.6); opacity: 0; } }
 @keyframes ddz-pop { 0% { transform: scale(.4); opacity: 0; } 60% { transform: scale(1.08); opacity: 1; } }
 @keyframes ddz-jump { 0% { transform: translateY(0) scale(1); } 35% { transform: translateY(-.35em) scale(1.35); color: #f6dc94; } 100% { transform: none; } }
 @keyframes ddz-roll { 0% { transform: perspective(10em) rotateX(-90deg) translateY(-.2em); opacity: 0; } 55% { transform: perspective(10em) rotateX(18deg) scale(1.25); opacity: 1; } 100% { transform: none; } }
-@keyframes ddz-flip { 0% { transform: perspective(14em) rotateY(90deg); } 100% { transform: none; } }
 @keyframes ddz-burst { 0% { transform: scale(.1); opacity: 0; } 12% { opacity: 1; } 100% { transform: scale(1.5); opacity: 0; } }
 @keyframes ddz-rays { 0% { transform: scale(.3) rotate(0deg); opacity: 0; } 15% { opacity: 1; } 100% { transform: scale(1.25) rotate(40deg); opacity: 0; } }
 @keyframes ddz-shake { 0%, 100% { transform: none; } 20% { transform: translate(.25em, -.15em); } 40% { transform: translate(-.2em, .15em); } 60% { transform: translate(.12em, .1em); } 80% { transform: translate(-.08em, -.06em); } }
 @keyframes ddz-alarm { 50% { transform: scale(1.12); box-shadow: inset 0 .07em 0 rgb(255 220 200 / .6), 0 0 0 .08em #6a4a14, 0 0 0 .16em #e6bd5c, 0 0 1em .3em rgb(226 82 61 / .55); } }
 @keyframes ddz-dot { 0%, 100% { opacity: .3; transform: translateY(0); } 50% { opacity: 1; transform: translateY(-.15em); } }
 @keyframes ddz-rise { from { transform: translateY(1em) scale(.9); opacity: 0; } }
+@keyframes ddz-give { 0% { transform: scale(.4); opacity: 0; animation-timing-function: cubic-bezier(.2,1.4,.4,1); } 16% { transform: none; opacity: 1; }
+  68% { transform: none; animation-timing-function: cubic-bezier(.55,0,.35,1); } 94% { opacity: 1; } 100% { transform: translate(var(--tx), var(--ty)) scale(.5); opacity: 0; } }
+@keyframes ddz-flipout { 0% { transform: perspective(14em) rotateY(0deg); } 99% { opacity: 1; } 100% { transform: perspective(14em) rotateY(90deg); opacity: 0; } }
+@keyframes ddz-flipin { 0% { transform: perspective(14em) rotateY(-90deg); } 100% { transform: perspective(14em) rotateY(0deg); } }
+@keyframes ddz-lift { 0% { opacity: 0; transform: translateY(-2.1em); } 10% { opacity: 1; transform: translateY(-2.1em); } 82% { transform: translateY(-2.1em); animation-timing-function: cubic-bezier(.5,0,.6,1.4); } 100% { transform: none; } }
+@keyframes ddz-jet { 0% { transform: translate(var(--x0), 1.6em) rotate(-3deg); opacity: 0; } 8% { opacity: 1; } 88% { opacity: 1; } 100% { transform: translate(var(--x1), -2.2em) rotate(-3deg); opacity: 0; } }
+@keyframes ddz-rkt { 0% { transform: translateY(2em) scale(.5); opacity: 0; } 12% { transform: none; opacity: 1; } 86% { opacity: 1; } 100% { transform: translateY(var(--up)); opacity: 0; } }
+@keyframes ddz-flame { to { transform: scaleY(1.25) scaleX(.85); } }
+@keyframes ddz-sweep { 0% { transform: translateX(-110%) skewX(-18deg); opacity: 0; } 15% { opacity: 1; } 85% { opacity: 1; } 100% { transform: translateX(300%) skewX(-18deg); opacity: 0; } }
+@keyframes ddz-ban { 0% { transform: scaleX(.08); opacity: 0; } 14% { transform: scaleX(1.03); opacity: 1; } 22% { transform: none; } 82% { transform: none; opacity: 1; } 100% { transform: translateY(-1.4em) scale(1.03); opacity: 0; } }
+@keyframes ddz-cd { from { stroke-dashoffset: 0; } to { stroke-dashoffset: var(--len); } }
+
+/* 少动效：特效本来就不画；倒计时圈按秒跳 */
+@media (prefers-reduced-motion: reduce) {
+  .ddz-cd .fg { animation: none !important; }
+  .ddz-cd.red { animation: none; }
+}
 `;
 
 function injectStyle() {
@@ -349,15 +433,60 @@ function paintTimer(n) {
   n.classList.toggle('warm', s >= 30 && s < 90);
   n.classList.toggle('hot', s >= 90);
 }
+/** 真人出手的软倒计时：一圈 30 秒走空，按秒更新数字和颜色（≤10 秒琥珀、≤5 秒红）；到 0 只是停在 0，不会替人出牌 */
+const CD_LEN = +(2 * Math.PI * 15).toFixed(2);
+function countdown(t0) {
+  const n = el('div', { class: 'ddz-cd', 'data-t0': String(t0), title: `建议 ${CD_SECS} 秒内出手（只是提醒，不会自动出牌）`, role: 'timer' });
+  n.innerHTML = `<svg viewBox="0 0 36 36" aria-hidden="true"><circle class="bg" cx="18" cy="18" r="15"/><circle class="fg" cx="18" cy="18" r="15" stroke-dasharray="${CD_LEN}"/></svg><b></b>`;
+  // 圈用 CSS 动画连续走（负延迟接上已经过去的时间，重画不跳）；少动效时由每秒的 paint 直接设位置
+  const ms = Date.now() - t0;
+  const fg = n.querySelector('.fg');
+  fg.style.setProperty('--len', String(CD_LEN));
+  fg.style.animation = `ddz-cd ${CD_SECS}s linear ${-Math.min(ms, CD_SECS * 1000)}ms both`;
+  paintCountdown(n);
+  return n;
+}
+function paintCountdown(n) {
+  const ms = Date.now() - Number(n.dataset.t0);
+  const left = Math.max(0, Math.ceil(CD_SECS - ms / 1000));
+  n.querySelector('b').textContent = String(left);
+  n.querySelector('.fg').style.strokeDashoffset = String(+(CD_LEN * Math.min(1, ms / (CD_SECS * 1000))).toFixed(2));
+  n.classList.toggle('amber', left <= 10 && left > 5);
+  n.classList.toggle('red', left <= 5);
+}
 let timerTick = null;
 function startTimerTick(root) {
   clearInterval(timerTick);
   timerTick = setInterval(() => {
-    const ns = root.isConnected ? root.querySelectorAll('.tmr') : [];
+    const ns = root.isConnected ? root.querySelectorAll('.tmr, .ddz-cd') : [];
     if (!ns.length) { clearInterval(timerTick); timerTick = null; return; }
-    ns.forEach(paintTimer);
+    ns.forEach((n) => (n.classList.contains('tmr') ? paintTimer(n) : paintCountdown(n)));
   }, 1000);
 }
+
+/** 底牌翻面：先是牌背转到 90°，换成牌面再转回来。返回叠在一起的 [牌背, 牌面]（牌的 font-size 为 1em，套在外层里定大小） */
+function flipPair(card, t0, delay) {
+  const back = cardEl({ n: null }, 0, 0, 1);
+  const face = cardEl(card, 0, 0, 1);
+  play(back, 'ddz-flipout', 200, t0, delay, 'ease-in');
+  play(face, 'ddz-flipin', 200, t0, delay + 200, 'ease-out');
+  return [back, face];
+}
+const flipDone = (t0, delay) => t0 === null || t0 === undefined || now() - t0 > delay + 420;
+
+/** 地主手里新到的三张底牌在手牌（从大到小）里的位置 */
+function bottomIdx(d, bottom) {
+  const used = new Set();
+  for (const n of bottom || []) {
+    const k = d.findIndex((x, j) => x === n && !used.has(j));
+    if (k >= 0) used.add(k);
+  }
+  return used;
+}
+
+// 特效用的小图：俯视的飞机、火箭
+const JET_SVG = '<svg viewBox="0 0 64 32" aria-hidden="true"><path fill="#f6dc94" stroke="#6a4a14" stroke-width="1.2" stroke-linejoin="round" d="M4 14.2H15L9 6.5H13.5L21 14.2H30L23 2H29.5L42 14.2H54C60 14.2 63 15.2 63 16S60 17.8 54 17.8H42L29.5 30H23L30 17.8H21L13.5 25.5H9L15 17.8H4Z"/><path fill="#c8983c" d="M44 15h12c2 0 3 .5 3 1s-1 1-3 1H44z"/></svg>';
+const ROCKET_SVG = '<svg viewBox="0 0 36 76" aria-hidden="true"><path fill="#fbf3df" stroke="#6a4a14" stroke-width="1.4" d="M18 2C26 10 28 24 27 44H9C8 24 10 10 18 2Z"/><path fill="#d23a26" stroke="#6a4a14" stroke-width="1.4" d="M18 2C22.5 6.5 25 12 26 18H10C11 12 13.5 6.5 18 2Z"/><circle cx="18" cy="27" r="4.2" fill="#3559b5" stroke="#e6bd5c" stroke-width="1.6"/><path fill="#d23a26" stroke="#6a4a14" stroke-width="1.4" d="M9 34L2 50L9 47ZM27 34L34 50L27 47ZM14 44H22L20.5 50H15.5Z"/></svg>';
 const playKey = (seat, t) => (t && t.cards ? `${seat}:${t.cards.join(',')}` : '');
 
 export default {
@@ -390,6 +519,15 @@ export default {
     };
   },
 
+  /** 回放时这一步之后多停多久（毫秒）：画面特效要演完（底牌交接、飞机、王炸、炸弹、春天横幅），不随倍速缩短 */
+  pauseAfter(prev, view) {
+    const sum = (v) => (v && v.seats ? {
+      landlord: !!v.landlord, plays: v.plays?.length || 0, last: TYPE_KEY[v.plays?.at(-1)?.type] || null,
+      over: !!v.result, banner: !!(v.result?.spring || v.result?.anti),
+    } : null);
+    return fxDuration(sum(prev), sum(view));
+  },
+
   // 手机竖屏用竖版桌面，其余横版
   get aspect() { return typeof matchMedia === 'function' && matchMedia('(max-width: 700px)').matches ? [10, 14] : [16, 10]; },
   seatColor: (seat, i) => COLORS[(i ?? SEATS.indexOf(seat)) % COLORS.length],
@@ -405,7 +543,10 @@ export default {
     let last = null; // { view, opts }
     let layoutName = 'land';
     // 动画的开始时刻与上一画面的记录
-    const fx = { prev: null, lead: { key: '', t0: null }, boom: null, mult: null, flip: null, counts: {}, cnt: {}, bubbles: {}, bub: {} };
+    const fx = {
+      prev: null, lead: { key: '', t0: null }, boom: null, plane: null, rocket: null, sweep: null, mult: null, flip: null, over: null,
+      counts: {}, cnt: {}, bubbles: {}, bub: {}, front: {}, turn: { key: '', t0: 0 },
+    };
 
     const redraw = () => last && draw(last.view, last.opts);
     let hintIdx = -1; // 「提示」给到第几个
@@ -517,11 +658,25 @@ export default {
       const lead = leadOf(view);
       const key = lead ? `${view.trickNo}|${playKey(lead.seat, lead.t)}` : '';
       if (key !== fx.lead.key) {
-        fx.lead = { key, t0: live && lead && !lead.stale ? t : null };
-        if (live && lead && !lead.stale && /炸弹|王炸/.test(lead.t.type || '')) fx.boom = t;
+        const fresh = live && lead && !lead.stale;
+        const type = fresh ? lead.t.type || '' : '';
+        fx.lead = { key, t0: fresh ? t : null };
+        fx.boom = /炸弹|王炸/.test(type) ? t : null;
+        fx.rocket = type === '王炸' ? t : null;
+        fx.plane = /^飞机/.test(type) ? t : null;
+        fx.sweep = type === '顺子' || type === '连对' ? t : null;
       }
       if (p && (view.multiplier || 1) !== (p.multiplier || 1) && live) fx.mult = t;
       if (p && !p.landlord && view.landlord && live) fx.flip = t;
+      if (!view.landlord) fx.flip = null;
+      if (p && !p.result && view.result && live) fx.over = t;
+      if (!view.result) fx.over = null;
+      // 各家面前那一手：被压过时从桌心退回来
+      const fr = frontsOf(view, lead);
+      for (const s of SEATS) {
+        const k = fr[s] ? `${view.trickNo}|${playKey(s, fr[s])}` : '';
+        if (k !== (fx.front[s]?.key || '')) fx.front[s] = { key: k, t0: live && k ? t : null };
+      }
       for (const s of SEATS) {
         const c = view.counts?.[s];
         if (p && p.counts?.[s] !== c && live) fx.cnt[s] = t;
@@ -543,17 +698,17 @@ export default {
       const any = SEATS.find((s) => table[s]?.cards);
       return any ? { seat: any, t: table[any], stale: !!view.stale } : null;
     }
-    /** 被桌心那一手压过的上一手：从出牌人往回数，第一个出了牌的座位 */
-    function prevOf(view, lead) {
-      if (!lead || lead.stale) return null;
-      const table = view.table || {};
-      const i = SEATS.indexOf(lead.seat);
-      for (const k of [2, 1]) {
-        const s = SEATS[(i + k) % 3];
-        if (table[s]?.cards) return { seat: s, t: table[s] };
-        if (!table[s]?.pass) break;
+    /** 各家面前那一手：本轮自己最近出的牌。桌心那一手的主人不重复摆；轮到谁再出，谁面前的收走；新一轮开始全部收走 */
+    function frontsOf(view, lead) {
+      const out = {};
+      if (view.phase === 'bid' || view.stale) return out;
+      for (const s of SEATS) {
+        const t = view.table?.[s];
+        if (!t?.cards || view.turn === s) continue;
+        if (lead && !lead.stale && lead.seat === s) continue;
+        out[s] = t;
       }
-      return null;
+      return out;
     }
 
     function plate(view, seat, pos, L, { me = null, bottom = false, t0 = null } = {}) {
@@ -580,7 +735,7 @@ export default {
     }
 
     /** 一家的手牌：明牌成扇形，暗牌是牌背 */
-    function hand(view, seat, pos, { mine = false, pick = false, d = null } = {}) {
+    function hand(view, seat, pos, { mine = false, pick = false, d = null, lift = null } = {}) {
       const names = view.hands?.[seat];
       const out = [];
       const count = view.counts?.[seat] ?? 0;
@@ -595,28 +750,44 @@ export default {
         if (g.rot) node.style.rotate = `${g.rot}deg`;
         node.style.transformOrigin = '50% 120%';
         if (pick) node.dataset.i = String(i);
+        // 定地主：新到的三张先藏着（底牌还在桌心飞），飞到后抬起约 0.3 张牌高，停一会儿再落下
+        if (lift?.has(i)) play(node, 'ddz-lift', FX.lift + 200, fx.flip, FX.handover - 150, 'ease-out');
         out.push(node);
       });
       return out;
     }
 
     /** 桌上的一手牌：按牌型横排；animate 时从出牌人手里飞出来 */
-    function playRow(t, spot, { cls = '', from = null, t0 = null } = {}) {
+    /**
+     * 桌上的一手牌：按给的顺序横排（主体在前、带的牌在后）。from 为起飞点（从出牌人手里飞出来），
+     * 或 fromPts 为每张牌的起点（被压过的牌从桌心缩回出牌人面前），起始放大 fromScale 倍
+     */
+    function playRow(t, spot, { cls = '', from = null, fromPts = null, fromScale = null, step = 0.56, dur = FX.fly, t0 = null } = {}) {
       const cards = withSuits(t.cards);
-      const geo = spread(cards.length, spot, { step: spot.cw * 0.56, fan: false });
+      const geo = spread(cards.length, spot, { step: spot.cw * step, fan: false });
       const fs = spot.cw / 5;
       const g = el('div', { class: `ddz-play ${cls}`, style: 'inset:0' });
       cards.forEach((c, i) => {
         const node = cardEl(c, geo[i].x, geo[i].y, fs);
-        if (from && t0 !== null) {
-          node.style.setProperty('--fx', `${(from[0] - geo[i].x - spot.cw / 2) / fs}em`);
-          node.style.setProperty('--fy', `${(from[1] - geo[i].y - spot.cw * 0.7) / fs}em`);
-          node.style.setProperty('--fr', `${(i - (cards.length - 1) / 2) * -6}deg`);
-          play(node, 'ddz-fly', 460, t0, i * 22);
+        const p0 = fromPts ? fromPts[i] : from;
+        if (p0 && t0 !== null && t0 !== undefined) {
+          node.style.setProperty('--fx', `${(p0[0] - geo[i].x - spot.cw / 2) / fs}em`);
+          node.style.setProperty('--fy', `${(p0[1] - geo[i].y - spot.cw * 0.7) / fs}em`);
+          node.style.setProperty('--fr', fromPts ? '0deg' : `${(i - (cards.length - 1) / 2) * -6}deg`);
+          if (fromScale) { node.style.setProperty('--fs', String(+fromScale.toFixed(3))); node.style.setProperty('--fo', '1'); }
+          play(node, 'ddz-fly', dur, t0, i * (fromPts ? 10 : 22));
         }
         g.append(node);
       });
       return g;
+    }
+
+    /** 一行牌的几何：n 张、牌宽 cw、步长 step，在 spot 里按 al 对齐（'l' 左边齐 x、'r' 右边齐 x） */
+    function frontSpot(n, f, L) {
+      const cw = L.frontCw;
+      const st = n > 1 ? Math.min(cw * 0.7, (L.frontMaxW - cw) / (n - 1)) : 0;
+      const total = cw + st * (n - 1);
+      return { cx: f.al === 'l' ? f.x + total / 2 : f.al === 'r' ? f.x - total / 2 : f.x, y: f.y, cw, maxW: L.frontMaxW };
     }
 
     /** 记牌器：每个点数还剩几张没出（玩家视角再扣掉自己手里的）；剩 4 张的标金，可能有炸弹 */
@@ -638,9 +809,10 @@ export default {
       const bot = el('div', { class: 'bot' });
       for (let i = 0; i < 3; i++) {
         const nm = known ? view.bottom[i] : null;
-        const c = cardEl(nm ? withSuits(view.bottom)[i] : { n: null }, 0, 0, layoutName === 'port' ? 0.5 : 0.56);
-        if (nm) play(c, 'ddz-flip', 520, fx.flip, i * 140);
-        bot.append(c);
+        const fs = layoutName === 'port' ? 0.5 : 0.56;
+        const delay = 350 + i * 120; // 和桌心那三张同时翻
+        if (nm && !flipDone(fx.flip, delay) && !reduced()) bot.append(el('span', { class: 'ddz-fw', style: `font-size:${fs}em` }, ...flipPair(withSuits(view.bottom)[i], fx.flip, delay)));
+        else bot.append(cardEl(nm ? withSuits(view.bottom)[i] : { n: null }, 0, 0, fs));
       }
       const mult = el('span', { class: `mult${(view.multiplier || 1) > 1 ? ' hot' : ''}` }, `${cnNum(view.multiplier || 1)}倍`);
       play(mult, 'ddz-roll', 700, fx.mult, 0, 'cubic-bezier(.2,1.4,.4,1)');
@@ -649,6 +821,36 @@ export default {
         el('div', { class: 'kv' }, el('small', {}, '倍数'), mult),
         el('i', { class: 'sep' }),
         el('div', { class: 'kv' }, el('small', {}, '底牌'), bot));
+    }
+
+    /** 结算卡：谁胜、倍数算式（叫分 × 2^炸弹数 × 春天 = 每家分数）、每家得失（地主一家顶两家） */
+    function settleCard(view, r, L) {
+      const bid = r.bid ?? view.bid;
+      const bombs = r.bombs ?? view.bombs ?? 0;
+      const per = r.score;
+      const ll = view.landlord;
+      const scores = r.scores || Object.fromEntries(SEATS.map((s) => [s, (s === ll ? 2 : -1) * (r.landlordWins ? 1 : -1) * per]));
+      const term = (label, v, note) => el('span', {}, label, el('b', {}, v), note ? el('small', {}, note) : null);
+      const fxRow = el('div', { class: 'fx' },
+        term('叫分', String(bid)),
+        el('i', {}, '×'), term('炸弹', `×${2 ** bombs}`, bombs ? `（${bombs} 个）` : '（无）'),
+        r.spring || r.anti ? [el('i', {}, '×'), term(r.spring ? '春天' : '反春', '×2')] : null,
+        el('i', {}, '='), el('span', { class: 'tot' }, '每家', el('b', {}, String(per)), '分'));
+      const order = ll ? [ll, ...SEATS.filter((s) => s !== ll)] : SEATS;
+      const rows = order.map((s) => {
+        const won = (s === ll) === r.landlordWins;
+        const v = scores[s] || 0;
+        const name = view.seatNames?.[s] || s;
+        return el('div', { class: `row${won ? ' win' : ''}` },
+          el('span', { class: 'n' }, String(SEATS.indexOf(s) + 1)),
+          el('span', { class: 'nm', title: name }, name),
+          el('span', { class: `rl${s === ll ? ' ll' : ''}` }, s === ll ? '地主 ×2' : '农民'),
+          el('span', { class: 'w' }, won ? '胜' : ''),
+          el('span', { class: 'sc' }, v > 0 ? `+${v}` : String(v)));
+      });
+      return el('div', { class: 'ddz-res', style: `left:${L.res.cx}em;top:${L.res.y}em;width:${L.res.w}em`, role: 'status' },
+        el('div', { class: 'hd' }, el('b', {}, r.landlordWins ? '地主胜' : '农民胜'), r.spring ? el('em', {}, '春天') : r.anti ? el('em', {}, '反春') : null),
+        fxRow, el('div', { class: 'rows' }, ...rows));
     }
 
     function draw(view, opts) {
@@ -666,15 +868,19 @@ export default {
       root.classList.toggle('can-move', canAct);
 
       const kids = [el('div', { class: 'ddz-rail' }), el('div', { class: 'ddz-top' }), el('div', { class: 'ddz-wm' }, '斗')];
+      const calm = reduced();
+      const T = now();
+      const within = (t0, dur) => !calm && t0 !== null && t0 !== undefined && T - t0 < dur;
 
-      // 桌心：上一手（淡）、这一手、牌型标签、炸弹金光
+      // 桌心：本轮最近的一手、牌型标签、炸弹金光；被压过的牌退到出牌人面前
       const lead = leadOf(view);
-      const prev = prevOf(view, lead);
       const c = L.lead;
       const leadH = c.cw * 1.4;
       kids.push(el('div', { class: 'ddz-glow', style: `left:${c.cx}em;top:${c.y + leadH / 2}em;width:${c.maxW * 0.9}em;height:${leadH * 2.6}em` }));
       const center = []; // 桌心的牌最后画，飞行中的牌压在手牌上面
-      if (prev) center.push(playRow(prev.t, L.prev, { cls: 'prev' }));
+      const fxc = el('div', { class: 'ddz-fxc' }); // 飞机、火箭：裁在桌面里
+      const ox = 1.7, oy = 1.7; // 特效层相对桌面的偏移（同 .ddz-fxc 的 inset）
+      const leadGeo = lead ? spread(lead.t.cards.length, c, { step: c.cw * 0.56, fan: false }) : [];
       if (lead) {
         const boom = /炸弹|王炸/.test(lead.t.type || '');
         const row = playRow(lead.t, c, { cls: lead.stale ? 'stale' : '', from: spots[lead.seat]?.from, t0: fx.lead.t0 });
@@ -683,28 +889,81 @@ export default {
         const who = view.roles?.[lead.seat] || '';
         kids.push(el('div', { class: `ddz-lbl${boom ? ' boom' : ''}`, style: `left:${c.cx}em;top:${c.y + leadH + 0.9}em` },
           el('span', {}, `${view.seatNames?.[lead.seat] || lead.seat}${who ? ` · ${who}` : ''}`), el('b', {}, lead.t.type || ''), lead.stale ? el('span', {}, '上一轮') : null));
-        if (boom && fx.boom !== null && now() - fx.boom < 1500) {
+        if (boom && fx.boom !== null && T - fx.boom < 1500) {
           const cy = c.y + leadH / 2;
           kids.push(play(el('div', { class: 'ddz-burst', style: `left:${c.cx}em;top:${cy}em` }), 'ddz-burst', 1100, fx.boom, 300, 'ease-out'));
           kids.push(play(el('div', { class: 'ddz-rays', style: `left:${c.cx}em;top:${cy}em` }), 'ddz-rays', 1300, fx.boom, 300, 'ease-out'));
         }
+        // 顺子、连对：牌落定后一道光扫过
+        if (within(fx.sweep, FX.fly + FX.sweep)) {
+          const x0 = leadGeo[0].x, w = leadGeo.at(-1).x + c.cw - x0;
+          const band = play(el('i'), 'ddz-sweep', FX.sweep, fx.sweep, FX.fly - 80, 'ease-in-out');
+          center.push(el('div', { class: 'ddz-sweep', style: `left:${x0}em;top:${c.y}em;width:${w}em;height:${leadH}em` }, band));
+        }
+        // 飞机：一架飞机拖着尾迹横穿牌桌
+        if (within(fx.plane, FX.fly + FX.plane)) {
+          const j = el('div', { class: 'ddz-jet', style: `top:${c.y - 1.6 - oy}em` }, el('i'));
+          j.insertAdjacentHTML('beforeend', JET_SVG);
+          j.style.setProperty('--x0', '-24em');
+          j.style.setProperty('--x1', `${L.w - 2 * ox + 2}em`);
+          fxc.append(play(j, 'ddz-jet', FX.plane, fx.plane, FX.fly - 100, 'cubic-bezier(.35,.15,.65,.9)'));
+        }
+        // 王炸：火箭从桌心升空，整张桌子一震
+        if (within(fx.rocket, FX.fly + FX.rocket + 100)) {
+          const r = el('div', { class: 'ddz-rkt', style: `left:${c.cx - ox}em;top:${c.y - 2.4 - oy}em` }, el('i'));
+          r.insertAdjacentHTML('afterbegin', ROCKET_SVG);
+          r.style.setProperty('--up', `${-(c.y + 12)}em`);
+          fxc.append(play(r, 'ddz-rkt', FX.rocket, fx.rocket, FX.fly - 120, 'cubic-bezier(.55,0,.85,.55)'));
+        }
+      }
+      if (within(fx.rocket, FX.fly + 700)) play(box, 'ddz-shake', 560, fx.rocket, FX.fly + 60, 'linear');
+      else box.style.animation = '';
+
+      // 各家面前那一手（缩小、略叠），被压过时从桌心缩回来
+      const fronts = frontsOf(view, lead);
+      for (const s of SEATS) {
+        const t = fronts[s];
+        const f = spots[s].front;
+        if (!t || !f) continue;
+        const spot = frontSpot(t.cards.length, f, L);
+        // 起点：这手牌在桌心时每张的位置（张数相同，几何一致）
+        const cg = spread(t.cards.length, c, { step: c.cw * 0.56, fan: false });
+        center.push(playRow(t, spot, { cls: 'front', step: 0.7, fromPts: cg.map((g) => [g.x + c.cw / 2, g.y + c.cw * 0.7]), fromScale: c.cw / spot.cw, dur: 420, t0: fx.front[s]?.t0 }));
+      }
+
+      // 定地主：三张底牌在桌心翻开，再飞给地主
+      const handing = view.landlord && Array.isArray(view.bottom) && within(fx.flip, FX.handover);
+      if (handing) {
+        const to = spots[view.landlord]?.from || [c.cx, c.y];
+        const fs = c.cw / 5;
+        const geo = spread(3, { cx: c.cx, y: c.y, cw: c.cw, maxW: c.cw * 3.6 }, { step: c.cw * 1.18, fan: false });
+        withSuits(view.bottom).forEach((card, i) => {
+          const g = geo[i];
+          const w = el('div', { class: 'ddz-give', style: `left:${+(g.x / fs).toFixed(3)}em;top:${+(g.y / fs).toFixed(3)}em;font-size:${fs}em` }, ...flipPair(card, fx.flip, 350 + i * 120));
+          w.style.setProperty('--tx', `${((to[0] - g.x - c.cw / 2) / fs).toFixed(3)}em`);
+          w.style.setProperty('--ty', `${((to[1] - g.y - c.cw * 0.7) / fs).toFixed(3)}em`);
+          center.push(play(w, 'ddz-give', FX.handover, fx.flip, 0, 'linear'));
+        });
       }
 
       // 三家：名牌、手牌、气泡
       const handKids = [];
       for (const s of SEATS) {
         const pos = spots[s];
-        kids.push(plate(view, s, pos, L, { me: canAct ? me : null, bottom: s === me, t0: opts.clock?.[s] || null }));
+        // 真人自己出手时用按钮旁的倒计时，名牌上不再挂计时
+        kids.push(plate(view, s, pos, L, { me: canAct ? me : null, bottom: s === me, t0: canAct && s === me ? null : opts.clock?.[s] || null }));
         const mine = s === me && !!view.hands?.[s];
+        // 地主坐在下方、手牌看得见：新到的三张抬起一会儿
+        const lift = s === me && s === view.landlord && view.hands?.[s] && Array.isArray(view.bottom) && within(fx.flip, FX.handover + FX.lift + 200) ? (d) => bottomIdx(d, view.bottom) : null;
         if (mine && s === viewer) {
           const d = desc(view.hands[s]);
           const key = `${s}|${d.join(',')}`;
           if (key !== handKey) { sel = new Set(); handKey = key; }
           if (!canAct || view.phase !== 'play') sel = new Set();
           const big = canAct && view.phase === 'play' && L.mine ? { ...pos, hand: L.mine } : pos;
-          handKids.push(...hand(view, s, big, { mine: true, pick: canAct && view.phase === 'play', d }));
+          handKids.push(...hand(view, s, big, { mine: true, pick: canAct && view.phase === 'play', d, lift: lift?.(d) }));
         } else {
-          handKids.push(...hand(view, s, pos));
+          handKids.push(...hand(view, s, pos, { lift: view.hands?.[s] ? lift?.(desc(view.hands[s])) : null }));
         }
         const t = view.table?.[s];
         if (t && !t.cards && (t.text || t.pass)) {
@@ -715,15 +974,22 @@ export default {
         }
       }
       kids.push(...handKids, ...center);
+      if (fxc.childNodes.length) kids.push(fxc);
       kids.push(plaque(view, L));
       if (view.phase === 'play' && L.counter) kids.push(counter(view, viewer, L));
 
-      // 结果
+      // 结果：春天 / 反春先打横幅，再升起结算卡
       if (view.result) {
         const r = view.result;
-        const tail = [r.spring ? '春天' : r.anti ? '反春' : null, `${view.bid} 分 × ${r.multiplier}`, `共 ${r.score} 分`].filter(Boolean).join(' · ');
-        kids.push(el('div', { class: 'ddz-res', style: `left:${L.res.cx}em;top:${L.res.y}em;animation:ddz-rise .6s ${EASE} both` },
-          el('b', {}, r.landlordWins ? '地主胜' : '农民胜'), el('span', {}, tail)));
+        const special = r.spring || r.anti;
+        if (special && within(fx.over, FX.bannerDelay + FX.banner)) {
+          const ban = el('div', { class: 'ddz-ban', style: `top:${L.ban}em` }, el('b', {}, r.spring ? '春天' : '反春'),
+            el('span', {}, r.spring ? '农民一张没出，地主就出完了 · 倍数 ×2' : '地主只出了一手，农民就出完了 · 倍数 ×2'));
+          kids.push(play(ban, 'ddz-ban', FX.banner, fx.over, FX.bannerDelay, 'ease-out'));
+        }
+        const card = settleCard(view, r, L);
+        play(card, 'ddz-rise', FX.card, fx.over, special && !calm ? FX.bannerDelay + FX.banner : FX.fly, EASE);
+        kids.push(card);
       }
 
       // 玩家本人的操作
@@ -731,6 +997,10 @@ export default {
         // 出牌时手牌放大、往上抬，按钮跟着上移，抬起的牌不压按钮
         const ctlY = view.phase === 'play' && L.ctlMine ? L.ctlMine : L.ctl.y;
         const ctl = el('div', { class: 'ddz-ctl', style: `left:${L.ctl.cx}em;top:${ctlY}em` });
+        // 这一步从什么时候开始等：对局页给的计时优先，没有时按本地第一次画出按钮的时刻
+        const stepKey = `${view.phase}|${view.deals || 0}|${view.bids?.length || 0}|${view.plays?.length || 0}`;
+        if (fx.turn.key !== stepKey) fx.turn = { key: stepKey, t0: Date.now() };
+        ctl.append(countdown(opts.clock?.[me] || fx.turn.t0));
         if (view.phase === 'bid') {
           for (const [id, lb] of [['叫0', '不叫'], ['叫1', '1 分'], ['叫2', '2 分'], ['叫3', '3 分']]) {
             ctl.append(button(lb, { primary: id === '叫3', off: !ids.has(id), onClick: () => onAction(id) }));
@@ -766,7 +1036,7 @@ export default {
         kids.push(ctl);
       }
       box.replaceChildren(...kids);
-      if (box.querySelector('.tmr')) startTimerTick(root);
+      if (box.querySelector('.tmr, .ddz-cd')) startTimerTick(root);
     }
 
     return {

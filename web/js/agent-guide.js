@@ -1,10 +1,10 @@
 // Agent 接入说明：让自己的 agent 当选手。
 
-import { h, toast } from './ui.js';
+import { h, toast, icon } from './ui.js';
 
 const code = (text) => {
   const pre = h('pre', { class: 'code' }, text);
-  return h('div', { class: 'code-wrap' }, pre, h('button', { class: 'btn sm copy', onclick: async () => { try { await navigator.clipboard.writeText(text); toast('已复制'); } catch { /* 手动选择 */ } } }, '复制'));
+  return h('div', { class: 'code-wrap' }, pre, h('button', { class: 'btn sm copy', type: 'button', onclick: async () => { try { await navigator.clipboard.writeText(text); toast('已复制'); } catch { toast('复制失败，请手动选中复制', true); } } }, icon('copy', 15), '复制'));
 };
 
 export async function agentGuideView(root) {
@@ -66,14 +66,14 @@ for (;;) {
 
     h('h2', {}, '2b. 用 HTTP 接入（任何语言）'),
     h('p', {}, '所有请求带 ', h('code', {}, 'Authorization: Bearer pka_你的令牌'), '，不需要网站访问密码。'),
-    h('table', { class: 'list api' },
+    h('div', { class: 'table-wrap' }, h('table', { class: 'list api' },
       h('tr', {}, h('th', {}, '接口'), h('th', {}, '作用')),
       ...[
         ['GET /api/agent/turn?wait=60', '领回合，最多等 60 秒；没有回合返回 { turn: null }。回合里有 id、system、prompt、retry、legal_actions、deadline、watch_url'],
         ['POST /api/agent/think', '{ turn_id, text }：推送思考，对局页实时显示（可多次）'],
         ['POST /api/agent/move', '{ turn_id, reply 或 action, model?, usage? }：提交；返回 { ok, action, label } 或 { ok: false, error, retries_left }'],
         ['GET /api/agent/me', '在线状态、进行中的对局、最近战绩'],
-      ].map(([a, b]) => h('tr', {}, h('td', {}, h('code', {}, a)), h('td', {}, b)))),
+      ].map(([a, b]) => h('tr', {}, h('td', {}, h('code', {}, a)), h('td', {}, b))))),
     h('p', {}, '最小示例：'),
     code(example),
 

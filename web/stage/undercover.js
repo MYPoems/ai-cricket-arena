@@ -201,6 +201,19 @@ function historyBlock(view) {
 
 export default {
   /** 场上公告：有人被投出时，中央弹一张卡（出局时公开身份） */
+  /**
+   * 票型连线：投票中（上帝视角看得到每一票）画实时的票；投完后画最后一轮的票型。
+   * 返回 { key, links: [{ from, to }], live }；对局页在座位之间画弧线（投票人 → 被投的人）。
+   */
+  voteLinks(view) {
+    const pick = (votes) => Object.entries(votes || {}).filter(([, t]) => t && t !== 'none').map(([from, to]) => ({ from, to }));
+    const voting = view.phase === 'vote' || view.phase === 'revote';
+    const cur = pick(view.votes);
+    if (voting && cur.length) return { key: `live|${view.voteLog?.length || 0}|${cur.length}`, links: cur, live: true };
+    const last = (view.voteLog || []).at(-1);
+    return last ? { key: `log|${view.voteLog.length}`, links: pick(last.votes), out: last.out || null } : null;
+  },
+
   /** 回放时公告卡也要演完：多停 2.6 秒 */
   pauseAfter(prev, view) { return this.announce(prev, view) ? 2600 : 0; },
 

@@ -1,6 +1,6 @@
 // 大厅：一进来就能看到最精彩的一盘（今日擂台）、场上在发生什么（对局墙）、一键开一盘（快速开始）。
 
-import { h, api, post, guard, toast, listen, fmtTime, MODE_NAMES, resultText, tierBadge } from './ui.js';
+import { h, api, post, guard, toast, listen, fmtTime, MODE_NAMES, resultText, tierBadge, emptyState, linkRow, pressed } from './ui.js';
 import { loadRenderer } from '../stage/index.js';
 
 const renderers = {};
@@ -25,8 +25,7 @@ function heat(m) {
 }
 
 export async function lobbyView(root, { go, session, meta }) {
-  let data = await api('/lobby');
-  let rooms = await api('/rooms').catch(() => []);
+  let [data, rooms] = await Promise.all([api('/lobby'), api('/rooms').catch(() => [])]);
   await preload(data.live);
   const cards = new Map();
   let stopEvents = null;
@@ -42,7 +41,7 @@ export async function lobbyView(root, { go, session, meta }) {
 
   root.replaceChildren(h('div', { class: 'lobby' },
     h('div', { class: 'col', style: { minWidth: 0, gap: '0' } }, hero, roomBox, filters, grid,
-      h('section', { style: { marginTop: '40px' } }, h('div', { class: 'section-title' }, h('h2', {}, '最近结束'), h('a', { href: '#/history', class: 'small' }, '全部对局 →')), recent)),
+      h('section', { class: 'section-gap' }, h('div', { class: 'section-title' }, h('h2', {}, '最近结束'), h('a', { href: '#/history', class: 'small' }, '全部对局 →')), recent)),
     side));
 
   // ---------- 今日擂台 ----------
@@ -100,21 +99,21 @@ export async function lobbyView(root, { go, session, meta }) {
   function drawSide() {
     side.replaceChildren(
       h('div', { class: 'figs' },
-        ...[[data.live.length, '进行中'], [data.today, '今日开局'], [data.rooms, '等人组局'], [data.total, '累计完赛']].map(([n, l]) => h('div', { class: 'card fig' }, h('b', { class: 'gold-text' }, n), h('small', {}, l)))),
-      h('div', { class: 'card pad col', style: { gap: '10px' } }, h('div', { class: 'label' }, '快速开始'),
+        ...[[data.live.length, '进行中'], [data.today, '今日开局'], [data.rooms, '等人组局'], [data.total, '累计完赛']].map(([n, l]) => h('div', { class: 'card quiet fig' }, h('b', { class: 'gold-text' }, n), h('small', {}, l)))),
+      h('div', { class: 'card pad col', style: { gap: '12px' } }, h('div', { class: 'label' }, '快速开始'),
         h('div', { class: 'quick' }, quickAiMatch(true),
           h('a', { class: 'btn', href: '#/new' }, '我来挑战一只蛐蛐'),
           h('a', { class: 'btn', href: '#/rooms' }, '开一个组局'),
           h('a', { class: 'btn', href: '#/agent-guide' }, '让我的 Agent 上场'))),
-      data.tops.length ? h('div', { class: 'card pad col', style: { gap: '8px' } }, h('div', { class: 'label' }, '天梯榜首'),
+      data.tops.length ? h('div', { class: 'card quiet pad col', style: { gap: '8px' } }, h('div', { class: 'label' }, '天梯榜首'),
         h('div', { class: 'side-list' }, ...data.tops.slice(0, 6).map((t) => h('a', { class: 'it', href: `#/characters/${t.id}` }, h('span', { class: 'k' }, t.gameName), h('span', { class: 'row', style: { gap: '8px', flexWrap: 'nowrap', minWidth: 0 } }, h('span', { class: 'coin sm' }, t.avatar), h('b', { style: { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, t.name)), h('span', { class: 'num' }, t.points))))) : null,
-      data.log.length ? h('div', { class: 'card pad col', style: { gap: '8px' } }, h('div', { class: 'label' }, '动态'),
+      data.log.length ? h('div', { class: 'card quiet pad col', style: { gap: '8px' } }, h('div', { class: 'label' }, '动态'),
         h('div', { class: 'feed' }, ...data.log.map((x) => h('div', { class: /晋级|王者|连胜|爆冷/.test(x.text) ? 'hot' : '' }, x.text)))) : null);
   }
 
   // ---------- 等人入座的组局 ----------
   function drawRooms() {
-    roomBox.replaceChildren(rooms.length ? h('section', { style: { marginTop: '26px' } },
+    roomBox.replaceChildren(rooms.length ? h('section', { style: { marginTop: 'var(--s5)' } },
       h('div', { class: 'section-title' }, h('h2', {}, '等人入座的组局'), h('a', { href: '#/rooms', class: 'small' }, '全部组局 →')),
       h('div', { class: 'rooms' }, ...rooms.slice(0, 3).map((r) => h('a', { class: 'card room', href: `#/room/${r.id}` },
         h('div', { class: 'row', style: { justifyContent: 'space-between' } }, h('span', { class: 't' }, r.title), h('span', { class: 'chip' }, r.gameName)),
@@ -125,13 +124,16 @@ export async function lobbyView(root, { go, session, meta }) {
   // ---------- 对局墙 ----------
   function drawFilters() {
     const count = (id) => data.live.filter((m) => m.game === id).length;
-    const games = meta.games.filter((g) => count(g.id));
+    // 记住的筛选在场上已经没有对局时也留着这颗胶囊（显示 0），空状态里给「看全部」
+    const games = meta.games.filter((g) => count(g.id) || g.id === filter);
     filters.replaceChildren(
-      h('button', { class: `pill ${filter === 'all' ? 'on' : ''}`, onclick: () => { filter = 'all'; pref('game', 'all'); drawFilters(); drawGrid(); } }, `全部 ${data.live.length}`),
-      ...games.map((g) => h('button', { class: `pill ${filter === g.id ? 'on' : ''}`, onclick: () => { filter = g.id; pref('game', g.id); drawFilters(); drawGrid(); } }, `${g.name} ${count(g.id)}`)),
+      h('div', { class: 'pills', role: 'group', 'aria-label': '按游戏筛选' },
+        h('button', { class: `pill ${filter === 'all' ? 'on' : ''}`, type: 'button', ...pressed(filter === 'all'), onclick: () => setFilter('all') }, `全部 ${data.live.length}`),
+        ...games.map((g) => h('button', { class: `pill ${filter === g.id ? 'on' : ''}`, type: 'button', ...pressed(filter === g.id), onclick: () => setFilter(g.id) }, `${g.name} ${count(g.id)}`))),
       h('span', { class: 'grow' }),
       h('select', { style: { width: 'auto' }, 'aria-label': '排序', onchange: (e) => { sort = e.target.value; pref('sort', sort); drawGrid(); } }, ...SORTS.map(([k, l]) => h('option', { value: k, selected: sort === k }, `排序：${l}`))));
   }
+  function setFilter(id) { filter = id; pref('game', id); drawFilters(); drawGrid(); }
 
   function card(m) {
     const r = renderers[m.game];
@@ -168,7 +170,11 @@ export async function lobbyView(root, { go, session, meta }) {
       : sort === 'tier' ? list.sort((a, b) => (b.mode !== 'casual') - (a.mode !== 'casual') || heat(b) - heat(a))
         : list.sort((a, b) => heat(b) - heat(a));
     if (!list.length) {
-      grid.replaceChildren(h('div', { class: 'empty card', style: { gridColumn: '1 / -1' } }, data.live.length ? '这个游戏现在没有对局' : '场上暂时没有对局。开一盘，或者打开天梯自动匹配。'));
+      const e = data.live.length
+        ? emptyState('这个游戏现在没有对局。', { wm: '静', action: h('button', { class: 'btn primary', type: 'button', onclick: () => setFilter('all') }, '看全部') })
+        : emptyState('场上暂时没有对局。', { wm: '静', action: quickAiMatch(true) });
+      e.style.gridColumn = '1 / -1';
+      grid.replaceChildren(e);
       return;
     }
     grid.replaceChildren(...list.map((m) => {
@@ -179,13 +185,13 @@ export async function lobbyView(root, { go, session, meta }) {
   }
 
   function drawRecent() {
-    if (!data.recent.length) { recent.replaceChildren(h('div', { class: 'empty card' }, '还没有结束的对局')); return; }
-    recent.replaceChildren(h('div', { class: 'card table-wrap' }, h('table', { class: 'list' },
-      ...data.recent.slice(0, 8).map((m) => h('tr', { class: 'click', onclick: () => go(`#/match/${m.id}`) },
-        h('td', {}, h('span', { class: 'chip' }, m.gameName)),
-        h('td', {}, Object.values(m.players).map((pl) => pl?.name).join(' · ')),
-        h('td', { class: 'muted', style: { whiteSpace: 'normal' } }, resultText(m)),
-        h('td', { class: 'num muted' }, fmtTime(m.finished_at || m.created_at)))))));
+    if (!data.recent.length) { recent.replaceChildren(emptyState('还没有结束的对局。', { wm: '局', action: h('a', { class: 'btn primary', href: '#/new' }, '开一局') })); return; }
+    recent.replaceChildren(h('div', { class: 'card table-wrap' }, h('table', { class: 'list recent-list' },
+      ...data.recent.slice(0, 8).map((m) => linkRow(`#/match/${m.id}`, [
+        h('td', { class: 'c-game' }, h('span', { class: 'chip' }, m.gameName)),
+        h('td', { class: 'c-players' }, Object.values(m.players).map((pl) => pl?.name).join(' · ')),
+        h('td', { class: 'c-result muted', style: { whiteSpace: 'normal' } }, resultText(m)),
+        h('td', { class: 'c-time num muted' }, fmtTime(m.finished_at || m.created_at))], { label: `${m.gameName}：${Object.values(m.players).map((pl) => pl?.name).join(Object.keys(m.players).length === 2 ? ' 对 ' : '、')}，${resultText(m)}` })))));
   }
 
   function subscribe() {

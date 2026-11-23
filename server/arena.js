@@ -388,7 +388,7 @@ export class Arena {
       // 游戏要求的停顿（德州每手结束演结算、新一手弹开局提示），画面按同一份时长演完再继续
       const pause = game.interlude ? game.interlude(before, state) || 0 : 0;
       // 否则每一步之后至少停 turnPause（牌桌游戏：看清刚才那一手，再轮到下一位），开局设的间隔更长时按开局的
-      const gap = pause || Math.max(m.options.delayMs || 0, game.turnPause || 0);
+      const gap = Math.max(pause, m.options.delayMs || 0, game.turnPause || 0); // 取最长的：特效、开局设的间隔、游戏要求的停顿
       if (gap) await sleep(gap, rt);
     }
   }
@@ -746,14 +746,18 @@ ${game.noun || '行动'}：${act}`;
     const mySeat = this.seatOf(m, userId);
     const running = m.status === 'running';
     const hiddenLive = !!game.features?.hidden && humans.length > 0 && running;
+    // 不剧透：没有真人的隐藏信息对局，观众可以主动选公共视角（viewer = '*'）——身份、底牌、夜间行动和思考都先不看
+    const pov = !hiddenLive && running && !!game.features?.hidden && viewer === PUBLIC_VIEWER;
+    const masked = hiddenLive || pov;
     let v = viewer && m.seats[viewer] ? viewer : null;
     if (hiddenLive) v = mySeat; // 观众（null）在下面换成公共视角
     const turns = this.db.all('SELECT * FROM turns WHERE match_id = ? ORDER BY ply', matchId);
     const rt = this.live.get(matchId);
-    const hide = m.options.hideThoughts && running;
+    const hide = (m.options.hideThoughts && running) || pov;
     const sum = this.summary(matchId);
-    const secrets = hiddenLive ? secretPlies(game, record, v, humans) : new Set();
-    const partials = Object.values(rt?.partials || {}).filter((p) => !(hiddenLive && p.secret) && !rt?.humans?.[p.seat]).map((p) => ({ ...(hide ? { ...p, text: '', reasoning: '' } : p), elapsed: p.at ? Date.now() - p.at : 0 }));
+    const secrets = masked ? secretPlies(game, record, v, hiddenLive ? humans : [PUBLIC_VIEWER]) : new Set();
+    const secretNow = (p) => (pov ? isSecret(game, state, p.seat, null, [PUBLIC_VIEWER]) : p.secret);
+    const partials = Object.values(rt?.partials || {}).filter((p) => !(masked && secretNow(p)) && !rt?.humans?.[p.seat]).map((p) => ({ ...(hide ? { ...p, text: '', reasoning: '' } : p), elapsed: p.at ? Date.now() - p.at : 0 }));
     // 只告诉这位玩家自己座位在等他行动
     const humanH = this.#humanHandler(rt, mySeat);
     return {
@@ -761,11 +765,12 @@ ${game.noun || '行动'}：${act}`;
       // 系列赛的种子不给浏览器（第 1 盘的种子就是本盘种子，拿到就能算出别人的牌）
       options: m.options?.series ? { ...m.options, series: { ...m.options.series, seed: undefined } } : m.options,
       // 有玩家本人的隐藏信息对局进行中：不给记录、种子和开局参数（拿种子就能在浏览器里重放出所有人的牌）
-      record: hiddenLive ? { players: record.players, actions: null } : record,
+      record: masked ? { players: record.players, actions: null } : record,
       startFen: m.start_fen,
-      viewer: v,
+      viewer: pov ? PUBLIC_VIEWER : v,
+      pov: pov ? 'public' : null,
       mySeat,
-      view: game.view(state, hiddenLive && !v ? PUBLIC_VIEWER : v),
+      view: game.view(state, (hiddenLive && !v) || pov ? PUBLIC_VIEWER : v),
       turns: turns.filter((t) => !secrets.has(t.ply)).map((t) => (hide && t.character_id && this.#isModel(t.character_id) ? { ...t, analysis: null, reasoning: null, attempts: null, self_winrate: null } : t)),
       partials,
       partial: partials[0] || null,

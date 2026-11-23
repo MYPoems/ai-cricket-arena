@@ -228,3 +228,54 @@ export function classify(cards) {
 }
 
 export const comboText = (x) => `${TYPE_NAMES[x.type]} ${cardsId(x.cards)}`;
+
+// ---------- 摆牌顺序 ----------
+
+const desc = (cards) => cards.slice().sort((a, b) => b - a);
+
+/**
+ * 一手牌在桌上的摆放顺序：主体在前（三张、飞机机身、四张），带的牌在后，各部分从大到小。
+ * 「3 K K K」→「K K K 3」，「3 4 K K K A A A」→「A A A K K K 4 3」，顺子、连对、炸弹整体从大到小。
+ * type 为牌型键（triple1、plane2 …）；认不出主体时整手从大到小。
+ */
+export function showOrder(cards, type) {
+  const c = toCounts(cards);
+  let body = [];
+  if (type === 'triple' || type === 'triple1' || type === 'triple2') {
+    const r = c.findIndex((n) => n >= 3);
+    if (r >= 0) body = rep(r, 3);
+  } else if (type === 'four2' || type === 'four4') {
+    const r = c.lastIndexOf(4); // 「3333 5555」按四个 5 带两对 3 算（和比大小时的解释一致）
+    if (r >= 0) body = rep(r, 4);
+  } else if (type === 'plane' || type === 'plane1' || type === 'plane2') {
+    const L = cards.length / (type === 'plane' ? 3 : type === 'plane1' ? 4 : 5);
+    // 机身是 L 个连续、各有三张的点数（最大到 A）；有多种取法时取最大的（和比大小时的解释一致）
+    for (let s = ACE - L + 1; s >= 0 && !body.length; s--) {
+      if (range(s, L).every((r) => c[r] >= 3)) body = range(s, L).flatMap((r) => rep(r, 3));
+    }
+  }
+  if (!body.length) return desc(cards);
+  return [...desc(body), ...desc(removeCards(cards, body))];
+}
+
+// ---------- 画面特效的时长（服务端停顿与回放停顿共用） ----------
+
+/** 毫秒。fly 出牌飞到桌心；handover 底牌翻开并飞给地主；lift 地主手里新牌抬起再落下；banner 春天 / 反春横幅；card 结算卡升起 */
+export const FX = { fly: 460, handover: 1600, lift: 1500, plane: 1200, rocket: 1000, bomb: 1300, sweep: 600, banner: 1500, bannerDelay: 500, card: 600 };
+
+/**
+ * 两个局面之间画面特效要演多久（毫秒），没有特效为 0。
+ * a、b 是局面摘要：{ landlord: 是否已定地主, plays: 出牌记录条数, last: 最后一条的牌型键（不出为 null）, over, banner: 春天或反春 }
+ */
+export function fxDuration(a, b) {
+  if (!a || !b) return 0;
+  let t = 0;
+  if (!a.landlord && b.landlord) t = FX.handover + FX.lift * 0.6; // 底牌交接演完、新牌抬起看一会儿
+  if (b.plays > a.plays && b.last) {
+    if (/^plane/.test(b.last)) t = Math.max(t, FX.fly + FX.plane);
+    else if (b.last === 'rocket') t = Math.max(t, FX.fly + FX.rocket + 300);
+    else if (b.last === 'bomb') t = Math.max(t, 300 + FX.bomb);
+  }
+  if (!a.over && b.over && b.banner) t = Math.max(t, FX.bannerDelay + FX.banner + FX.card);
+  return t;
+}

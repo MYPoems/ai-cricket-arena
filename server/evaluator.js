@@ -341,7 +341,7 @@ export function moveQuality(before, after, played) {
   const loss = isBest ? 0 : Math.max(0, eBefore - eAfter);
   let tag;
   if (isBest) tag = '最佳';
-  else if (loss >= 0.2) tag = '大漏着';
+  else if (loss >= 0.15) tag = '大漏着'; // 和 lichess 一致：期望得分掉 15% 以上算大漏着（原来是 20%）
   else if (loss >= 0.1) tag = '失误';
   else if (loss >= 0.05) tag = '缓着';
   else tag = '好棋';

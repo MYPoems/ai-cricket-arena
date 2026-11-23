@@ -2,16 +2,18 @@
 // 实体筹码按面额配色（1 象牙、5 朱、25 青、100 墨、500 紫），一枚一枚叠起来，侧面露出条纹。
 // 上帝视角：在局玩家的底牌翻开，名牌下面是实时胜率；玩家视角只看得到自己的底牌。
 // 动效：新一手发牌飞入；翻牌三张依次翻开，转牌、河牌单张翻；下注时筹码从座位滑到桌前，一轮结束收进底池；
-// 一手结束时先把没发完的公共牌翻完，组成牌型的五张牌抬起发光，底池推向赢家；有人全下时桌面压暗、「ALL IN」横幅、胜率对比。
-// 玩家本人行动时右下角是操作台：弃牌、过牌/跟注、加注（预设 + 滑杆 + 数字）、全下。
+// 一手结束（摊牌）：收注 → 按顺序一家一家亮底牌（最后加注的人先亮）→ 补翻公共牌（大底池全下时转牌、河牌前多停）→ 五张牌抬起、牌型徽章弹出、输家的牌变淡
+// → 主池、各边池依次推给各自的赢家；有人全下时桌面压暗、「ALL IN」横幅、胜率对比。终局那一手的结算卡可以切到全场统计。
+// 玩家本人行动时右下角是操作台：弃牌、过牌/跟注、加注（预设 + 滑杆 + 数字）、全下；没轮到时那里换成预选操作（过牌/弃牌、跟注 X、跟任何注），
+// 轮到时自动出手。防误点：跟注额刚变时跟注键锁 1 秒，加注超过剩余筹码 1/3 或全下要再点一次确认。右上角可切换按筹码 / 大盲数（BB）显示。
 // 每一手开始弹开局提示（第几手、盲注、庄位），结束弹结算卡（公共牌、亮出的底牌和牌型、各人输赢）；
 // 停多久见 games/poker/timing.js——服务端按同一份时长停下来等，画面演完才轮到下一个人。
 //
 // 画面用 HTML 画：根节点是尺寸容器，桌面固定比例（横版 80×50em，竖版 50×70em），里面一律用 em 定位，等比缩放。
 // 动画按「开始时刻」续播：重画时用负的 animation-delay 接上，对局推进不会打断正在进行的动画。
 
-import { fromCode, evaluate, bestFive, code as codeOf } from '/games/poker/cards.js';
-import { T as TM, cardAt, endDur, streetsBetween, pauseBetween } from '/games/poker/timing.js';
+import { fromCode, bestFive, code as codeOf } from '/games/poker/cards.js';
+import { T as TM, schedule, endInfo, pauseBetween } from '/games/poker/timing.js';
 
 const SUIT = { s: '♠', h: '♥', d: '♦', c: '♣' };
 const RANK = { T: '10' };
@@ -34,7 +36,7 @@ const LAYOUTS = {
     ring: { rx: 35.5, ry: 20.4 }, bets: { rx: 21.5, ry: 9.2, off: -16 }, marks: { rx: 24.5, ry: 11.6, off: 15 },
     seat: { w: 15.4, h: 4.9 }, clampX: [8.4, 71.6], clampY: [8.8, 44.4],
     board: { cx: 40, y: 16.2, cw: 5.3, gap: 0.65 },
-    pot: { cx: 40, y: 24.1 }, info: [1.4, 1.2], cmp: { cx: 40, y: 27.8, w: 26 }, act: { cx: 40, y: 31.4 },
+    pot: { cx: 40, y: 24.1 }, info: [1.4, 1.2], cmp: { cx: 40, y: 27.8, w: 26 }, act: { cx: 40, y: 31.4 }, push: 27.7, badge: 32.1,
     ctl: { x: 50.6, y: 39.9, w: 29, h: 9.6 },
   },
   port: {
@@ -43,7 +45,7 @@ const LAYOUTS = {
     ring: { rx: 21, ry: 25.2 }, bets: { rx: 12.5, ry: 16.8, off: -14 }, marks: { rx: 13.6, ry: 18.6, off: 18 },
     seat: { w: 13.8, h: 4.6 }, clampX: [7.4, 42.6], clampY: [8.8, 54.8],
     board: { cx: 25, y: 22, cw: 4.3, gap: 0.45 },
-    pot: { cx: 25, y: 28.6 }, info: [1, 1], cmp: { cx: 25, y: 32.4, w: 28 }, act: { cx: 25, y: 36.4 },
+    pot: { cx: 25, y: 28.6 }, info: [1, 1], cmp: { cx: 25, y: 32.4, w: 28 }, act: { cx: 25, y: 36.4 }, push: 32.2, badge: 36.8,
     ctl: { x: 1, y: 60.4, w: 48, h: 9.2 },
   },
 };
@@ -53,7 +55,7 @@ const CSS = `
 .pk { position: relative; width: 100%; height: 100%; container-type: size; user-select: none; -webkit-user-select: none; font-family: var(--sans); }
 .pk-box { position: absolute; left: 50%; top: 50%; translate: -50% -50%; width: min(100cqw, 160cqh); height: min(62.5cqw, 100cqh); font-size: min(1.25cqw, 2cqh); }
 .pk.port .pk-box { width: min(100cqw, 71.43cqh); height: min(140cqw, 100cqh); font-size: min(2cqw, 1.4286cqh); }
-.pk-box > *, .pk-layer > * { position: absolute; }
+.pk-box > *, .pk-layer > * { position: absolute; } /* 这些元素用 em 定位：字号写在子元素上，自己不要改 font-size */
 .pk-layer { inset: 0; }
 
 /* 牌桌：漆木桌沿（外描金、内嵌金线），绿绢桌面下沉 */
@@ -311,6 +313,85 @@ const CSS = `
 @keyframes pk-rise { from { transform: translateY(1em); opacity: 0; } }
 @keyframes pk-pop { 0% { transform: scale(.5); opacity: 0; } 60% { transform: scale(1.08); opacity: 1; } }
 @keyframes pk-dot { 0%, 100% { opacity: .3; transform: translateY(0); } 50% { opacity: 1; transform: translateY(-.15em); } }
+/* 摊牌：亮牌时看得到的牌跳一下，抬牌后输家的牌变淡；牌型徽章；大底池全下时牌背鼓动；分池的标签；收注时底池鼓一下 */
+.pk-c.lose { opacity: .45; }
+@keyframes pk-lose { from { opacity: 1; } }
+@keyframes pk-show { 40% { scale: 1.12; } }
+@keyframes pk-sweat { 25%, 75% { scale: 1.06; } 50% { scale: 1; } }
+@keyframes pk-bump { 50% { transform: scale(1.08); } }
+.pk-badge { translate: -50% -50%; display: flex; align-items: baseline; gap: .6em; padding: .42em 1.3em .48em; border-radius: 2em; white-space: nowrap; pointer-events: none;
+  color: var(--on-gold); background: var(--gold-metal); box-shadow: var(--gold-key-sh), 0 0 0 .1em rgb(40 14 4 / .6), 0 .5em 1.4em rgb(0 0 0 / .55), 0 0 2.2em rgb(255 214 120 / .35); }
+.pk-badge small { font: 700 1em/1 var(--sans); letter-spacing: .12em; opacity: .78; }
+.pk-badge b { font: 400 2.3em/1 var(--brush); letter-spacing: .02em; }
+@keyframes pk-badge { 0% { transform: scale(.5); opacity: 0; } 39% { transform: scale(1.18); opacity: 1; } 100% { transform: scale(1); opacity: 1; } }
+.pk-push { translate: -50% 0; display: flex; align-items: baseline; gap: .45em; padding: .36em 1em .4em; border-radius: 1em; white-space: nowrap; pointer-events: none;
+  font: 700 1em/1 var(--sans); letter-spacing: .06em; color: #f6dc94; background: rgb(8 4 2 / .72); box-shadow: inset 0 .08em .25em rgb(0 0 0 / .7), 0 0 0 .08em rgb(240 205 120 / .45); }
+.pk-push span { font-size: 1.1em; }
+.pk-push b { font: 600 1.25em/1 var(--num); color: #fff4d8; letter-spacing: 0; }
+.pk-push.ret { color: rgb(240 225 190 / .75); }
+.pk-seat.bbm .stk { font-size: 1.4em; }
+
+/* 右上角：筹码 / 大盲数切换 */
+.pk-bbt { translate: -100% 0; display: flex; gap: .15em; padding: .2em; border-radius: .8em; border: .12em solid transparent; cursor: pointer; z-index: 4;
+  font: 700 1em/1 var(--num); color: var(--muted); background: var(--glint), var(--surface), var(--edge) border-box;
+  box-shadow: var(--hi), 0 .14em 0 #3e2a0a, 0 .35em .5em rgb(0 0 0 / .45); }
+.pk-bbt span { font-size: .95em; white-space: nowrap; padding: .38em .62em; border-radius: .6em; transition: background-color .2s, color .2s; }
+.pk-bbt:not(.bb) .c, .pk-bbt.bb .b { color: var(--on-gold); background: var(--gold-metal); box-shadow: var(--gold-key-sh); }
+.pk-bbt:hover { color: var(--text); }
+.pk.port .pk-bbt span { font-size: 1.2em; }
+
+/* 预选操作：没轮到你时先勾好，轮到时自动出手 */
+.pk-preact { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .5em; padding: .5em .6em; border-radius: 1em; border: .14em solid transparent;
+  background: var(--glint), var(--surface), var(--edge) border-box; box-shadow: var(--hi), 0 .18em 0 #3e2a0a, 0 .26em 0 .04em #040100, 0 .6em 1em rgb(0 0 0 / .5); animation: pk-rise .3s ${EASE} both; }
+.pk-preact[hidden] { display: none; }
+.pk-preact .pa { display: flex; align-items: center; justify-content: center; gap: .45em; min-width: 0; border: 0; border-radius: .6em; padding: 0 .5em; cursor: pointer;
+  font: 700 1.05em/1 var(--sans); color: var(--muted); background: var(--well-bg); box-shadow: var(--well-sh); white-space: nowrap; overflow: hidden; }
+.pk-preact .pa span { overflow: hidden; text-overflow: ellipsis; }
+.pk-preact .pa:hover { color: var(--text); }
+.pk-preact .pa .box { position: relative; flex: none; width: 1em; height: 1em; border-radius: .25em; box-shadow: inset 0 0 0 .12em currentColor; }
+.pk-preact .pa.on { color: var(--on-gold); background: var(--gold-metal); box-shadow: var(--gold-key-sh); }
+.pk-preact .pa.on .box::after { content: '✓'; position: absolute; inset: 0; display: grid; place-items: center; font: 900 .9em/1 var(--sans); }
+.pk.port .pk-preact .pa { font-size: 1.3em; }
+
+/* 防误点：跟注额刚变时跟注键锁 1 秒（底边一道进度条），大额加注 / 全下要再点一次 */
+.pk-ctl .btn { position: relative; }
+.pk-ctl .btn.cool::before { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: .2em; background: var(--gold-2, #f0cd78); transform-origin: 0 50%; animation: pk-cool 1s linear both; }
+@keyframes pk-cool { from { transform: scaleX(1); } to { transform: scaleX(0); } }
+.pk-ctl .btn.arm { animation: pk-arm .9s ease-in-out infinite; }
+@keyframes pk-arm { 50% { scale: 1.05; } }
+
+/* 终局：结算卡上切「本手 / 全场统计」 */
+.pk-sum .tabs { justify-self: center; display: flex; gap: .25em; padding: .22em; border-radius: .8em; background: rgb(120 84 30 / .14); box-shadow: inset 0 .06em .15em rgb(80 50 10 / .25); }
+.pk-sum .tabs button { pointer-events: auto; border: 0; background: transparent; cursor: pointer; padding: .45em 1.1em; border-radius: .6em; font: 700 1em/1 var(--sans); letter-spacing: .12em; color: #7a5a2a; }
+.pk-sum .tabs button.on { color: #8e1b12; background: #fffaf0; box-shadow: 0 .08em .2em rgb(80 50 10 / .35); }
+.pk-stats { width: 56em; }
+.pk-stats .tb { display: grid; gap: .28em; }
+.pk-stats .th, .pk-stats .tr { display: grid; grid-template-columns: 2em minmax(0, 1fr) 5.6em 6.6em 2.8em 3.4em 3.4em 3.8em 5.4em; align-items: center; gap: .55em; padding: .28em .6em; text-align: right; white-space: nowrap; }
+/* 表头、行本身不设字号（列宽用 em，字号写在格子上，两边才对得齐） */
+.pk-stats .th { padding-top: 0; padding-bottom: 0; }
+.pk-stats .th > span { font: 700 .88em/1.2 var(--sans); letter-spacing: .06em; color: #8a6a3a; }
+.pk-stats .th span:nth-child(2), .pk-stats .tr .nm { text-align: left; }
+.pk-stats .tr { border-radius: .6em; background: rgb(120 84 30 / .08); color: #3a2410; }
+.pk-stats .tr > span { font: 600 1.05em/1.2 var(--num); font-variant-numeric: tabular-nums; }
+.pk-stats .tr.lead { background: linear-gradient(90deg, rgb(240 190 80 / .42), rgb(240 190 80 / .12)); box-shadow: inset 0 0 0 .08em rgb(166 122 42 / .6); }
+.pk-stats .tr > .no { width: 1.9em; height: 1.9em; border-radius: 50%; display: grid; place-items: center; font: 700 .95em/1 var(--num); color: #fff4e0; background: radial-gradient(circle at 36% 28%, #e2523d, #8e1b12); box-shadow: inset 0 0 0 .1em rgb(255 255 255 / .3); }
+.pk-stats .tr > .nm { font: 900 1.1em/1.2 var(--serif); overflow: hidden; text-overflow: ellipsis; }
+.pk-stats .tr > .nt { font-size: 1.15em; }
+.pk-stats .tr .nt.up { color: #1f7a4c; } .pk-stats .tr .nt.dn { color: #a8321f; }
+.pk-stats .tr > .spk { display: block; height: 1.7em; color: #8a6a3a; }
+.pk-stats .spk.up { color: #1f7a4c; } .pk-stats .spk.dn { color: #a8321f; }
+.pk-stats .spk svg { display: block; width: 100%; height: 100%; overflow: visible; }
+.pk-stats .spk polyline { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linejoin: round; stroke-linecap: round; vector-effect: non-scaling-stroke; }
+.pk-stats .spk line { stroke: rgb(120 84 30 / .4); stroke-width: 1; stroke-dasharray: 2 2; vector-effect: non-scaling-stroke; }
+.pk.port .pk-stats { width: 47.5em; }
+/* 竖版：去掉走势列，字放大 */
+.pk.port .pk-stats > * { font-size: 1.12em; }
+.pk.port .pk-stats .th, .pk.port .pk-stats .tr { grid-template-columns: 1.9em minmax(0, 1fr) 4.6em 2.4em 3.2em 3.2em 3.4em 4.4em; gap: .4em; padding-left: .4em; padding-right: .4em; }
+.pk.port .pk-stats .tr > .spk, .pk.port .pk-stats .th > span:nth-child(4) { display: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  .pk-seat.on, .pk-seat .think i, .pk-seat .tag i, .pk-seat .tmr.hot, .pk-seat .who span.turn::after, .pk-ctl .btn.arm { animation: none !important; }
+}
 `;
 
 function injectStyle() {
@@ -422,10 +503,14 @@ const seatNo = (seat) => Number(String(seat).slice(1));
 const short = (t, n) => { const a = [...String(t || '')]; return a.length > n ? `${a.slice(0, n - 1).join('')}…` : a.join(''); };
 
 const STREET_NAME = { preflop: '翻牌前', flop: '翻牌', turn: '转牌', river: '河牌', showdown: '摊牌' };
+/** 和服务端 interlude 用同样的字段算停顿（见 timing.js 的 pauseBetween） */
 const pickView = (v) => v && ({
-  handNo: v.handNo, boardLen: v.board.length, over: !!v.over, showdown: !!v.result?.showdown,
-  last: v.last ? { showdown: !!v.last.showdown, boardLen: v.last.board.length } : null,
+  handNo: v.handNo, boardLen: v.board.length, over: !!v.over, bb: v.blinds?.bb,
+  last: v.last ? { showdown: !!v.last.showdown, boardLen: v.last.board.length, shown: Object.keys(v.last.shown || {}).length, pots: v.last.pots?.length || 1, pot: v.last.pot ?? 0 } : null,
+  done: v.result ? { showdown: !!v.result.showdown, boardLen: v.board.length, shown: v.result.shown?.length ?? 0, pots: v.result.pots?.length || 1, pot: v.pot } : null,
 });
+/** 按大盲数显示：250 → 125BB，25 → 12.5BB */
+const fmtBB = (v, bb) => `${Math.round((v / bb) * 10) / 10}BB`;
 
 export default {
   // 对局页用「牌桌 + 右侧聚光框 + 本手记录」版式：牌桌上已经有每个人的名牌、筹码和动作，两侧不再放选手卡
@@ -478,6 +563,19 @@ export default {
     const layer = el('div', { class: 'pk-layer' });
     root.append(box);
 
+    // ---------- 筹码 / 大盲数切换（桌面右上角，记在本地） ----------
+    let bbMode = false;
+    try { bbMode = localStorage.getItem('pk-bb-units') === '1'; } catch { /* 读不到本地存储就按筹码显示 */ }
+    let money = (v) => String(v);
+    const bbBtn = el('button', { class: 'pk-bbt', type: 'button', title: '切换：筹码数 / 大盲数（BB）', 'aria-label': '切换筹码数和大盲数显示' },
+      el('span', { class: 'c' }, '筹码'), el('span', { class: 'b' }, 'BB'));
+    bbBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      bbMode = !bbMode;
+      try { localStorage.setItem('pk-bb-units', bbMode ? '1' : '0'); } catch { /* 存不下就只在这一页有效 */ }
+      redraw();
+    });
+
     // ---------- 操作台（只建一次，重画时不重建，拖动滑杆不会被打断） ----------
     const foldBtn = el('button', { class: 'btn', type: 'button' }, '弃牌');
     const callBtn = el('button', { class: 'btn', type: 'button' }, '跟注');
@@ -488,9 +586,60 @@ export default {
     const presets = el('div', { class: 'pre' });
     const r1 = el('div', { class: 'r1' }, presets, range, num);
     const ctl = el('div', { class: 'pk-ctl', hidden: '' }, r1, el('div', { class: 'r2' }, foldBtn, callBtn, raiseBtn, allinBtn));
-    for (const n of [ctl]) n.addEventListener('click', (e) => e.stopPropagation());
-    box.append(layer, ctl);
+    ctl.addEventListener('click', (e) => e.stopPropagation());
+
+    // ---------- 预选操作（还没轮到你时先勾好，轮到时自动出手） ----------
+    const preBtn = (k, text) => el('button', { type: 'button', class: 'pa', role: 'checkbox', 'aria-checked': 'false', 'data-k': k }, el('i', { class: 'box' }), el('span', {}, text));
+    const preCF = preBtn('cf', '过牌/弃牌');
+    const preCall = preBtn('call', '跟注');
+    const preAny = preBtn('any', '跟任何注');
+    const preBox = el('div', { class: 'pk-preact', hidden: '' }, preCF, preCall, preAny);
+    let pre = { kind: null, amt: 0, hand: null };
+    let preX = 0; // 现在要跟多少（不是你行动时按桌面算）
+    const paintPre = () => {
+      for (const b of [preCF, preCall, preAny]) {
+        const on = b.dataset.k === pre.kind;
+        b.classList.toggle('on', on);
+        b.setAttribute('aria-checked', on ? 'true' : 'false');
+      }
+    };
+    for (const b of [preCF, preCall, preAny]) {
+      b.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const k = b.dataset.k;
+        pre = pre.kind === k ? { ...pre, kind: null } : { ...pre, kind: k, amt: preX };
+        paintPre();
+      });
+    }
+    preBox.addEventListener('click', (e) => e.stopPropagation());
+    box.append(layer, bbBtn, preBox, ctl);
+
     let cur = { ids: new Set(), legal: null, callId: null, verb: '加注到' };
+
+    // 防误点：大额加注（≥ 剩余筹码的 1/3）、全下要在 3 秒内再点一次
+    let armed = null;
+    const disarm = () => {
+      if (!armed) return;
+      clearTimeout(armed.timer);
+      armed.btn.textContent = armed.text;
+      armed.btn.classList.remove('arm');
+      armed = null;
+    };
+    const confirmed = (btn) => {
+      if (armed && armed.btn === btn) { disarm(); return true; }
+      disarm();
+      armed = { btn, text: btn.textContent, timer: setTimeout(disarm, 3000) };
+      btn.textContent = '再点确认';
+      btn.classList.add('arm');
+      return false;
+    };
+    const bigBet = (to) => {
+      const L = cur.legal;
+      if (!L) return false;
+      const bet = L.bet || 0;
+      const stack = L.maxTo - bet;
+      return stack > 0 && to - bet >= stack / 3;
+    };
 
     const amount = () => {
       const L = cur.legal;
@@ -501,6 +650,7 @@ export default {
     const setAmount = (v, from) => {
       const L = cur.legal;
       if (!L) return;
+      if (armed && armed.btn === raiseBtn) disarm();
       v = Math.max(L.minTo, Math.min(L.maxTo, Math.round(v)));
       if (from !== range) range.value = v;
       if (from !== num) num.value = v;
@@ -512,13 +662,17 @@ export default {
     num.addEventListener('input', () => { if (num.value !== '') setAmount(Number(num.value), num); });
     num.addEventListener('change', () => setAmount(amount()));
     num.addEventListener('keydown', (e) => { if (e.key === 'Enter') raiseBtn.click(); });
-    foldBtn.addEventListener('click', () => cur.ids.has('fold') && onAction('fold'));
-    callBtn.addEventListener('click', () => cur.callId && onAction(cur.callId));
-    allinBtn.addEventListener('click', () => cur.ids.has('allin') && onAction('allin'));
+    foldBtn.addEventListener('click', () => { disarm(); if (cur.ids.has('fold')) onAction('fold'); });
+    callBtn.addEventListener('click', () => { disarm(); if (cur.callId && !callBtn.disabled) onAction(cur.callId); });
+    allinBtn.addEventListener('click', () => {
+      if (!cur.ids.has('allin') || !confirmed(allinBtn)) return;
+      onAction('allin');
+    });
     raiseBtn.addEventListener('click', () => {
       const L = cur.legal;
       if (!L || !L.canRaise) return;
       const v = amount();
+      if (bigBet(v) && !confirmed(raiseBtn)) return;
       onAction(v >= L.maxTo ? 'allin' : `raise:${v}`);
     });
 
@@ -538,15 +692,29 @@ export default {
     };
     document.addEventListener('keydown', onKey);
 
+    /** 预选的操作在轮到你时对应哪个行动；「跟注 X」的金额变了就不出手 */
+    function preFire(p, ids, lg) {
+      const toCall = lg ? lg.toCall : 0;
+      const short = lg ? lg.maxTo - (lg.bet || 0) <= lg.owe : false;
+      const callId = ids.has('check') ? 'check' : ids.has('call') ? 'call' : short && ids.has('allin') ? 'allin' : null;
+      if (p.kind === 'cf') return ids.has('check') ? 'check' : ids.has('fold') ? 'fold' : null;
+      if (p.kind === 'any') return callId;
+      if (p.kind === 'call') return toCall === p.amt ? callId : null;
+      return null;
+    }
+
     let ctlKey = '';
+    let lastOwe = null; // 上一次画桌面时你要跟的数：轮到你时金额变了，跟注键先锁 1 秒
+    let coolTimer = null;
     function renderControls(view, movable, actions, L) {
       const show = !!movable && view.toAct === movable && Array.isArray(actions) && actions.length > 0;
       ctl.hidden = !show;
-      if (!show) { ctlKey = ''; return; }
+      if (!show) { ctlKey = ''; disarm(); return; }
       ctl.style.cssText = `${pos(L.ctl.x, L.ctl.y)};width:${L.ctl.w}em;min-height:${L.ctl.h}em`;
       const key = `${view.handNo}|${view.log.length}|${actions.map((a) => a.id).join(',')}`;
       if (key === ctlKey) return; // 同一个决策点：不重置玩家拖到一半的金额
       ctlKey = key;
+      disarm();
       const ids = new Set(actions.map((a) => a.id));
       const lg = view.legal;
       const byId = Object.fromEntries(actions.map((a) => [a.id, a]));
@@ -569,59 +737,55 @@ export default {
       }
       raiseBtn.disabled = !canRaise;
       if (!canRaise) raiseBtn.textContent = cur.verb;
+      clearTimeout(coolTimer);
+      callBtn.classList.remove('cool');
+      // 预选了操作：轮到你时自动出手（稍停一下让你看见）
+      const fire = pre.kind && pre.hand === view.handNo ? preFire(pre, ids, lg) : null;
+      pre = { ...pre, kind: null };
+      paintPre();
+      if (fire) {
+        setTimeout(() => { if (ctlKey === key && !ctl.hidden) onAction(fire); }, 300);
+        return;
+      }
+      // 防误点：要跟的数刚变过，跟注键先锁 1 秒
+      const before = lastOwe && lastOwe.hand === view.handNo ? lastOwe.v : null;
+      if (cur.callId === 'call' && lg && before !== null && before !== lg.toCall) {
+        callBtn.disabled = true;
+        callBtn.classList.add('cool');
+        coolTimer = setTimeout(() => {
+          callBtn.classList.remove('cool');
+          if (ctlKey === key) callBtn.disabled = !cur.callId;
+        }, 1000);
+      }
+    }
+
+    /** 预选操作面板：你在这手里、还没轮到你时出现 */
+    function renderPre(view, opts, L, busy) {
+      const viewer = opts.viewer;
+      const me = viewer ? view.players.find((q) => q.seat === viewer) : null;
+      if (pre.hand !== view.handNo) pre = { kind: null, amt: 0, hand: view.handNo };
+      const inHand = !!me && me.inHand && !me.folded && !me.allin && !view.result && !view.over;
+      if (inHand) preX = Math.min(Math.max(0, (view.currentBet || 0) - (me.bet || 0)), me.stack);
+      if (!inHand) pre = { ...pre, kind: null };
+      // 「跟注 X」：要跟的数变了就自动取消
+      if (pre.kind === 'call' && pre.amt !== preX) pre = { ...pre, kind: null };
+      const show = inHand && !opts.replay && !busy && !!view.toAct && view.toAct !== viewer;
+      preBox.hidden = !show;
+      if (show) {
+        const h = 3.9;
+        preBox.style.cssText = `${pos(L.ctl.x, L.ctl.y + L.ctl.h - h)};width:${L.ctl.w}em;height:${h}em`;
+        preCall.lastChild.textContent = preX > 0 ? `跟注 ${money(preX)}` : '过牌';
+      }
+      paintPre();
     }
 
     // ---------- 版式、状态 ----------
     let layoutName = 'land';
     let last = null;
     let timer = null;
-    const fx = { prev: null, deal: null, board: { n: 0, t0: null, from: 0 }, bets: {}, collect: null, recap: null, allin: null, settle: null, intro: null, act: { key: '', t0: null }, beam: { key: '', t0: null } };
+    const fx = { prev: null, deal: null, board: { n: 0, t0: null, from: 0 }, bets: {}, collect: null, end: null, allin: null, intro: null, act: { key: '', t0: null }, beam: { key: '', t0: null }, wakes: [] };
     const redraw = () => last && draw(last.view, last.opts);
-    let sumTimer = null;
-
-    /** 结算卡的数据：哪几手牌亮了、牌型、这一手各人输赢 */
-    function summaryOf(view, rc, src, best) {
-      if (rc) {
-        const lh = rc.lastHand;
-        const seats = Object.keys(lh.shown || {});
-        const rows = (seats.length ? seats : [...rc.winners]).map((s) => ({
-          seat: s, name: rc.prev.players.find((q) => q.seat === s)?.name || s, cards: lh.shown?.[s] || null,
-          hand: lh.hands?.[s] || (rc.winners.has(s) ? '赢下底池' : ''), net: lh.net?.[s] ?? null, win: rc.winners.has(s),
-        }));
-        // 输了筹码但没亮牌的人（弃牌）也列出来，按输赢排序
-        for (const q of rc.prev.players) if (!rows.some((r) => r.seat === q.seat) && lh.net?.[q.seat]) rows.push({ seat: q.seat, name: q.name, cards: null, hand: '弃牌', net: lh.net[q.seat], win: false });
-        return { no: lh.no, board: lh.board, best, rows: sortRows(rows), text: lh.text, showdown: !!lh.showdown };
-      }
-      const r = view.result;
-      const win = new Set(r.winners);
-      const rows = view.players.filter((q) => q.inHand).map((q) => ({
-        seat: q.seat, name: q.name, cards: r.showdown && !q.folded ? q.cards : null, hand: q.handName || (win.has(q.seat) ? '赢下底池' : q.folded ? '弃牌' : ''),
-        net: (q.won || 0) - (q.contrib || 0), win: win.has(q.seat),
-      })).filter((x) => x.win || x.cards || x.net);
-      return { no: view.handNo, board: view.board, best, rows: sortRows(rows), text: r.text, showdown: !!r.showdown, final: view.over };
-    }
-    const sortRows = (rows) => rows.sort((a, b) => (b.win - a.win) || ((b.net ?? 0) - (a.net ?? 0)));
-
-    function summaryCard(S, L) {
-      const card = el('div', { class: 'pk-pop pk-sum', style: `top:${L.table.cy}em` });
-      card.append(el('div', { class: 'hd' }, el('span', { class: 'ttl' }, `第 ${S.no} 手 · 结算`), S.final ? el('small', {}, '终局') : null));
-      if (S.board?.length) {
-        const bd = el('div', { class: 'bd' });
-        for (const c of S.board) bd.append(cardEl(c, 0, 0, 0.55, S.best.size ? (S.best.has(c) ? 'best' : 'dim') : ''));
-        card.append(bd);
-      }
-      const rows = el('div', { class: 'rows' });
-      for (const r of S.rows.slice(0, 6)) {
-        const cs = el('div', { class: 'hc' });
-        (r.cards || []).forEach((c, k) => cs.append(cardEl(c, k * 2.9, 0, 0.45, r.win && S.best.has(c) ? 'best' : '')));
-        rows.append(el('div', { class: `rw${r.win ? ' win' : ''}` },
-          el('span', { class: 'no' }, String(seatNo(r.seat))), el('span', { class: 'nm' }, r.name), cs,
-          el('span', { class: 'hn' }, r.hand || ''),
-          el('span', { class: `nt ${r.net > 0 ? 'up' : r.net < 0 ? 'dn' : ''}` }, r.net === null || r.net === undefined ? '' : `${r.net > 0 ? '+' : ''}${r.net}`)));
-      }
-      card.append(rows, el('div', { class: 'ft' }, S.text));
-      return card;
-    }
+    let sumTab = null; // 终局结算卡看哪一页：null 自动（先看这一手，停够后换到全场统计）
 
     if (typeof ResizeObserver === 'function') {
       new ResizeObserver(([e]) => {
@@ -660,39 +824,136 @@ export default {
     const allinMoment = (v) => !!v && !v.result && liveOf(v).length >= 2 && liveOf(v).some((p) => p.allin);
     const sumBets = (v) => v.players.reduce((a, p) => a + (p.bet || 0), 0);
 
-    /** 上一手的结算数据：赢家、赢家组成牌型的五张、没翻完的公共牌从第几张开始 */
-    function recapOf(prev, view) {
-      const lastHand = view.last;
-      if (!lastHand || lastHand.no !== prev.handNo) return null;
-      const shown = lastHand.shown || {};
-      let winners = [], best = [];
-      const seats = Object.keys(shown);
-      if (seats.length) {
-        const board = lastHand.board.map(fromCode);
-        let top = -1;
-        for (const s of seats) {
-          const sc = evaluate([...shown[s].map(fromCode), ...board]);
-          if (sc > top) { top = sc; winners = [s]; } else if (sc === top) winners.push(s);
-        }
-        for (const s of winners) best.push(...bestFive([...shown[s].map(fromCode), ...board]).map(codeOf));
-      } else {
-        // 其他人弃牌：赢家是这一手净赢的人（上一步之前还有两个人没弃牌，不能按那时的局面猜）
-        const net = lastHand.net || {};
-        const top = Math.max(0, ...Object.values(net));
-        winners = Object.keys(net).filter((s) => net[s] === top && top > 0);
-        if (!winners.length) winners = liveOf(prev).map((p) => p.seat).slice(0, 1);
-      }
-      return { prev, lastHand, winners: new Set(winners), best: new Set(best), from: prev.board.length, allin: allinMoment(prev), showdown: lastHand.showdown ?? seats.length > 0 };
+    // ---------- 一手结束的演出 ----------
+    // 结算开始（t0）后：收注 → 一家一家亮牌 → 补翻公共牌 → 抬牌、牌型徽章、输家牌变淡 → 主池、边池依次推给赢家 → 结算卡。
+    // 时刻表来自 timing.js 的 schedule，和服务端停顿同一份。终局那一手（final）演完后结算卡一直留着。
+
+    /** 亮牌顺序：最后一条街最后加注的人先亮，没人加注就从庄位左边顺时针 */
+    function revealOrder(src, log, seats) {
+      const acts = (log || []).filter((e) => !e.blind);
+      const st = acts.length ? acts[acts.length - 1].street : null;
+      const agg = [...acts].reverse().find((e) => e.street === st && /加注|下注/.test(e.text))?.seat;
+      const ring = src.players.map((q) => q.seat);
+      const n = ring.length;
+      let start = agg && seats.includes(agg) ? ring.indexOf(agg) : (ring.indexOf(src.button) + 1) % n;
+      if (start < 0) start = 0;
+      const out = [];
+      for (let k = 0; k < n; k++) { const s = ring[(start + k) % n]; if (seats.includes(s)) out.push(s); }
+      return out;
     }
+
+    function buildEnd(o) {
+      let pots = Array.isArray(o.pots) && o.pots.length ? o.pots : null;
+      if (!pots) {
+        // 没有分池数据：按净赢的人估一个池
+        const net = o.net || {};
+        const top = Math.max(0, ...Object.values(net));
+        let ws = Object.keys(net).filter((s) => net[s] === top && top > 0);
+        if (!ws.length) ws = Object.keys(o.shown).slice(0, 1);
+        const amount = o.pot || 0;
+        const share = ws.length ? Math.floor(amount / ws.length) : 0;
+        pots = ws.length ? [{ amount, winners: ws, shares: ws.map((_, k) => share + (k ? 0 : amount - share * ws.length)), uncalled: false, hand: null }] : [];
+      }
+      const shownSeats = Object.keys(o.shown);
+      const winners = new Set(pots.filter((p) => !p.uncalled).flatMap((p) => p.winners));
+      if (!winners.size) pots.forEach((p) => p.winners.forEach((w) => winners.add(w)));
+      const best = new Set();
+      if (o.showdown) {
+        const board = o.board.map(fromCode);
+        for (const s of winners) if (o.shown[s]) bestFive([...o.shown[s].map(fromCode), ...board]).forEach((c) => best.add(codeOf(c)));
+      }
+      const info = endInfo(o.from, { showdown: o.showdown, boardLen: o.board.length, shown: shownSeats.length, pots: pots.length, pot: o.pot }, o.bb);
+      const sched = schedule(info);
+      const payout = {};
+      pots.forEach((p) => p.winners.forEach((w, k) => { payout[w] = (payout[w] || 0) + (p.shares?.[k] ?? 0); }));
+      const main = pots.find((p) => !p.uncalled && p.hand);
+      return {
+        ...o, pots, winners, best, info, sched, payout, big: info.big,
+        losers: new Set(o.showdown ? shownSeats.filter((s) => !winners.has(s)) : []),
+        order: o.showdown ? revealOrder(o.src, o.log, shownSeats) : [],
+        streets: ['flop', 'turn', 'river'].slice(3 - info.streets),
+        potTotal: pots.reduce((a, p) => a + p.amount, 0),
+        badge: o.showdown && main ? { hand: main.hand, who: main.winners } : null,
+        dur: o.final ? Infinity : sched.end,
+        static: o.t0 === null,
+        t0: o.t0 === null ? -1e9 : o.t0,
+      };
+    }
+
+    /** 上一手的结算（新一手已经开始）：座位按上一步画，亮出的底牌、分池从 view.last 来 */
+    function endFromLast(prev, view, t0) {
+      const lh = view.last;
+      if (!lh || lh.no !== prev.handNo) return null;
+      return buildEnd({
+        t0, final: false, no: lh.no, src: prev, log: prev.log, collectFrom: sumBets(prev) > 0 ? prev : null, allin: allinMoment(prev),
+        board: lh.board, from: prev.board.length, showdown: !!lh.showdown, shown: lh.shown || {}, hands: lh.hands || {}, net: lh.net || {},
+        pots: lh.pots, pot: lh.pot ?? prev.pot, text: lh.text, bb: view.blinds?.bb,
+        finalStack: Object.fromEntries(view.players.map((q) => [q.seat, q.stack + (q.contrib || 0)])),
+        faceDown: new Set(prev.players.filter((q) => !q.cards).map((q) => q.seat)),
+      });
+    }
+
+    /** 终局那一手的结算（view.result）；prev 为 null 时不演动画，直接画结束的样子 */
+    function endFromResult(prev, view, t0) {
+      const r = view.result;
+      const seats = r.showdown ? (r.shown || liveOf(view).map((q) => q.seat)) : [];
+      const shown = {}, hands = {}, net = {}, finalStack = {};
+      for (const q of view.players) {
+        if (seats.includes(q.seat) && q.cards) { shown[q.seat] = q.cards; if (q.handName) hands[q.seat] = q.handName; }
+        if (q.inHand) net[q.seat] = (q.won || 0) - (q.contrib || 0);
+        finalStack[q.seat] = q.stack;
+      }
+      return buildEnd({
+        t0: prev ? t0 : null, final: true, no: view.handNo, src: view, log: view.log, collectFrom: prev && sumBets(prev) > 0 ? prev : null, allin: prev ? allinMoment(prev) : false,
+        board: view.board, from: prev ? prev.board.length : view.board.length, showdown: !!r.showdown, shown, hands, net,
+        pots: r.pots, pot: view.pot, text: r.text, bb: view.blinds?.bb, finalStack,
+        faceDown: new Set(prev ? prev.players.filter((q) => !q.cards).map((q) => q.seat) : []),
+      });
+    }
+
+    /** 公共牌第 k 张在结算里什么时候翻（不用翻返回 null） */
+    const flipAt = (E, k) => {
+      if (!E.showdown || k < E.from) return null;
+      const j = E.streets.indexOf(k < 3 ? 'flop' : k === 3 ? 'turn' : 'river');
+      return j < 0 ? null : E.sched.streetAt[j] + (k < 3 ? k * 160 : 0);
+    };
+    /** 到 t 为止推到这个座位的筹码（withReturn：算不算退回的未跟注部分） */
+    const arrivedOf = (E, seat, t, withReturn = true) => {
+      let v = 0;
+      E.pots.forEach((p, i) => {
+        if (t - E.t0 < E.sched.push[i] + TM.PUSH - 80 || (p.uncalled && !withReturn)) return;
+        p.winners.forEach((w, k) => { if (w === seat) v += p.shares?.[k] ?? 0; });
+      });
+      return v;
+    };
+
+    /** 演出里画面要变的时刻：到点重画一次（动画本身靠负延迟续播，不会跳） */
+    function wake(E) {
+      for (const id of fx.wakes) clearTimeout(id);
+      fx.wakes = [];
+      if (!E || E.static) return;
+      const S = E.sched;
+      const marks = [...S.reveal.map((x) => x + TM.CARD_GAP + TM.FLIP), S.liftAt, ...S.push, ...S.push.map((x) => x + TM.PUSH - 80), ...S.push.map((x) => x + TM.PUSH), S.cardAt - 40];
+      if (E.final) marks.push(S.end);
+      const base = E.t0 - now();
+      for (const m of marks) if (base + m > 0) fx.wakes.push(setTimeout(redraw, base + m + 16));
+    }
+
+    const sameView = (a, b) => a.handNo === b.handNo && a.log.length === b.log.length && a.board.length === b.board.length
+      && !!a.result === !!b.result && a.toAct === b.toAct && !!a.over === !!b.over;
 
     /** 记录变化、决定这一帧要起哪些动画 */
     function track(view, opts) {
       const p = fx.prev;
       const t = now();
+      if (!view.over) sumTab = null;
+      if (p && sameView(p, view)) { fx.prev = view; return; } // 同一个局面重画：动画照常续播
       const live = opts.animate !== false && p !== null;
       fx.prev = view;
       if (!live) {
-        fx.recap = null; fx.collect = null; fx.deal = null; fx.settle = null; fx.allin = allinMoment(view) ? fx.allin : null;
+        fx.collect = null; fx.deal = null; fx.allin = allinMoment(view) ? fx.allin : null;
+        fx.end = view.result ? endFromResult(null, view, null) : null;
+        wake(null);
         fx.board = { n: view.board.length, t0: null, from: view.board.length };
         fx.bets = {};
         // 打开页面时正好是一手的开头（还没人行动）：弹开局提示，和服务端的开局停顿对上
@@ -702,18 +963,15 @@ export default {
       }
       const newHand = view.handNo !== p.handNo;
       if (newHand) {
-        // 一手结束：先结算上一手，再发新一手
-        const rc = view.handNo === p.handNo + 1 ? recapOf(p, view) : null;
-        const runout = rc ? Math.max(0, (rc.lastHand.board.length - rc.from)) : 0;
-        const streets = rc && rc.showdown ? streetsBetween(rc.from, rc.lastHand.board.length) : 0;
-        // 时长和服务端的停顿是同一份（timing.js）：结算演完、结算卡停够，才发新一手
-        const dur = rc ? endDur({ showdown: rc.showdown, streets }) : 0;
-        fx.recap = rc ? { ...rc, t0: t, dur, runoutAt: TM.RUNOUT_AT, streets, runout, cardAt: cardAt({ showdown: rc.showdown, streets }), collectFrom: sumBets(p) > 0 ? p : null } : null;
+        // 一手结束：先演上一手的结算，再发新一手（时长和服务端的停顿是同一份）
+        const E = view.handNo === p.handNo + 1 ? endFromLast(p, view, t) : null;
+        const dur = E ? E.dur : 0;
+        fx.end = E;
+        wake(E);
         fx.deal = t + dur;
         fx.intro = view.over ? null : { t0: t + dur, hand: view.handNo };
         fx.board = { n: view.board.length, t0: null, from: 0 };
         fx.collect = null;
-        fx.settle = null;
         fx.bets = Object.fromEntries(view.players.filter((q) => q.bet > 0).map((q) => [q.seat, t + dur + 500]));
         clearTimeout(timer);
         if (dur) timer = setTimeout(() => { redraw(); clearTimeout(timer); timer = setTimeout(redraw, TM.DEAL + 30); }, dur + 30);
@@ -721,20 +979,18 @@ export default {
       } else {
         // 同一手：新的公共牌、下注、收池
         if (view.board.length > p.board.length) fx.board = { n: view.board.length, t0: t + (p.street !== view.street && sumBets(p) > 0 ? 380 : 0), from: p.board.length };
-        if (view.street !== p.street && sumBets(p) > 0) fx.collect = { t0: t, prev: p };
+        if (view.street !== p.street && sumBets(p) > 0 && !view.result) fx.collect = { t0: t, prev: p };
         for (const q of view.players) {
           const o = p.players.find((x) => x.seat === q.seat);
           if (q.bet > (o?.bet || 0)) fx.bets[q.seat] = t;
         }
         if (view.result && !p.result) {
-          // 最后一手结束（整场结束，不再发新一手）：同样翻完公共牌、亮底牌、弹结算卡，卡一直留着
-          const flips = Math.max(0, view.board.length - p.board.length);
-          const showdown = !!view.result.showdown;
-          const streets = showdown ? streetsBetween(p.board.length, view.board.length) : 0;
-          const reveal = new Set(view.players.filter((q) => q.cards && !p.players.find((o) => o.seat === q.seat)?.cards).map((q) => q.seat));
-          fx.settle = { t0: t, flips, streets, reveal, cardAt: cardAt({ showdown, streets }) };
+          // 最后一手结束（整场结束，不再发新一手）：同样亮牌、翻完公共牌、分池、弹结算卡，卡一直留着
+          fx.end = endFromResult(p, view, t);
+          wake(fx.end);
         }
       }
+      if (view.result && !fx.end?.final) { fx.end = endFromResult(null, view, null); wake(null); }
       // 桌心的「刚才那一手」、照向行动者的光：换了才演进场
       const la = lastAct(view);
       const ak = la ? `${view.handNo}|${view.log.length}` : '';
@@ -743,37 +999,129 @@ export default {
       if (bk !== fx.beam.key) fx.beam = { key: bk, t0: live || !fx.prev ? t : null };
       const ai = allinMoment(view);
       if (ai && !fx.allin) fx.allin = t;
-      if (!ai && !(fx.recap && fx.recap.allin)) fx.allin = null;
+      if (!ai && !(fx.end && fx.end.allin)) fx.allin = null;
     }
 
-    function seatEl(view, p, g, L, { recap = null, best = new Set(), winners = new Set(), showEq = true, me = null, t0 = null }) {
+    function seatEl(view, p, g, L, { E = null, t = 0, winners = new Set(), me = null, t0 = null }) {
       const S = L.seat;
-      const acting = !recap && view.toAct === p.seat;
+      const acting = !E && !view.result && view.toAct === p.seat;
       const win = winners.has(p.seat);
       const outNow = p.out && !p.inHand;
-      const cls = `pk-seat${acting ? ' on' : ''}${win ? ' win' : ''}${p.folded && p.inHand && !outNow ? ' folded' : ''}${outNow ? ' out' : ''}`;
+      const cls = `pk-seat${acting ? ' on' : ''}${win ? ' win' : ''}${p.folded && p.inHand && !outNow ? ' folded' : ''}${outNow ? ' out' : ''}${bbMode ? ' bbm' : ''}`;
       // 第二行：本轮动作 / 牌型 / 状态
       let status = p.last || (p.position && !view.over ? p.position : '');
       let sc = '';
       if (outNow) status = '出局';
-      else if (win && (recap || view.result)) { status = recap ? (recap.lastHand.hands?.[p.seat] || '赢下底池') : (p.handName || '赢下底池'); sc = 'gold'; }
+      else if (E) {
+        // 结算中：亮牌之后才显示牌型，抬牌之后赢家变金
+        const ri = E.order.indexOf(p.seat);
+        // 还要补翻公共牌时，牌型等翻完再说（不然先剧透了）
+        const shownAt = ri < 0 ? null : E.streets.length ? E.sched.liftAt : E.sched.reveal[ri] + TM.CARD_GAP + TM.FLIP;
+        if (win) { status = E.hands[p.seat] || '赢下底池'; sc = 'gold'; }
+        else if (shownAt !== null && t - E.t0 >= shownAt - 20 && E.hands[p.seat]) status = E.hands[p.seat];
+        else if (p.folded && p.inHand) status = '弃牌';
+        else if (p.allin) { status = '全下'; sc = 'hot'; }
+      }
       else if (p.handName) { status = p.handName; }
       else if (p.folded && p.inHand) status = '弃牌';
       else if (p.allin) { status = '全下'; sc = 'hot'; }
       // 轮到他：第二行换成「思考中…」（金）或「轮到你」（朱），名牌外圈呼吸发亮
       if (acting) { status = me === p.seat ? '轮到你' : '思考中'; sc = me === p.seat ? 'me' : 'turn'; }
-      // 结算期间：赢家已经拿到底池、新一手的盲注还没下
-      const np = recap ? view.players.find((q) => q.seat === p.seat) : null;
-      const stack = np ? np.stack + (np.contrib || 0) : p.stack;
+      // 结算期间：筹码从结算前的数开始，池推到了才加上
+      const stack = E && E.finalStack[p.seat] !== undefined ? E.finalStack[p.seat] - (E.payout[p.seat] || 0) + arrivedOf(E, p.seat, t) : p.stack;
       const node = el('div', { class: cls, style: `${pos(g.x, g.y)};width:${S.w}em;height:${S.h}em` },
         el('span', { class: 'coin' }, String(seatNo(p.seat))),
         el('div', { class: 'who' }, el('b', {}, p.name), el('span', { class: sc }, short(status, 8))),
-        el('span', { class: 'stk' }, String(stack)),
+        el('span', { class: 'stk' }, money(stack)),
         acting ? el('div', { class: 'think' }, el('i'), el('i'), el('i')) : null);
-      const won = recap ? null : view.result && p.won > 0 ? p.won : null;
-      if (won) node.append(el('span', { class: 'won' }, `+${won}`));
+      const won = E ? arrivedOf(E, p.seat, t, false) : 0;
+      if (won > 0) node.append(el('span', { class: 'won' }, `+${money(won)}`));
       if (acting && t0) node.append(thinkTimer(t0));
       return node;
+    }
+
+    /** 结算卡的数据：哪几手牌亮了、牌型、这一手各人输赢 */
+    function summaryOf(E) {
+      const nameOf = (s) => E.src.players.find((q) => q.seat === s)?.name || s;
+      const seats = Object.keys(E.shown);
+      const rows = (seats.length ? seats : [...E.winners]).map((s) => ({
+        seat: s, name: nameOf(s), cards: E.shown[s] || null, hand: E.hands[s] || (E.winners.has(s) ? '赢下底池' : ''), net: E.net[s] ?? null, win: E.winners.has(s),
+      }));
+      // 输了筹码但没亮牌的人（弃牌）也列出来，按输赢排序
+      for (const q of E.src.players) if (!rows.some((r) => r.seat === q.seat) && E.net[q.seat]) rows.push({ seat: q.seat, name: q.name, cards: null, hand: '弃牌', net: E.net[q.seat], win: false });
+      return { no: E.no, board: E.board, best: E.best, rows: sortRows(rows), text: E.text, showdown: E.showdown, final: E.final };
+    }
+    const sortRows = (rows) => rows.sort((a, b) => (b.win - a.win) || ((b.net ?? 0) - (a.net ?? 0)));
+    const signed = (v) => `${v > 0 ? '+' : ''}${money(v)}`;
+
+    function summaryCard(S, L, tabs) {
+      const card = el('div', { class: 'pk-pop pk-sum', style: `top:${L.table.cy}em` });
+      if (tabs) card.append(tabs);
+      card.append(el('div', { class: 'hd' }, el('span', { class: 'ttl' }, `第 ${S.no} 手 · 结算`), S.final ? el('small', {}, '终局') : null));
+      if (S.board?.length) {
+        const bd = el('div', { class: 'bd' });
+        for (const c of S.board) bd.append(cardEl(c, 0, 0, 0.55, S.best.size ? (S.best.has(c) ? 'best' : 'dim') : ''));
+        card.append(bd);
+      }
+      const rows = el('div', { class: 'rows' });
+      for (const r of S.rows.slice(0, 6)) {
+        const cs = el('div', { class: 'hc' });
+        (r.cards || []).forEach((c, k) => cs.append(cardEl(c, k * 2.9, 0, 0.45, r.win && S.best.has(c) ? 'best' : '')));
+        rows.append(el('div', { class: `rw${r.win ? ' win' : ''}` },
+          el('span', { class: 'no' }, String(seatNo(r.seat))), el('span', { class: 'nm' }, r.name), cs,
+          el('span', { class: 'hn' }, r.hand || ''),
+          el('span', { class: `nt ${r.net > 0 ? 'up' : r.net < 0 ? 'dn' : ''}` }, r.net === null || r.net === undefined ? '' : signed(r.net))));
+      }
+      card.append(rows, el('div', { class: 'ft' }, S.text));
+      return card;
+    }
+
+    /** 累计盈亏小曲线：各人用同一个纵向比例，0 线虚线 */
+    function spark(curve, lim) {
+      const NS = 'http://www.w3.org/2000/svg';
+      const pts = [0, ...curve];
+      const W = 60, H = 20;
+      const x = (k) => (pts.length > 1 ? (k / (pts.length - 1)) * W : W / 2);
+      const y = (v) => H / 2 - (v / lim) * (H / 2 - 1.5);
+      const svg = document.createElementNS(NS, 'svg');
+      svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+      svg.setAttribute('preserveAspectRatio', 'none');
+      svg.setAttribute('aria-hidden', 'true');
+      const base = document.createElementNS(NS, 'line');
+      for (const [k, v] of Object.entries({ x1: 0, x2: W, y1: H / 2, y2: H / 2 })) base.setAttribute(k, v);
+      const pl = document.createElementNS(NS, 'polyline');
+      pl.setAttribute('points', pts.map((v, k) => `${x(k).toFixed(2)},${y(v).toFixed(2)}`).join(' '));
+      svg.append(base, pl);
+      const end = pts[pts.length - 1];
+      return el('span', { class: `spk${end > 0 ? ' up' : end < 0 ? ' dn' : ''}` }, svg);
+    }
+
+    /** 全场统计：净胜、走势、手数、入池率、翻前加注率、摊牌胜/次、赢过的最大底池 */
+    function statsCard(view, L, tabs) {
+      const st = view.stats;
+      const card = el('div', { class: 'pk-pop pk-sum pk-stats', style: `top:${L.table.cy}em` });
+      card.append(tabs, el('div', { class: 'hd' }, el('span', { class: 'ttl' }, '全场统计'), el('small', {}, `共 ${st.hands} 手`)));
+      const rows = st.players.slice().sort((a, b) => b.net - a.net);
+      const lim = Math.max(1, ...rows.flatMap((r) => r.curve.map((v) => Math.abs(v))));
+      const pct = (a, b) => (b ? `${Math.round((a / b) * 100)}%` : '–');
+      const tb = el('div', { class: 'tb', role: 'table' });
+      tb.append(el('div', { class: 'th', role: 'row' }, ...['', '选手', '净胜', '走势', '手数', '入池', '加注', '摊牌胜', '最大底池'].map((h) => el('span', { role: 'columnheader' }, h))));
+      rows.forEach((r, k) => {
+        const name = view.players.find((q) => q.seat === r.seat)?.name || r.name;
+        tb.append(el('div', { class: `tr${k === 0 && r.net > 0 ? ' lead' : ''}`, role: 'row' },
+          el('span', { class: 'no' }, String(seatNo(r.seat))), el('span', { class: 'nm' }, name),
+          el('span', { class: `nt ${r.net > 0 ? 'up' : r.net < 0 ? 'dn' : ''}` }, signed(r.net)),
+          spark(r.curve, lim),
+          el('span', {}, String(r.played)), el('span', { title: '入池率 VPIP：翻牌前主动跟注或加注的手数占比' }, pct(r.vpip, r.played)),
+          el('span', { title: '翻牌前加注率 PFR' }, pct(r.pfr, r.played)),
+          el('span', { title: '摊牌赢的次数 / 摊牌次数' }, r.sd ? `${r.sdWon}/${r.sd}` : '–'), el('span', {}, r.best ? money(r.best) : '–')));
+      });
+      card.append(tb);
+      return card;
+    }
+    function tabsEl(cur) {
+      const mk = (id, text) => el('button', { type: 'button', role: 'tab', 'aria-selected': cur === id ? 'true' : 'false', class: cur === id ? 'on' : '', onclick: (e) => { e.stopPropagation(); sumTab = id; redraw(); } }, text);
+      return el('div', { class: 'tabs', role: 'tablist' }, mk('hand', '本手'), mk('stats', '全场统计'));
     }
 
     function draw(view, opts) {
@@ -782,16 +1130,19 @@ export default {
       const T = L.table;
       const g = geometry(view, viewer, L);
       const t = now();
-      const rc = fx.recap && t - fx.recap.t0 < fx.recap.dur ? fx.recap : null;
-      if (!rc && fx.recap) fx.recap = null;
-      const src = rc ? rc.prev : view; // 结算期间座位上的牌按上一手画
+      let E = fx.end;
+      if (E && !E.final && t - E.t0 >= E.dur) fx.end = E = null;
+      const at = (ms) => !!E && t - E.t0 >= ms;
+      const bbv = view.blinds?.bb || 1;
+      money = (v) => (bbMode ? fmtBB(v, bbv) : String(v));
+      const src = E ? E.src : view; // 结算期间座位上的牌按结算前那一步画
       const kids = [];
 
       // 桌子
       kids.push(el('div', { class: 'pk-rail', style: `${pos(T.cx - T.rx - 1.6, T.cy - T.ry - 1.6)};width:${(T.rx + 1.6) * 2}em;height:${(T.ry + 1.6) * 2}em` }));
       kids.push(el('div', { class: 'pk-felt', style: `${pos(T.cx - T.rx + 0.3, T.cy - T.ry + 0.3)};width:${(T.rx - 0.3) * 2}em;height:${(T.ry - 0.3) * 2}em` }));
       kids.push(el('div', { class: 'pk-wm', style: pos(T.cx, T.cy + T.ry * 0.55) }, el('span', {}, '德州')));
-      if (!rc && !view.result && view.toAct && g[view.toAct]) {
+      if (!E && !view.result && view.toAct && g[view.toAct]) {
         const s = g[view.toAct];
         const dx = s.x - T.cx, dy = s.y - T.cy;
         const ang = (Math.atan2(dy, dx) * 180) / Math.PI;
@@ -801,105 +1152,102 @@ export default {
       }
 
       // 全下：压暗
-      const ai = rc ? rc.allin : allinMoment(view);
+      const ai = E ? E.allin : allinMoment(view);
       if (ai) kids.push(play(el('div', { class: 'pk-dim' }), 'pk-in', 500, fx.allin));
 
-      // 左上角牌匾
-      const street = rc ? '摊牌' : view.streetName;
+      // 左上角牌匾；右上角筹码 / BB 切换
+      const street = E ? (E.showdown ? '摊牌' : '结束') : view.streetName;
       kids.push(el('div', { class: 'pk-info', style: pos(...L.info) },
-        el('div', { class: 'kv' }, el('small', {}, '第几手'), el('b', {}, `${view.handNo}/${view.hands}`)),
+        el('div', { class: 'kv' }, el('small', {}, '第几手'), el('b', {}, `${E ? E.no : view.handNo}/${view.hands}`)),
         el('span', { class: 'st' }, street),
         el('div', { class: 'kv' }, el('small', {}, '盲注'), el('b', {}, `${view.blinds.sb}/${view.blinds.bb}`))));
+      bbBtn.style.cssText = pos(L.w - L.info[0], L.info[1] + 0.35);
+      bbBtn.classList.toggle('bb', bbMode);
+      bbBtn.setAttribute('aria-pressed', bbMode ? 'true' : 'false');
 
       // 公共牌
       const B = L.board;
       const fs = B.cw / 5;
       const bw = B.cw * 5 + B.gap * 4;
       const bx0 = B.cx - bw / 2;
-      const board = rc ? rc.lastHand.board : view.board;
-      let best = new Set(), winners = new Set();
-      if (rc) { best = rc.best; winners = rc.winners; } else if (view.result) {
-        winners = new Set(view.result.winners);
-        if (view.result.showdown) for (const p of view.players) if (winners.has(p.seat) && p.best) p.best.forEach((c) => best.add(c));
-      }
-      // 结算时：没翻完的公共牌依次翻开，然后五张抬起
-      let liftAt = 0;
-      const flipDelay = (k) => {
-        if (rc) {
-          if (k < rc.from) return null;
-          const st = k < 3 ? 0 : k === 3 ? 1 : 2;
-          const firstSt = rc.from < 3 ? 0 : rc.from === 3 ? 1 : 2;
-          return rc.runoutAt + (st - firstSt) * TM.STREET + (k < 3 ? k * 160 : 0);
-        }
-        if (fx.settle && fx.settle.flips && fx.board.t0 !== null && k >= fx.board.from) {
-          const from = fx.board.from;
-          const st = k < 3 ? 0 : k === 3 ? 1 : 2;
-          const firstSt = from < 3 ? 0 : from === 3 ? 1 : 2;
-          return TM.RUNOUT_AT + (st - firstSt) * TM.STREET + (k < 3 ? k * 160 : 0);
-        }
-        if (fx.board.t0 === null || k < fx.board.from) return null;
-        return k < 3 ? (k - Math.min(fx.board.from, 3)) * 170 : (k - fx.board.from) * 170;
-      };
-      const t0Board = rc ? rc.t0 : fx.board.t0;
-      if (rc) liftAt = rc.runoutAt + rc.streets * TM.STREET + TM.LIFT;
-      else if (fx.settle) liftAt = fx.settle.flips ? TM.RUNOUT_AT + fx.settle.streets * TM.STREET + TM.LIFT : 200;
+      const board = E ? E.board : view.board;
+      const lifted = !!E && at(E.sched.liftAt);
+      const best = lifted ? E.best : new Set();
+      const winners = lifted ? E.winners : new Set();
       for (let k = 0; k < 5; k++) {
         const c = board[k];
         const x = bx0 + k * (B.cw + B.gap);
         if (!c) { kids.push(cardEl('slot', x, B.y, fs)); continue; }
-        const isBest = best.has(c);
-        const cls = best.size ? (isBest ? 'best' : 'dim') : '';
-        const d = flipDelay(k);
-        const nodes = d === null ? [cardEl(c, x, B.y, fs, cls)] : flipCard(c, x, B.y, fs, cls, t0Board, d);
-        const face = nodes.at(-1);
-        if (best.size) play(face, isBest ? 'pk-lift' : 'pk-dimin', 520, rc ? rc.t0 : fx.settle?.t0, liftAt);
+        const cls = best.size ? (best.has(c) ? 'best' : 'dim') : '';
+        let d = null, t0b = null;
+        if (E) { d = flipAt(E, k); t0b = E.t0; }
+        else if (fx.board.t0 !== null && k >= fx.board.from) { d = k < 3 ? (k - Math.min(fx.board.from, 3)) * 170 : (k - fx.board.from) * 170; t0b = fx.board.t0; }
+        const nodes = d === null ? [cardEl(c, x, B.y, fs, cls)] : flipCard(c, x, B.y, fs, cls, t0b, d);
+        // 大底池全下：转牌、河牌翻开前多停一秒，牌背轻轻鼓动
+        if (E && E.big && d !== null && k >= 3 && nodes.length > 1) play(nodes[0], 'pk-sweat', TM.BIG_WAIT, E.t0, d - TM.BIG_WAIT, 'ease-in-out');
+        if (best.size) play(nodes.at(-1), best.has(c) ? 'pk-lift' : 'pk-dimin', 520, E.t0, E.sched.liftAt);
         kids.push(...nodes);
       }
 
-      // 底池：收进来的筹码（不含各人面前还没收的注）
+      // 底池：收进来的筹码（不含各人面前还没收的注）；结算时按池推走，剩多少画多少
       const P = L.pot;
-      const betsNow = rc ? 0 : sumBets(view);
-      const potAmt = rc ? rc.prev.pot : view.pot - betsNow;
-      const potWrap = el('div', { class: 'pk-pot', style: pos(P.cx, P.y) });
-      const pile = el('div', { class: 'pile' });
-      // 结算：底池推向赢家（推完就不再画这堆筹码）
-      const winSeat = [...winners][0];
-      const settleT0 = rc ? rc.t0 : fx.settle?.t0 ?? null;
-      const pushDone = (rc || view.result) && (settleT0 === null || t - settleT0 > liftAt + 1200);
-      if (potAmt > 0 && !pushDone) pile.append(chips(potAmt, 3.5, 3.1, { maxCols: 4, maxPer: 8 }));
-      potWrap.append(pile, el('div', { class: 'lab' }, el('small', {}, '底池'), el('b', {}, String(rc ? rc.prev.pot : view.pot))));
-      if (winSeat && g[winSeat] && settleT0 !== null && !pushDone) {
-        const w = g[winSeat];
-        pile.style.setProperty('--tx', `${w.x - (P.cx - 0.2)}em`);
-        pile.style.setProperty('--ty', `${w.y - (P.y + 1.7)}em`);
-        play(pile, 'pk-collect', 700, settleT0, liftAt + 500, 'cubic-bezier(.5,0,.6,1)');
+      let potShown, potPile;
+      if (E) {
+        let gone = 0;
+        E.pots.forEach((pp, i) => { if (at(E.sched.push[i])) gone += pp.amount; });
+        potShown = potPile = Math.max(0, E.potTotal - gone);
+      } else {
+        potPile = view.pot - sumBets(view);
+        potShown = view.pot;
       }
-      kids.push(potWrap);
-      if (!rc && view.pots.length > 1) {
-        kids.push(el('div', { class: 'pk-side', style: pos(P.cx, P.y + 4) }, ...view.pots.map((pp, k) => el('span', {}, `${k ? `边池 ${k}` : '主池'} ${pp.amount}`))));
+      if (!E || potShown > 0) {
+        const potWrap = el('div', { class: 'pk-pot', style: pos(P.cx, P.y) });
+        const pile = el('div', { class: 'pile' });
+        if (potPile > 0) pile.append(chips(potPile, 3.5, 3.1, { maxCols: 4, maxPer: 8 }));
+        potWrap.append(pile, el('div', { class: 'lab' }, el('small', {}, '底池'), el('b', {}, money(potShown))));
+        // 注收进底池时鼓一下
+        if (E) { if (E.collectFrom) play(potWrap, 'pk-bump', 400, E.t0, 400, 'ease-out'); }
+        else if (fx.collect) play(potWrap, 'pk-bump', 400, fx.collect.t0, 480, 'ease-out');
+        kids.push(potWrap);
+      }
+      if (!E && view.pots.length > 1) {
+        kids.push(el('div', { class: 'pk-side', style: pos(P.cx, P.y + 4) }, ...view.pots.map((pp, k) => el('span', {}, `${k ? `边池 ${k}` : '主池'} ${money(pp.amount)}`))));
+      }
+      // 分池：主池、各边池依次推给各自的赢家，桌心挂一行「边池 1 → 3 号」
+      if (E) {
+        const contested = E.pots.filter((q) => !q.uncalled).length;
+        E.pots.forEach((pp, i) => {
+          const a = E.sched.push[i];
+          if (!at(a) || at(a + TM.PUSH)) return;
+          const sx = P.cx - 2.4, sy = P.y + 3.1;
+          pp.winners.forEach((w, k) => {
+            const s = g[w];
+            const amt = pp.shares?.[k] ?? 0;
+            if (!s || !amt) return;
+            const st = chips(amt, sx, sy, { maxCols: 3, maxPer: 6 });
+            st.style.setProperty('--tx', `${s.x - sx}em`);
+            st.style.setProperty('--ty', `${s.y - sy}em`);
+            kids.push(play(st, 'pk-collect', TM.PUSH - 60, E.t0, a, 'cubic-bezier(.5,0,.6,1)'));
+          });
+          const name = pp.uncalled ? '退回' : contested > 1 ? (i === 0 ? '主池' : `边池 ${i}`) : '底池';
+          kids.push(play(el('div', { class: `pk-push${pp.uncalled ? ' ret' : ''}`, style: pos(P.cx, L.push) },
+            el('span', {}, name), el('b', {}, money(pp.amount)), el('span', {}, `→ ${pp.winners.map((w) => seatNo(w)).join('、')} 号`)), 'pk-rise', 260, E.t0, a));
+        });
       }
 
       // 一轮结束：上一轮的注收进底池
-      if (!rc && fx.collect && t - fx.collect.t0 < 520) {
-        for (const q of fx.collect.prev.players) {
+      const collect = (prev, t0, dur) => {
+        for (const q of prev.players) {
           if (!q.bet || !g[q.seat]) continue;
           const s = g[q.seat];
           const st = chips(q.bet, s.bx, s.by, { maxCols: 3 });
           st.style.setProperty('--tx', `${P.cx - s.bx}em`);
           st.style.setProperty('--ty', `${P.y + 2.5 - s.by}em`);
-          kids.push(play(st, 'pk-collect', 520, fx.collect.t0, 0, 'cubic-bezier(.5,0,.7,1)'));
+          kids.push(play(st, 'pk-collect', dur, t0, 0, 'cubic-bezier(.5,0,.7,1)'));
         }
-      }
-      if (rc && rc.collectFrom && t - rc.t0 < 450) {
-        for (const q of rc.collectFrom.players) {
-          if (!q.bet || !g[q.seat]) continue;
-          const s = g[q.seat];
-          const st = chips(q.bet, s.bx, s.by, { maxCols: 3 });
-          st.style.setProperty('--tx', `${P.cx - s.bx}em`);
-          st.style.setProperty('--ty', `${P.y + 2.5 - s.by}em`);
-          kids.push(play(st, 'pk-collect', 450, rc.t0, 0, 'cubic-bezier(.5,0,.7,1)'));
-        }
-      }
+      };
+      if (!E && fx.collect && t - fx.collect.t0 < 520) collect(fx.collect.prev, fx.collect.t0, 520);
+      if (E && E.collectFrom && t - E.t0 < 450) collect(E.collectFrom, E.t0, 450);
 
       // 各座位：标记（庄、小盲、大盲）、面前的注、底牌、名牌、胜率
       const players = src.players;
@@ -910,10 +1258,10 @@ export default {
         const outNow = p.out && !p.inHand;
         const mk = outNow || src.over ? null : markOf(p.seat);
         if (mk) kids.push(el('div', { class: `pk-mark ${mk[0]}`, style: pos(s.mx, s.my) }, el('span', {}, mk[1])));
-        if (!rc && p.bet > 0) {
+        if (!E && p.bet > 0) {
           const st = chips(p.bet, s.bx, s.by, { maxCols: 3, maxPer: 6 });
           const right = s.bx >= L.table.cx - 0.5;
-          const amt = el('span', { class: `pk-amt${right ? '' : ' l'}`, style: pos(s.bx + (right ? 1.4 + (breakdown(p.bet, 3).length - 1) * 0.98 : -1.4 - (breakdown(p.bet, 3).length - 1) * 0.98), s.by - 0.9) }, el('span', {}, String(p.bet)));
+          const amt = el('span', { class: `pk-amt${right ? '' : ' l'}`, style: pos(s.bx + (right ? 1.4 + (breakdown(p.bet, 3).length - 1) * 0.98 : -1.4 - (breakdown(p.bet, 3).length - 1) * 0.98), s.by - 0.9) }, el('span', {}, money(p.bet)));
           const t0 = fx.bets[p.seat];
           if (t0 !== undefined) {
             st.style.setProperty('--fx', `${s.x - s.bx}em`);
@@ -935,19 +1283,24 @@ export default {
           const cfs = (layoutName === 'port' ? 0.66 : 0.74) * (mine ? 1.3 : 1);
           const cw = cfs * 5, ch = cfs * 7;
           const cy = s.y - S.h / 2 - ch + (mine ? 0.9 : 1.5);
-          // 摊牌：上一手亮出来的底牌在座位上翻开（玩家视角、观众视角原来看不到别人的牌）
-          const shownNow = rc ? rc.lastHand.shown?.[p.seat] : null;
+          // 摊牌：按亮牌顺序一家一家翻开（原来看不到的牌翻过来，看得到的牌跳一下）；抬牌后输家的牌变淡
+          const shownNow = E ? E.shown[p.seat] || null : null;
           const cards = shownNow || p.cards || [null, null];
-          const flipIn = (rc && shownNow && !p.cards) || (!rc && fx.settle?.reveal?.has(p.seat));
+          const ri = E ? E.order.indexOf(p.seat) : -1;
+          const rAt = ri >= 0 ? E.sched.reveal[ri] : null;
+          const flipIn = rAt !== null && !!shownNow && E.faceDown.has(p.seat);
+          const lose = !!E && lifted && E.losers.has(p.seat);
           const win = winners.has(p.seat);
           cards.forEach((c, k) => {
             const x = s.x - cw / 2 + (k ? 1 : -1) * (mine ? 2.2 : 1.25);
-            const cls = `${p.folded ? 'fold' : ''}${best.size && c && best.has(c) && win ? ' best' : ''}`;
-            const nodes = flipIn ? flipCard(c, x, cy, cfs, cls, rc ? rc.t0 : fx.settle.t0, Math.max(0, TM.RUNOUT_AT - 250) + k * 120) : [cardEl(c, x, cy, cfs, cls)];
+            const cls = `${p.folded ? 'fold' : ''}${best.size && c && best.has(c) && win ? ' best' : ''}${lose ? ' lose' : ''}`;
+            const nodes = flipIn ? flipCard(c, x, cy, cfs, cls, E.t0, rAt + k * TM.CARD_GAP, TM.FLIP) : [cardEl(c, x, cy, cfs, cls)];
             for (const nd of nodes) { nd.style.rotate = `${k ? 7 : -7}deg`; nd.style.transformOrigin = '50% 100%'; }
             if (nodes.length > 1) { kids.push(nodes[0]); }
             const node = nodes.at(-1);
-            if (!rc && fx.deal !== null) {
+            if (rAt !== null && !flipIn) play(node, 'pk-show', 380, E.t0, rAt + k * TM.CARD_GAP, 'ease-out');
+            if (lose) play(node, 'pk-lose', 450, E.t0, E.sched.liftAt, 'ease-out');
+            if (!E && fx.deal !== null) {
               node.style.setProperty('--fx', `${(T.cx - x - cw / 2) / cfs}em`);
               node.style.setProperty('--fy', `${(T.cy - cy - ch / 2) / cfs}em`);
               const order = (seatNo(p.seat) - seatNo(view.button) + players.length) % players.length;
@@ -956,9 +1309,9 @@ export default {
             kids.push(node);
           });
         }
-        kids.push(seatEl(view, p, s, L, { recap: rc, winners, me: movable && movable === viewer ? viewer : null, t0: opts.clock?.[p.seat] || null }));
+        kids.push(seatEl(view, p, s, L, { E, t, winners, me: movable && movable === viewer ? viewer : null, t0: opts.clock?.[p.seat] || null }));
         // 胜率
-        if (!rc && p.equity !== null && p.equity !== undefined && p.inHand && !p.folded) {
+        if (!E && p.equity !== null && p.equity !== undefined && p.inHand && !p.folded) {
           const live = liveOf(view);
           const top = Math.max(...live.map((q) => q.equity ?? 0));
           const pct = Math.round(p.equity * 100);
@@ -967,8 +1320,8 @@ export default {
         }
       }
 
-      // 桌心：刚才那一手（谁、做了什么）。全下胜率对比、结算卡出现时让位
-      const la = !rc && !view.result ? lastAct(view) : null;
+      // 桌心：刚才那一手（谁、做了什么）。全下胜率对比、结算时让位
+      const la = !E && !view.result ? lastAct(view) : null;
       if (la && !(ai && liveOf(view).filter((q) => q.equity !== null && q.equity !== undefined).length >= 2)) {
         const who = view.players.find((q) => q.seat === la.seat);
         const box2 = el('div', { class: `pk-act ${actKind(la.text)}`, style: pos(L.act.cx, L.act.y) },
@@ -976,29 +1329,29 @@ export default {
         play(box2, 'pk-actin', 460, fx.act.t0, 0, 'cubic-bezier(.2,1.3,.4,1)');
         kids.push(box2);
       }
-
-      // 一手结果：结算卡（翻完、抬牌之后弹出；摊牌时列出亮出的底牌和牌型）
-      const resultText = rc ? rc.lastHand.text : view.result ? view.result.text : '';
-      const sumAt = rc ? rc.cardAt : fx.settle ? fx.settle.cardAt : 0;
-      const sumT0 = rc ? rc.t0 : fx.settle?.t0 ?? null;
-      const sumOn = resultText && (sumT0 === null || t - sumT0 >= sumAt - 40);
-      if (resultText) {
-        // 结算卡出现前，横条只在卡片出现前不画；卡片出现后由 timer 重画
-        if (!sumOn) { clearTimeout(sumTimer); sumTimer = setTimeout(redraw, sumAt - (t - sumT0) + 20); }
+      // 摊牌：牌型徽章（赢下主池的牌型）在公共牌下方弹出
+      if (E && E.badge && lifted) {
+        const who = `${E.badge.who.map((w) => seatNo(w)).join('、')} 号${E.badge.who.length > 1 ? ' 平分' : ''}`;
+        kids.push(play(el('div', { class: 'pk-badge', style: pos(L.act.cx, L.badge) }, el('small', {}, who), el('b', {}, E.badge.hand)), 'pk-badge', 280, E.t0, E.sched.liftAt, 'ease-out'));
       }
+
+      // 一手结果：结算卡（分完池之后弹出；摊牌时列出亮出的底牌和牌型）；终局那一手可以切到全场统计
+      const sumOn = !!E && at(E.sched.cardAt - 40);
       if (sumOn) {
-        const summary = summaryOf(view, rc, src, best);
         const veil = el('div', { class: 'pk-veil' });
-        const card = summaryCard(summary, L);
-        if (sumT0 !== null) {
-          play(veil, 'pk-veil', 380, sumT0, sumAt);
-          play(card, 'pk-popin', 520, sumT0, sumAt, 'cubic-bezier(.2,1.2,.4,1)');
-          if (rc) { play(veil, 'pk-popout', 320, rc.t0, rc.dur - 320, 'ease-in'); play(card, 'pk-popout', 320, rc.t0, rc.dur - 320, 'ease-in'); }
-        }
+        const hasStats = E.final && view.over && !!view.stats;
+        const autoStats = E.static || at(E.sched.end);
+        const tab = hasStats ? sumTab || (autoStats ? 'stats' : 'hand') : 'hand';
+        const tabs = hasStats ? tabsEl(tab) : null;
+        const card = tab === 'stats' ? statsCard(view, L, tabs) : summaryCard(summaryOf(E), L, tabs);
+        play(veil, 'pk-veil', 380, E.t0, E.sched.cardAt);
+        play(card, 'pk-popin', 520, E.t0, E.sched.cardAt, 'cubic-bezier(.2,1.2,.4,1)');
+        if (tab === 'stats' && !sumTab) play(card, 'pk-in', 360, E.t0, E.sched.end);
+        if (!E.final) { play(veil, 'pk-popout', 320, E.t0, E.dur - 320, 'ease-in'); play(card, 'pk-popout', 320, E.t0, E.dur - 320, 'ease-in'); }
         kids.push(veil, card);
       }
       // 新一手：开局提示（第几手、盲注、庄位），停留时间和服务端的开局停顿一样
-      if (!rc && fx.intro && fx.intro.hand === view.handNo && t >= fx.intro.t0 - 40 && t - fx.intro.t0 < TM.DEAL) {
+      if (!E && fx.intro && fx.intro.hand === view.handNo && t >= fx.intro.t0 - 40 && t - fx.intro.t0 < TM.DEAL) {
         const btn = view.players.find((q) => q.seat === view.button);
         const alive = view.players.filter((q) => !q.out).length;
         const veil = el('div', { class: 'pk-veil' });
@@ -1012,14 +1365,14 @@ export default {
         kids.push(veil, card);
       }
 
-      // 全下：横幅、胜率对比
+      // 全下：横幅、胜率对比（抬牌、分池时让位给牌型徽章）
       if (ai) {
-        const av = rc ? rc.prev : view;
+        const av = E ? E.src : view;
         const live = liveOf(av).filter((q) => q.equity !== null && q.equity !== undefined);
         if (fx.allin !== null && t - fx.allin < 1900) {
           kids.push(play(el('div', { class: 'pk-allin', style: `top:${B.y + B.cw * 0.7}em` }, el('span', {}, 'ALL IN', el('small', {}, '全下'))), 'pk-banner', 1800, fx.allin, 0, 'ease-out'));
         }
-        if (live.length >= 2 && !sumOn) {
+        if (live.length >= 2 && !sumOn && !lifted) {
           const C = L.cmp;
           const cmp = el('div', { class: 'pk-cmp', style: `${pos(C.cx, C.y)};width:${C.w}em` });
           if (live.length === 2) {
@@ -1040,6 +1393,11 @@ export default {
       layer.replaceChildren(...kids);
       if (layer.querySelector('.tmr')) startTimerTick(root);
       renderControls(view, movable, actions, L);
+      renderPre(view, opts, L, !!E);
+      // 还没轮到你时记下你要跟多少：轮到你时比一比，变了就锁一下跟注键
+      const meNow = viewer ? view.players.find((q) => q.seat === viewer) : null;
+      if (!meNow || !meNow.inHand || view.result) lastOwe = null;
+      else if (view.toAct !== viewer) lastOwe = { hand: view.handNo, v: Math.min(Math.max(0, (view.currentBet || 0) - (meNow.bet || 0)), meNow.stack) };
     }
 
     return {
