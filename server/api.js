@@ -159,8 +159,7 @@ export function routes(router, { db, hub, arena, matchmaker, compare, evaluator,
         ...full.turns.filter((t) => t.label).map((t) => `${String(t.ply).padStart(4)}. ${full.seatNames[t.seat]}：${t.label}`),
         '', `【结果】${full.result ? full.result.reason : '进行中'}`];
       res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8', 'Content-Disposition': `attachment; filename="${full.id}.txt"` });
-      res.end(out.join('
-'));
+      res.end(out.join('\n'));
       return;
     }
     const lines = [

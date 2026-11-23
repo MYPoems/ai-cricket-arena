@@ -1,7 +1,12 @@
 // 对战大厅：正在进行的对局实时更新（缩略棋盘、胜率、谁在思考、最新一手），以及最近结束的对局。
 
 import { h, api, listen, fmtTime, MODE_NAMES, resultText } from './ui.js';
-import { Board } from './board.js';
+import { loadRenderer } from '../stage/index.js';
+
+const renderers = {};
+async function preload(list) {
+  for (const m of list) if (!renderers[m.game]) renderers[m.game] = await loadRenderer(m.game).catch(() => null);
+}
 
 const SEAT_NAME = { r: '红方', b: '黑方' };
 
@@ -17,6 +22,7 @@ const who = (p) => (p?.kind === 'model' ? p.model : p?.kind === 'human' ? '玩�
 
 export async function lobbyView(root, { go }) {
   let data = await api('/lobby');
+  await preload(data.live);
   const cards = new Map(); // id → { el, board, state }
   let stopEvents = null;
 
@@ -46,13 +52,15 @@ export async function lobbyView(root, { go }) {
   }
 
   function card(m) {
-    const board = new Board();
+    const r = renderers[m.game];
+    const board = r ? r.createStage({ onAction: () => {} }) : { el: h('div'), render() {} };
     const winbar = h('div', { class: 'winbar' }, h('div', { class: 'red' }), h('div', { class: 'mid' }), h('span', { class: 't' }), h('span', { class: 'b' }));
     const top = h('div', { class: 'mc-top' });
     const vs = h('div', { class: 'mc-vs' });
     const foot = h('div', { class: 'mc-foot' });
     const el = h('a', { class: 'match-card', href: `#/match/${m.id}` },
       top, vs, h('div', { class: 'mc-board' }, winbar, h('div', { class: 'board-wrap' }, board.el)), foot);
+    if (!m.features?.winbar) winbar.style.display = 'none';
     const c = { el, board, winbar, top, vs, foot, m };
     paint(c, false);
     return c;
@@ -60,18 +68,20 @@ export async function lobbyView(root, { go }) {
 
   function paint(c, animate = true) {
     const m = c.m;
-    c.board.render({ board: m.board, side: m.side, lastMove: m.lastMove, inCheck: m.inCheck, movable: null, arrows: [] }, { animate });
+    c.board.render(m.view, { movable: null, arrows: [], animate });
     const red = m.redE ?? 0.5;
     c.winbar.querySelector('.red').style.height = `${red * 100}%`;
     c.winbar.title = `红方胜率 ${Math.round(red * 100)}%`;
     const state = m.paused ? '已暂停' : m.thinking ? `${SEAT_NAME[m.thinking]}思考中` : '等待中';
     c.top.replaceChildren(
-      h('span', { class: 'chip' }, MODE_NAMES[m.mode] || m.mode),
+      h('span', { class: 'row', style: { gap: '6px' } }, h('span', { class: 'chip' }, m.gameName), h('span', { class: 'chip' }, MODE_NAMES[m.mode] || m.mode)),
       h('span', { class: 'label', style: { color: m.thinking && !m.paused ? 'var(--red)' : '' } }, `${state} · 第 ${m.plies} 步`));
-    const p = (seat) => h('div', { class: `mc-p ${seat}` },
+    const seatsOf = Object.keys(m.players);
+    const p = (seat) => h('div', { class: `mc-p ${seatsOf.indexOf(seat) === 0 ? 'r' : 'b'}` },
       h('b', { class: m.thinking === seat && !m.paused ? 'on' : '' }, m.players[seat]?.name || '？'),
       h('small', {}, who(m.players[seat])));
-    c.vs.replaceChildren(p('r'), h('span', { class: 'mc-x' }, 'vs'), p('b'));
+    if (seatsOf.length === 2) c.vs.replaceChildren(p(seatsOf[0]), h('span', { class: 'mc-x' }, 'vs'), p(seatsOf[1]));
+    else c.vs.replaceChildren(h('div', { class: 'mc-p', style: { gridColumn: '1 / -1' } }, h('b', {}, seatsOf.map((s) => m.players[s]?.name).join(' · ')), h('small', {}, `${seatsOf.length} 人`)));
     c.foot.replaceChildren(
       h('span', {}, m.lastLabel ? h('span', {}, '最新一手 ', h('span', { class: 'mc-last' }, m.lastLabel)) : '尚未落子'),
       h('span', {}, ago(m.started_at)));
@@ -101,7 +111,7 @@ export async function lobbyView(root, { go }) {
     recent.replaceChildren(h('ol', { class: 'toc' }, ...data.recent.map((m, i) => h('li', {},
       h('a', { href: `#/match/${m.id}` },
         h('span', { class: 'no' }, String(i + 1).padStart(2, '0')),
-        h('span', { class: 't' }, h('span', { class: 'r' }, m.players.r?.name), '  对  ', m.players.b?.name),
+        h('span', { class: 't' }, h('span', { class: 'muted', style: { fontSize: '12px', marginRight: '8px' } }, m.gameName), ...Object.values(m.players).flatMap((pl, i) => (i ? ['  对  ', pl?.name] : [h('span', { class: 'r' }, pl?.name)]))),
         h('span', { class: 'd' }, resultText(m)),
         h('span', { class: 'd' }, `${m.plies} 步 · ${fmtTime(m.finished_at || m.created_at)}`),
         h('span', { class: 'go' }, '→'))))));
@@ -120,7 +130,8 @@ export async function lobbyView(root, { go }) {
       if (!c) return;
       if (e.type === 'turn_start') { c.m.thinking = e.seat; paint(c, false); }
       else if (e.type === 'move') {
-        Object.assign(c.m, { board: e.view.board, side: e.view.side, inCheck: e.view.inCheck, lastMove: e.action, lastLabel: e.label, plies: e.ply, thinking: null });
+        if (!e.view) { reload(); return; }
+        Object.assign(c.m, { view: e.view, lastMove: e.action, lastLabel: e.label, plies: e.ply, thinking: null });
         paint(c, true);
       } else if (e.type === 'eval' && e.eval?.redE !== undefined) { c.m.redE = e.eval.redE; paint(c, false); }
       else if (e.type === 'control') { c.m.paused = e.paused; paint(c, false); }
@@ -134,6 +145,7 @@ export async function lobbyView(root, { go }) {
     reloading = setTimeout(async () => {
       reloading = null;
       data = await api('/lobby');
+      await preload(data.live);
       drawFigs();
       drawGrid();
       drawRecent();

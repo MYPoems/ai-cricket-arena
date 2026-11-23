@@ -1,17 +1,19 @@
-// 对局页：一屏三栏。左右两栏是红黑双方的选手卡和思考，中间是棋盘、胜率条、走势和着法。
+// 对局页（所有游戏通用）：一屏显示。中间是游戏画面、胜率条、走势和着法，两侧是各座位的选手卡和思考。
+// 回放：从对局记录在浏览器里重建每一步，可以播放、调速、拖动进度。
+// 录制版式：地址带 ?record=1 时隐藏导航、自动从头播放，播完设置 window.__replayDone = true（供服务端录成视频）。
 
-import { h, api, post, listen, toast, guard, tierBadge, avatar, fmtMs, fmtTokens, pct, MODE_NAMES, resultText } from './ui.js';
-import { Board } from './board.js';
-import { newGame, play } from '/games/xiangqi/rules.js';
+import { h, api, post, listen, toast, guard, tierBadge, fmtMs, fmtTokens, pct, MODE_NAMES, resultText } from './ui.js';
+import { loadRenderer, PALETTE } from '../stage/index.js';
 
-const LINE_KEYS = ['判断', '威胁', '理由'];
-const SEAT_NAME = { r: '红方', b: '黑方' };
+const LINE_KEYS = ['判断', '威胁', '理由', '推断', '计划'];
 const QUALITY_CLASS = { 最佳: 'good', 好棋: 'good', 缓着: 'warn', 失误: 'warn', 大漏着: 'bad' };
+const DRAW_TAG = { pending: ['提和', 'warn'], declined: ['提和被拒', ''], accepted: ['提和', 'good'], ignored: ['提和（冷却中，未送出）', ''] };
+const SPEEDS = [0.5, 1, 2, 4, 8];
 
 function parseAnalysis(text) {
   if (!text) return null;
   const out = {};
-  for (const k of [...LINE_KEYS, '胜率', '着法']) {
+  for (const k of [...LINE_KEYS, '胜率']) {
     const m = new RegExp(`${k}[:：]\\s*(.+)`).exec(text);
     if (m) out[k] = m[1].trim();
   }
@@ -25,67 +27,90 @@ function qualityChip(q) {
 }
 
 export async function matchView(root, id, { characters }) {
+  const query = new URLSearchParams(location.hash.split('?')[1] || '');
+  const recordMode = query.get('record') === '1';
   let d = await api(`/matches/${id}`);
+  const renderer = await loadRenderer(d.game);
+  const gameMod = (await import(`/games/${d.game}/index.js`)).default;
+  const { replay } = await import('/games/index.js');
+
   const chars = new Map(characters.map((c) => [c.id, c]));
   const turns = new Map(d.turns.map((t) => [t.ply, t]));
-  let live = d.partial ? { ...d.partial } : null;
+  const seats = d.seatOrder;
+  const two = seats.length === 2;
+  const partials = new Map((d.partials || []).map((p) => [p.seat, { ...p }]));
   let viewPly = null; // null 表示跟随最新局面
   let paused = d.paused;
   let waitingHuman = d.waitingHuman;
-  let offerNext = false; // 玩家本人：下一步附带提和
-  const offers = () => d.options?.draw?.offers || [];
-  const pendingOffer = () => { const o = offers().at(-1); return o?.status === 'pending' ? o : null; };
-  const DRAW_TAG = { pending: ['提和', 'warn'], declined: ['提和被拒', ''], accepted: ['提和', 'good'], ignored: ['提和（冷却中，未送出）', ''] };
+  let offerNext = false;
+  let replaying = null; // { timer }
+  let speed = Number(query.get('speed')) || 1;
 
   const seatChar = (seat) => chars.get(d.seats[seat]) || d.players[seat];
-  const humanSeat = ['r', 'b'].find((s) => seatChar(s)?.kind === 'human' && seatChar(s === 'r' ? 'b' : 'r')?.kind !== 'human');
-  let flipped = humanSeat === 'b';
+  const seatName = (seat) => d.seatNames?.[seat] || seat;
+  const color = (seat) => renderer.seatColor?.(seat, seats.indexOf(seat)) || PALETTE[seats.indexOf(seat) % PALETTE.length];
+  const humanSeat = seats.find((s) => seatChar(s)?.kind === 'human') || null;
+  let flipped = humanSeat ? !!renderer.flipFor?.(humanSeat) : false;
+  const offers = () => d.options?.draw?.offers || [];
+  const pendingOffer = () => { const o = offers().at(-1); return o?.status === 'pending' ? o : null; };
+  const canReview = () => Array.isArray(d.record?.actions);
 
-  const board = new Board({
-    onMove: guard(async (iccs) => {
-      await post(`/matches/${id}/move`, { action: iccs, offerDraw: offerNext });
+  const stage = renderer.createStage({
+    onAction: guard(async (action) => {
+      await post(`/matches/${id}/move`, { action, offerDraw: offerNext });
       offerNext = false;
       waitingHuman = null;
     }),
   });
-  board.setFlipped(flipped);
+  stage.setFlipped?.(flipped);
 
   // ---------- 布局 ----------
-  const camp = (seat) => {
+  const camps = {};
+  for (const seat of seats) {
     const head = h('div', { class: 'camp-head' });
     const list = h('div', { class: 'camp-thoughts' });
-    return { head, list, el: h('section', { class: `camp ${seat}` }, head, list) };
-  };
-  const camps = { r: camp('r'), b: camp('b') };
+    const el = h('section', { class: `camp${two ? '' : ' compact'}`, style: { '--side-color': color(seat) } }, head, list);
+    camps[seat] = { head, list, el };
+  }
+  const half = Math.ceil(seats.length / 2);
+  const leftSeats = seats.slice(0, half);
+  const rightSeats = seats.slice(half);
   const statusBar = h('div', { class: 'stage-bar' });
-  const winbar = h('div', { class: 'winbar' }, h('div', { class: 'red' }), h('div', { class: 'mid' }), h('span', { class: 't' }), h('span', { class: 'b' }));
+  const winbarOn = !!(d.features?.winbar && two);
+  const winbar = h('div', { class: 'winbar', style: { background: color(seats[1] || seats[0]) } },
+    h('div', { class: 'red', style: { background: color(seats[0]) } }), h('div', { class: 'mid' }), h('span', { class: 't' }), h('span', { class: 'b' }));
   const curve = h('div', { class: 'stage-curve' });
   const moves = h('div', { class: 'stage-moves' });
+  const [aw, ah] = renderer.aspect || [1, 1];
 
-  root.replaceChildren(h('div', { class: 'arena' },
-    camps.r.el,
+  root.replaceChildren(h('div', { class: `arena${winbarOn ? '' : ' no-winbar'}${recordMode ? ' recording' : ''}`, style: { '--aw': aw, '--ah': ah } },
+    h('div', { class: 'camp-col' }, ...leftSeats.map((s) => camps[s].el)),
     h('section', { class: 'stage' },
       statusBar,
-      h('div', { class: 'stage-board' }, winbar, h('div', { class: 'board-wrap' }, board.el)),
-      curve,
+      h('div', { class: 'stage-board' }, winbarOn ? winbar : null, h('div', { class: 'board-wrap' }, stage.el)),
+      winbarOn ? curve : null,
       moves,
     ),
-    camps.b.el,
+    h('div', { class: 'camp-col' }, ...rightSeats.map((s) => camps[s].el)),
   ));
+  if (recordMode) document.body.classList.add('record-mode');
 
   // ---------- 数据 ----------
-  const actions = () => d.view.moves.map((m) => m.iccs);
-
-  function stateAt(ply) {
-    let g = newGame(d.startFen);
-    const acts = actions();
-    for (let i = 0; i < ply; i++) g = play(g, acts[i]);
-    return g;
+  const viewCache = new Map();
+  function viewAt(ply) {
+    if (!canReview()) return d.view;
+    if (!viewCache.has(ply)) {
+      const st = replay(gameMod, { ...d.record, actions: d.record.actions.slice(0, ply) });
+      viewCache.set(ply, gameMod.view(st, d.viewer));
+    }
+    return viewCache.get(ply);
   }
+  const totalPlies = () => (canReview() ? d.record.actions.length : Math.max(0, ...turns.keys()));
 
-  function redEAt(ply) {
-    if (ply === 0) return d.options?.startEval?.redE ?? null;
-    return turns.get(ply)?.eval?.redE ?? null;
+  function e0At(ply) {
+    if (ply === 0) return d.options?.startEval?.e0 ?? d.options?.startEval?.redE ?? null;
+    const ev = turns.get(ply)?.eval;
+    return ev ? ev.e0 ?? ev.redE ?? null : null;
   }
 
   function seatStats(seat) {
@@ -104,117 +129,123 @@ export async function matchView(root, id, { characters }) {
   }
 
   // ---------- 渲染 ----------
+  const stat = (label, value, title = '') => h('div', { class: 'cs', title }, h('b', {}, value), h('small', {}, label));
+  const bar = (v, cls) => h('span', { class: `gbar ${cls}` }, h('i', { style: { width: `${v === null ? 0 : Math.round(v * 100)}%` } }));
+
   function renderCamp(seat) {
     const c = seatChar(seat);
     const s = seatStats(seat);
-    const thinking = d.status === 'running' && (live?.seat === seat || waitingHuman === seat);
+    const thinking = d.status === 'running' && (partials.has(seat) || waitingHuman === seat);
     const change = d.rating_changes?.[d.seats[seat]];
-    const won = d.status === 'finished' && d.result?.winner === seat;
+    const ranks = d.result?.ranks;
+    const won = d.status === 'finished' && ranks && ranks[seat] === Math.min(...Object.values(ranks)) && !Object.values(ranks).every((r) => r === ranks[seat]);
     const lastQ = s.last?.eval?.quality;
-    const challenger = d.challenge?.by === d.seats[seat] && d.challenge.text;
+    const role = d.view?.roles?.[seat];
     camps[seat].el.classList.toggle('active', thinking);
+    camps[seat].el.classList.toggle('out', !!d.view?.out?.includes?.(seat));
     camps[seat].head.replaceChildren(
       h('div', { class: 'camp-id' },
         h('div', { class: 'camp-avatar' }, c?.avatar || '？', thinking ? h('i', { class: 'pulse' }) : null),
         h('div', { class: 'camp-name' },
           h('div', { class: 'row', style: { gap: '6px', flexWrap: 'nowrap' } },
-            h('span', { class: `side-tag ${seat}` }, SEAT_NAME[seat]),
+            h('span', { class: 'side-tag', style: { background: color(seat) } }, seatName(seat)),
             h('b', {}, c?.name || '？'),
+            role ? h('span', { class: 'chip' }, role) : null,
             won ? h('span', { class: 'chip good' }, '胜') : null),
           h('div', { class: 'sub' }, c?.kind === 'model' ? `${c.providerName || c.provider} · ${c.model}` : c?.kind === 'human' ? '玩家' : c?.name),
-          h('div', { class: 'row', style: { gap: '6px', marginTop: '4px' } },
+          two ? h('div', { class: 'row', style: { gap: '6px', marginTop: '4px' } },
             c?.tier ? tierBadge(c.tier) : null,
-            change ? h('span', { class: change.delta >= 0 ? 'delta-up' : 'delta-down' }, `${change.before} → ${change.after}（${change.delta >= 0 ? '+' : ''}${change.delta}）`) : null)),
-      ),
-      h('div', { class: 'camp-stats' },
+            change ? h('span', { class: change.delta >= 0 ? 'delta-up' : 'delta-down' }, `${change.before} → ${change.after}（${change.delta >= 0 ? '+' : ''}${change.delta}）`) : null) : null)),
+      two ? h('div', { class: 'camp-stats' },
         stat('步数', s.n),
         stat('平均用时', s.n ? fmtMs(Math.round(s.avg)) : '—'),
         stat('tokens', fmtTokens(s.tok)),
         stat('失误', s.tags.失误 + s.tags.大漏着, s.tags.大漏着 ? `其中大漏着 ${s.tags.大漏着}` : ''),
-        stat('无效着法', s.illegal)),
-      s.last?.self_winrate !== null && s.last?.self_winrate !== undefined
+        stat('无效', s.illegal)) : h('div', { class: 'camp-mini' }, `${s.n} 步 · ${s.n ? fmtMs(Math.round(s.avg)) : '—'} · ${fmtTokens(s.tok)} tokens${s.illegal ? ` · 无效 ${s.illegal}` : ''}${change ? ` · ${change.delta >= 0 ? '+' : ''}${change.delta}` : ''}`),
+      two && s.last?.self_winrate !== null && s.last?.self_winrate !== undefined
         ? h('div', { class: 'camp-gauge', title: '最近一步：模型自评胜率 / 引擎评估（走棋前）' },
           h('span', {}, '自评'), bar(s.last.self_winrate / 100, 'self'), h('b', {}, `${s.last.self_winrate}%`),
           h('span', {}, '引擎'), bar(lastQ ? lastQ.before : null, 'engine'), h('b', {}, lastQ ? pct(lastQ.before) : '—'))
         : null,
-      challenger ? h('div', { class: 'camp-quote' }, `「${d.challenge.text}」`) : null,
+      d.challenge?.by === d.seats[seat] && d.challenge.text ? h('div', { class: 'camp-quote' }, `「${d.challenge.text}」`) : null,
     );
   }
 
-  const stat = (label, value, title = '') => h('div', { class: 'cs', title }, h('b', {}, value), h('small', {}, label));
-  const bar = (v, cls) => h('span', { class: `gbar ${cls}` }, h('i', { style: { width: `${v === null ? 0 : Math.round(v * 100)}%` } }));
-
   function renderStatus() {
     const running = d.status === 'running';
-    const n = d.view.moves.length;
-    const po = running ? pendingOffer() : null;
+    const n = totalPlies();
+    const thinkingSeats = [...partials.keys()];
     const status = running
-      ? (paused ? '已暂停' : po ? `${SEAT_NAME[po.seat]}提和，等${SEAT_NAME[po.seat === 'r' ? 'b' : 'r']}回应` : waitingHuman ? '轮到你走' : live ? `${SEAT_NAME[live.seat]}思考中` : '…')
+      ? (paused ? '已暂停' : waitingHuman ? '轮到你' : thinkingSeats.length > 1 ? `${thinkingSeats.length} 人同时思考中` : thinkingSeats.length ? `${seatName(thinkingSeats[0])}思考中` : '…')
       : resultText(d, d.seatNames);
-    const btn = (label, title, fn, extra = '') => h('button', { class: `icon-btn ${extra}`, title, onclick: guard(fn) }, label);
+    const btn = (label, title, fn) => h('button', { class: 'icon-btn', title, onclick: guard(fn) }, label);
+    const po = pendingOffer();
+    const reviewing = viewPly !== null;
     statusBar.replaceChildren(
       h('div', { class: 'row', style: { gap: '8px', flexWrap: 'nowrap', minWidth: 0 } },
+        h('span', { class: 'chip' }, d.gameName || ''),
         h('span', { class: 'chip' }, MODE_NAMES[d.mode]),
         h('span', { class: `stage-state${running ? '' : ' done'}` }, status),
-        h('span', { class: 'muted small' }, viewPly === null ? `已走 ${n} 步` : `复盘 ${viewPly}/${n}`)),
+        h('span', { class: 'muted small', style: { whiteSpace: 'nowrap' } }, reviewing ? `${replaying ? '回放' : '复盘'} ${viewPly}/${n}` : `已走 ${n} 步`)),
       h('div', { class: 'row', style: { gap: '4px', flexWrap: 'nowrap' } },
-        viewPly !== null ? [
-          btn('◀', '上一步', () => goto(Math.max(0, viewPly - 1))),
-          btn('▶', '下一步', () => goto(Math.min(n, viewPly + 1))),
-          btn('⟳', '回到最新', () => goto(null)),
+        canReview() && n ? [
+          btn(replaying ? '⏸' : '⏵', replaying ? '暂停回放' : '从头回放', () => (replaying ? stopReplay() : startReplay(reviewing && viewPly < n ? viewPly : 0))),
+          h('select', { class: 'speed', title: '回放速度', onchange: (e) => { speed = Number(e.target.value); } },
+            ...SPEEDS.map((s) => h('option', { value: s, selected: s === speed }, `${s}×`))),
+          reviewing ? btn('◀', '上一步', () => { stopReplay(); goto(Math.max(0, viewPly - 1)); }) : null,
+          reviewing ? btn('▶', '下一步', () => { stopReplay(); goto(Math.min(n, viewPly + 1)); }) : null,
+          reviewing && running ? btn('⟳', '回到最新', () => { stopReplay(); goto(null); }) : null,
         ] : null,
         running && !humanSeat ? btn(paused ? '▶' : '⏸', paused ? '继续' : '暂停', () => post(`/matches/${id}/control`, { op: paused ? 'resume' : 'pause' })) : null,
         running && paused ? btn('⏭', '单步', () => post(`/matches/${id}/control`, { op: 'step' })) : null,
         running && waitingHuman && po && po.seat !== waitingHuman ? h('button', { class: 'btn sm primary', onclick: guard(() => post(`/matches/${id}/control`, { op: 'accept_draw' })) }, '接受和棋') : null,
-        running && waitingHuman && !po ? h('button', { class: `btn sm${offerNext ? ' primary' : ''}`, title: '走下一步时同时向对方提出和棋', onclick: () => { offerNext = !offerNext; renderStatus(); } }, offerNext ? '走棋时提和 ✓' : '提和') : null,
+        running && waitingHuman && d.features?.draw && !po ? h('button', { class: `btn sm${offerNext ? ' primary' : ''}`, title: '走下一步时同时向对方提出和棋', onclick: () => { offerNext = !offerNext; renderStatus(); } }, offerNext ? '走棋时提和 ✓' : '提和') : null,
         running && waitingHuman ? btn('🏳', '认输', async () => { if (confirm('确定认输？')) await post(`/matches/${id}/control`, { op: 'resign' }); }) : null,
-        running && d.mode === 'casual' ? btn('■', '中止对局', async () => { if (confirm('中止这盘棋？')) await post(`/matches/${id}/control`, { op: 'abort' }); }) : null,
-        btn('⇅', '翻转棋盘', () => { flipped = !flipped; board.setFlipped(flipped); renderBoard(false); }),
-        h('a', { class: 'icon-btn', title: '导出棋谱', href: `/api/matches/${id}/export` }, '⤓'),
+        running && d.mode === 'casual' ? btn('■', '中止对局', async () => { if (confirm('中止这盘？')) await post(`/matches/${id}/control`, { op: 'abort' }); }) : null,
+        stage.setFlipped ? btn('⇅', '翻转', () => { flipped = !flipped; stage.setFlipped(flipped); renderStage(false); }) : null,
+        h('a', { class: 'icon-btn', title: '导出记录', href: `/api/matches/${id}/export` }, '⤓'),
       ),
     );
+    if (reviewing && canReview() && n) {
+      statusBar.append(h('input', { class: 'scrub', type: 'range', min: 0, max: n, value: viewPly, oninput: (e) => { stopReplay(); goto(Number(e.target.value)); } }));
+    }
   }
 
-  function renderBoard(animate = true) {
-    const ply = viewPly ?? d.view.moves.length;
+  function renderStage(animate = true) {
     const latest = viewPly === null;
-    const g = latest ? null : stateAt(ply);
-    const boardArr = latest ? d.view.board : g.pos.board;
-    const side = latest ? d.view.side : g.pos.side;
-    const lastMove = ply > 0 ? d.view.moves[ply - 1].iccs : null;
-    const inCheck = latest ? d.view.inCheck : ply > 0 && d.view.moves[ply - 1].check;
+    const ply = latest ? totalPlies() : viewPly;
+    const view = latest ? d.view : viewAt(ply);
     const arrows = [];
-    if (!latest && ply < d.view.moves.length && d.status !== 'running') {
+    if (!latest && d.status !== 'running' && ply < totalPlies()) {
       const best = ply === 0 ? d.options?.startEval?.best : turns.get(ply)?.eval?.raw?.best;
       if (best) arrows.push({ iccs: best, kind: 'best' });
     }
     const movable = latest && d.status === 'running' && waitingHuman && !paused ? waitingHuman : null;
-    board.render({ board: boardArr, side, lastMove, inCheck, movable, arrows }, { animate });
-    // 胜率条：红方期望得分
-    let e = null;
-    for (let p = ply; p >= 0 && e === null; p--) e = redEAt(p);
-    const red = e ?? 0.5;
-    winbar.classList.toggle('flip', flipped);
-    winbar.querySelector('.red').style.height = `${red * 100}%`;
-    winbar.querySelector('.t').textContent = Math.round((1 - red) * 100);
-    winbar.querySelector('.b').textContent = Math.round(red * 100);
-    winbar.title = `红方胜率 ${Math.round(red * 100)}%（${d.options?.startEval?.source === 'pikafish' ? 'Pikafish' : '内置 AI 粗略'}评估）`;
+    stage.render(view, { movable, actions: movable ? d.humanActions : null, arrows, animate, replay: !!replaying, viewer: d.viewer });
+    if (winbarOn) {
+      let e = null;
+      for (let p = ply; p >= 0 && e === null; p--) e = e0At(p);
+      const v = e ?? 0.5;
+      winbar.classList.toggle('flip', flipped);
+      winbar.querySelector('.red').style.height = `${v * 100}%`;
+      winbar.querySelector('.t').textContent = Math.round((1 - v) * 100);
+      winbar.querySelector('.b').textContent = Math.round(v * 100);
+      winbar.title = `${seatName(seats[0])}胜率 ${Math.round(v * 100)}%（${d.options?.startEval?.source === 'builtin' ? '内置粗略' : '引擎'}评估）`;
+    }
   }
 
   function renderCurve() {
-    const n = d.view.moves.length;
+    if (!winbarOn) return;
+    const n = totalPlies();
     const W = 600, H = 60;
     const pts = [];
-    for (let p = 0; p <= n; p++) {
-      const e = redEAt(p);
-      if (e !== null) pts.push([p, e]);
-    }
+    for (let p = 0; p <= n; p++) { const e = e0At(p); if (e !== null) pts.push([p, e]); }
     const self = [];
     for (let p = 1; p <= n; p++) {
       const t = turns.get(p);
       if (t?.self_winrate === null || t?.self_winrate === undefined) continue;
       const s = t.self_winrate / 100;
-      self.push([p, t.seat === 'r' ? s : 1 - s]);
+      self.push([p, t.seat === seats[0] ? s : 1 - s]);
     }
     const X = (p) => (n ? (p / n) * W : 0);
     const Y = (e) => H - e * H;
@@ -231,35 +262,50 @@ export async function matchView(root, id, { characters }) {
       ${self.length > 1 ? `<path class="self" d="${path(self)}"/>` : ''}
       ${n ? `<line class="cursor" x1="${X(cur)}" y1="0" x2="${X(cur)}" y2="${H}"/>` : ''}`;
     svgEl.addEventListener('click', (e) => {
-      if (!n) return;
+      if (!n || !canReview()) return;
       const r = svgEl.getBoundingClientRect();
+      stopReplay();
       goto(Math.round(((e.clientX - r.left) / r.width) * n));
     });
-    curve.replaceChildren(
-      svgEl,
-      h('div', { class: 'curve-legend' }, h('span', { class: 'lg-engine' }, '引擎'), h('span', { class: 'lg-self' }, '自评')),
-    );
+    curve.replaceChildren(svgEl, h('div', { class: 'curve-legend' }, h('span', { class: 'lg-engine' }, `${seatName(seats[0])}胜率`), h('span', { class: 'lg-self' }, '自评')));
+  }
+
+  function moveItems() {
+    const list = renderer.moveList ? renderer.moveList(d.view) : null;
+    if (list && list.length) return list;
+    return [...turns.values()].filter((t) => t.label).sort((a, b) => a.ply - b.ply).map((t) => ({ seat: t.seat, label: t.label }));
   }
 
   function renderMoves() {
-    const mv = d.view.moves;
-    const cur = viewPly ?? mv.length;
-    const items = [];
-    for (let i = 0; i < mv.length; i += 2) {
-      const cell = (j) => {
-        if (j >= mv.length) return null;
-        const q = turns.get(j + 1)?.eval?.quality;
-        return h('span', { class: `mv ${j % 2 ? 'b' : 'r'}${cur === j + 1 ? ' on' : ''}`, onclick: () => goto(j + 1), title: q ? q.tag : '' },
-          q ? h('i', { class: `q q-${q.tag}` }) : null, mv[j].cn);
-      };
-      items.push(h('span', { class: 'mvpair' }, h('em', {}, i / 2 + 1), cell(i), cell(i + 1)));
-    }
-    moves.replaceChildren(...(items.length ? items : [h('span', { class: 'muted small' }, '还没有走棋')]));
+    const items = moveItems();
+    const cur = viewPly ?? items.length;
+    const els = [];
+    const cell = (j) => {
+      const it = items[j];
+      if (!it) return null;
+      const q = turns.get(j + 1)?.eval?.quality;
+      return h('span', { class: `mv${cur === j + 1 ? ' on' : ''}`, style: { color: two && seats.indexOf(it.seat) === 0 ? color(seats[0]) : '' }, onclick: () => { if (canReview()) { stopReplay(); goto(j + 1); } }, title: q ? q.tag : seatName(it.seat) },
+        q ? h('i', { class: `q q-${q.tag}` }) : null, two ? '' : `${seatName(it.seat)} `, it.label);
+    };
+    if (two) for (let i = 0; i < items.length; i += 2) els.push(h('span', { class: 'mvpair' }, h('em', {}, i / 2 + 1), cell(i), cell(i + 1)));
+    else for (let i = 0; i < items.length; i++) els.push(h('span', { class: 'mvpair' }, h('em', {}, i + 1), cell(i)));
+    moves.replaceChildren(...(els.length ? els : [h('span', { class: 'muted small' }, '还没有行动')]));
     if (viewPly === null) moves.scrollTop = moves.scrollHeight;
     else {
       const on = moves.querySelector('.mv.on');
       if (on) moves.scrollTop = on.offsetTop - moves.clientHeight / 2;
     }
+  }
+
+  function drawChip(ply) {
+    const made = offers().find((o) => o.ply === ply);
+    if (made) {
+      const [text, cls] = DRAW_TAG[made.status] || ['提和', ''];
+      return h('span', { class: `chip ${cls}` }, text);
+    }
+    const answered = offers().find((o) => o.answerPly === ply);
+    if (answered?.status === 'declined') return h('span', { class: 'chip' }, '拒绝和棋');
+    return null;
   }
 
   function thoughtCard(t, isLive = false) {
@@ -279,7 +325,7 @@ export async function matchView(root, id, { characters }) {
       body.push(h('div', { class: 'stream' }, t.analysis));
     }
     if (!isLive && t.reasoning) body.push(h('details', {}, h('summary', {}, `原生推理 · ${t.reasoning.length} 字`), h('div', { class: 'reasoning' }, t.reasoning)));
-    for (const at of t.attempts || []) body.push(h('div', { class: 'illegal' }, `✗ ${at.attempted || '无着法'}：${at.error}`));
+    for (const at of t.attempts || []) body.push(h('div', { class: 'illegal' }, `✗ ${at.attempted || '无效'}：${at.error}`));
     const meta = [
       t.self_winrate !== null && t.self_winrate !== undefined ? `自评 ${t.self_winrate}%${q ? ` · 引擎 ${pct(q.before)}` : ''}` : null,
       t.latency_ms ? fmtMs(t.latency_ms) : null,
@@ -296,23 +342,14 @@ export async function matchView(root, id, { characters }) {
       ...body);
   }
 
-  function drawChip(ply) {
-    const made = offers().find((o) => o.ply === ply);
-    if (made) {
-      const [text, cls] = DRAW_TAG[made.status] || ['提和', ''];
-      return h('span', { class: `chip ${cls}` }, text);
-    }
-    const answered = offers().find((o) => o.answerPly === ply);
-    if (answered?.status === 'declined') return h('span', { class: 'chip' }, '拒绝和棋');
-    return null;
-  }
-
   function renderThoughts() {
-    for (const seat of ['r', 'b']) {
+    for (const seat of seats) {
       const cards = [];
-      if (live && live.seat === seat && d.status === 'running') cards.push(thoughtCard(live, true));
-      const plies = [...turns.keys()].filter((p) => turns.get(p).seat === seat).sort((a, b) => b - a);
-      for (const p of plies) cards.push(thoughtCard(turns.get(p)));
+      const p = partials.get(seat);
+      if (p && d.status === 'running' && viewPly === null) cards.push(thoughtCard(p, true));
+      const limit = viewPly ?? Infinity;
+      const plies = [...turns.keys()].filter((k) => turns.get(k).seat === seat && k <= limit).sort((a, b) => b - a);
+      for (const k of plies) cards.push(thoughtCard(turns.get(k)));
       if (!cards.length) cards.push(h('div', { class: 'camp-empty' }, d.status === 'running' ? '等待出手' : '没有记录'));
       const list = camps[seat].list;
       list.replaceChildren(...cards);
@@ -320,44 +357,74 @@ export async function matchView(root, id, { characters }) {
         const el = list.querySelector(`[data-ply="${viewPly}"]`);
         if (el) {
           el.classList.add('focus');
-          list.scrollTo({ top: el.offsetTop - 6, behavior: 'smooth' });
+          if (replaying) { el.classList.add('reveal'); el.style.setProperty('--reveal', `${Math.max(0.4, 1.6 / speed)}s`); }
         }
+        list.scrollTo({ top: 0, behavior: replaying ? 'auto' : 'smooth' });
       } else list.scrollTop = 0;
     }
   }
 
   function goto(ply) {
-    const n = d.view.moves.length;
+    const n = totalPlies();
     if (ply === null || (ply >= n && d.status === 'running')) viewPly = null;
     else viewPly = Math.max(0, Math.min(n, ply));
     renderStatus();
-    renderBoard(false);
+    renderStage(!!replaying);
     renderMoves();
     renderCurve();
     renderThoughts();
   }
 
-  function renderAll() {
-    renderCamp('r');
-    renderCamp('b');
+  // ---------- 回放 ----------
+  function stopReplay() {
+    if (!replaying) return;
+    clearTimeout(replaying.timer);
+    replaying = null;
     renderStatus();
-    renderBoard();
+  }
+  function startReplay(from = 0) {
+    if (!canReview()) return;
+    replaying = { timer: null };
+    goto(from);
+    const step = () => {
+      const n = totalPlies();
+      if (!replaying) return;
+      if (viewPly >= n) {
+        replaying = null;
+        renderStatus();
+        window.__replayDone = true;
+        return;
+      }
+      goto(viewPly + 1);
+      const t = turns.get(viewPly);
+      const base = Math.min(5000, Math.max(900, (t?.latency_ms || 900) * 0.6 + (t?.analysis ? 600 : 0)));
+      replaying.timer = setTimeout(step, base / speed);
+    };
+    replaying.timer = setTimeout(step, 900 / speed);
+    renderStatus();
+  }
+
+  function renderAll() {
+    seats.forEach(renderCamp);
+    renderStatus();
+    renderStage();
     renderCurve();
     renderMoves();
     renderThoughts();
   }
 
   // 只更新正在思考的卡片，避免每个字都重绘整栏
-  let liveTimer = null;
-  function updateLive() {
-    if (liveTimer) return;
-    liveTimer = requestAnimationFrame(() => {
-      liveTimer = null;
-      if (!live) return;
-      const list = camps[live.seat].list;
+  const liveTimers = new Map();
+  function updateLive(seat) {
+    if (liveTimers.has(seat) || viewPly !== null) return;
+    liveTimers.set(seat, requestAnimationFrame(() => {
+      liveTimers.delete(seat);
+      const p = partials.get(seat);
+      if (!p) return;
+      const list = camps[seat].list;
       const old = list.querySelector('.thought.live');
-      const fresh = thoughtCard(live, true);
       if (!old) { renderThoughts(); return; }
+      const fresh = thoughtCard(p, true);
       const det = old.querySelector('details');
       const oldReason = old.querySelector('.reasoning');
       const keepBottom = oldReason ? oldReason.scrollHeight - oldReason.scrollTop - oldReason.clientHeight < 30 : true;
@@ -366,52 +433,70 @@ export async function matchView(root, id, { characters }) {
       if (nd && det) nd.open = det.open;
       const nr = fresh.querySelector('.reasoning');
       if (nr && keepBottom) nr.scrollTop = nr.scrollHeight;
-    });
+    }));
+  }
+
+  async function refresh() {
+    d = await api(`/matches/${id}${d.viewer ? `?viewer=${d.viewer}` : ''}`);
+    viewCache.clear();
+    for (const t of d.turns) turns.set(t.ply, t);
   }
 
   renderAll();
-  if (d.status !== 'running') goto(d.view.moves.length);
+  if (recordMode) setTimeout(() => startReplay(0), 1200);
+  else if (d.status !== 'running' && canReview()) goto(totalPlies());
 
   // ---------- 实时事件 ----------
-  const stop = listen([`match:${id}`], (e) => {
+  const stop = listen([`match:${id}`], async (e) => {
     switch (e.type) {
       case 'turn_start':
-        live = { ply: e.ply, seat: e.seat, characterId: e.characterId, character_id: e.characterId, text: '', reasoning: '', attempts: [] };
-        if (seatChar(e.seat)?.kind === 'human') { waitingHuman = e.seat; live = null; }
-        renderCamp('r');
-        renderCamp('b');
+        if (seatChar(e.seat)?.kind === 'human') { waitingHuman = e.seat; partials.delete(e.seat); await refresh(); }
+        else partials.set(e.seat, { ply: e.ply, seat: e.seat, characterId: e.characterId, character_id: e.characterId, text: '', reasoning: '', attempts: [] });
+        seats.forEach(renderCamp);
         renderStatus();
         renderThoughts();
-        renderBoard(false);
+        renderStage(false);
         break;
-      case 'delta':
-        if (!live || live.ply !== e.ply) return;
-        if (e.attempt !== live.attempt) { live.attempt = e.attempt; live.text = ''; live.reasoning = ''; }
-        if (e.kind === 'text') live.text += e.text;
-        else live.reasoning += e.text;
-        updateLive();
+      case 'human_turn':
+        waitingHuman = e.seat;
+        await refresh();
+        renderAll();
         break;
-      case 'illegal':
-        if (live) { live.attempts.push({ attempted: e.attempted, error: e.error }); updateLive(); }
+      case 'delta': {
+        const p = partials.get(e.seat);
+        if (!p || p.ply !== e.ply) return;
+        if (e.attempt !== p.attempt) { p.attempt = e.attempt; p.text = ''; p.reasoning = ''; }
+        if (e.kind === 'text') p.text += e.text;
+        else p.reasoning += e.text;
+        updateLive(e.seat);
         break;
+      }
+      case 'illegal': {
+        const p = partials.get(e.seat);
+        if (p) { p.attempts.push({ attempted: e.attempted, error: e.error }); updateLive(e.seat); }
+        break;
+      }
       case 'move': {
-        waitingHuman = null;
-        const att = live?.ply === e.ply ? live.attempts : [];
+        if (waitingHuman === e.seat) waitingHuman = null;
+        const p = partials.get(e.seat);
         turns.set(e.ply, {
           ply: e.ply, seat: e.seat, character_id: e.characterId, action: e.action, label: e.label,
-          analysis: e.analysis, reasoning: d.options?.hideThoughts ? null : live?.reasoning || null,
-          self_winrate: e.selfWinrate, latency_ms: e.latency, usage: e.usage, attempts: att, eval: turns.get(e.ply)?.eval || null,
+          analysis: e.analysis, reasoning: d.options?.hideThoughts ? null : p?.reasoning || null,
+          self_winrate: e.selfWinrate, latency_ms: e.latency, usage: e.usage, attempts: p?.attempts || [], eval: turns.get(e.ply)?.eval || null,
         });
-        d.view = e.view;
-        live = null;
-        renderAll();
+        partials.delete(e.seat);
+        if (Array.isArray(d.record?.actions)) d.record.actions.push({ seat: e.seat, action: e.action });
+        if (e.view) d.view = e.view;
+        else await refresh();
+        if (viewPly === null) renderAll();
+        else { seats.forEach(renderCamp); renderStatus(); renderMoves(); }
         break;
       }
       case 'eval': {
         if (e.ply === 0) d.options.startEval = e.eval;
         else if (turns.has(e.ply)) turns.get(e.ply).eval = e.eval;
         else turns.set(e.ply, { ply: e.ply, eval: e.eval });
-        renderBoard(false);
+        renderStage(false);
         renderCurve();
         renderMoves();
         const t = turns.get(e.ply);
@@ -430,20 +515,17 @@ export async function matchView(root, id, { characters }) {
       case 'control':
         paused = e.paused;
         renderStatus();
-        renderBoard(false);
+        renderStage(false);
         break;
       case 'end':
-        api(`/matches/${id}`).then((nd) => {
-          d = nd;
-          for (const t of nd.turns) turns.set(t.ply, t);
-          live = null;
-          waitingHuman = null;
-          renderAll();
-          goto(d.view.moves.length);
-          toast(resultText(d, d.seatNames));
-        });
+        await refresh();
+        partials.clear();
+        waitingHuman = null;
+        renderAll();
+        if (!recordMode && canReview()) goto(totalPlies());
+        if (!recordMode) toast(resultText(d, d.seatNames));
         break;
     }
   });
-  return () => stop();
+  return () => { stop(); stopReplay(); document.body.classList.remove('record-mode'); };
 }

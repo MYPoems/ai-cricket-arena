@@ -28,6 +28,7 @@ function liveCard(db, arena, id) {
   return {
     ...arena.summary(id),
     view,
+    features: game.features || {},
     board: view.board,
     side: view.side,
     inCheck: view.inCheck,

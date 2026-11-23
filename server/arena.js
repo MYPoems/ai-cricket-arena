@@ -353,6 +353,16 @@ export class Arena {
     const usage = { input: 0, output: 0, cached: 0, reasoning: 0 };
     let served = null;
     const partial = rt.partials[seat];
+    // 模拟模型（开发和测试用）：先用内置 AI 选一步，再按游戏自己的格式写成回答
+    let mockText = null;
+    if (ch.provider === 'mock' && game.id !== 'xiangqi') {
+      const act = await game.builtinMove(state, seat, { level: 1 });
+      mockText = game.mockReply ? game.mockReply(state, seat, act) : `判断：局面复杂。
+威胁：无
+理由：试一试。
+胜率：50%
+${game.noun || '行动'}：${act}`;
+    }
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
       partial.text = '';
       partial.reasoning = '';
@@ -362,7 +372,7 @@ export class Arena {
         if (d.kind === 'text') partial.text += d.text;
         else partial.reasoning += d.text;
         if (!hide) this.hub.emit(channel, { type: 'delta', ply: partial.ply, seat, attempt, kind: d.kind, text: d.text });
-      }, rt.abort.signal);
+      }, rt.abort.signal, { mockText });
       for (const k of Object.keys(usage)) usage[k] += res.usage?.[k] || 0;
       served = res.model;
       conv.messages.push(res.message);

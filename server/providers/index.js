@@ -20,8 +20,8 @@ export function confFor(db, ch) {
  * 调用模型（流式）。返回 { text, reasoning, usage, model, message }。
  * messages 为框架内部格式 [{ role, content, reasoning?, raw? }]。
  */
-export async function callModel(db, ch, system, messages, onDelta = () => {}, signal) {
-  if (ch.provider === 'mock') return mockCall(system, messages, onDelta, signal);
+export async function callModel(db, ch, system, messages, onDelta = () => {}, signal, opts = {}) {
+  if (ch.provider === 'mock') return mockCall(system, messages, onDelta, signal, opts);
   const conf = confFor(db, ch);
   if (conf.preset.cli) {
     if (!cliAvailable(conf.preset.api)) throw new Error(`${conf.preset.name} 不可用（只在服务只对本机开放、且装了对应命令行时可用）`);
@@ -48,7 +48,7 @@ const sleep = (ms, signal) =>
     signal?.addEventListener('abort', () => { clearTimeout(t); reject(new Error('已中止')); }, { once: true });
   });
 
-async function mockCall(system, messages, onDelta, signal) {
+async function mockCall(system, messages, onDelta, signal, opts = {}) {
   const last = messages[messages.length - 1]?.content || '';
   let text;
   const cands = [...last.matchAll(/\b([a-i][0-9][a-i][0-9]) \S+/g)].map((m) => m[1]);
@@ -60,6 +60,8 @@ async function mockCall(system, messages, onDelta, signal) {
     text = '对手：1\n游戏：xiangqi\n宣言：来一盘，看看谁算得更深。';
   } else if (/总结/.test(last)) {
     text = '中局贪吃兵卒，被对方抓住空档反击。';
+  } else if (opts.mockText) {
+    text = opts.mockText;
   } else if (cands.length) {
     const pick = cands[Math.floor(Math.random() * cands.length)];
     const w = 30 + Math.floor(Math.random() * 40);
