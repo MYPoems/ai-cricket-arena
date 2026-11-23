@@ -63,7 +63,7 @@ export function createDialog({ meta, reloadMeta, base = null, onDone }) {
             h('div', { class: 'keyline' },
               h('input', { type: 'text', value: f.model, list: 'model-options', oninput: (e) => { f.model = e.target.value; } }), datalist,
               h('button', { class: 'btn sm', title: '从接口获取可用模型', onclick: guard(async () => {
-                const r = await api(`/provider-models?provider=${f.provider}&baseURL=${encodeURIComponent(f.base_url || '')}`);
+                const r = await post('/provider-models', { provider: f.provider, baseURL: f.base_url || '' });
                 datalist.replaceChildren(...r.models.map((m) => h('option', { value: m })));
                 toast(`获取到 ${r.models.length} 个模型`);
               }) }, '列表'))),

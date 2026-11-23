@@ -95,3 +95,20 @@ test('国际象棋：棋子符号和中文棋子名不会被当成兵', () => {
   assert.equal(chess.parseReply(s, 'w', '着法：马f3').action, 'g1f3');
   assert.ok(chess.parseReply(s, 'w', '着法：♘e5').error);
 });
+
+test('复验残留：德州「加注全下」按全下；千问地址只认百炼；值外面的引号去掉', async () => {
+  assert.equal(parseActionText('加注全下').kind, 'allin');
+  assert.equal(parseActionText('加注到全下').kind, 'allin');
+  assert.equal(canSetBaseURL('qwen', 'https://123456.cn-hangzhou.fc.aliyuncs.com/x'), false);
+  assert.equal(canSetBaseURL('qwen', 'https://bucket.oss-cn-hangzhou.aliyuncs.com/x'), false);
+  assert.equal(canSetBaseURL('qwen', 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1'), true);
+  assert.equal(plainReply('出牌：「不出」'), '出牌：不出');
+  const ww = getGame('werewolf');
+  // 猎人白天被放逐后不开枪：别人视角的记录里不出现这一步
+  const s = ww.create({ players: 7, seed: 1 }); // 7 人局有猎人
+  const hunter = Object.keys(s.roles).find((k) => s.roles[k] === 'hunter');
+  const fake = structuredClone(s);
+  fake.log.push({ seat: hunter, label: '不开枪', kind: 'hunter', secret: true, day: 1 });
+  const other = Object.keys(s.roles).find((k) => k !== hunter && s.roles[k] !== 'wolf');
+  assert.ok(!ww.view(fake, other).log.some((e) => e.label === '（未公开）' || e.seat === hunter));
+});

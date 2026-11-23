@@ -370,6 +370,7 @@ export function parseActionText(text) {
     ['raise?', /加注|下注|raise|\bbet\b/i],
   ];
   let best = null;
+  const found = {};
   for (const [kind, re] of cands) {
     // 跳过被否定的词：「不加注，跟注」是跟注
     const g = new RegExp(re.source, re.flags.includes('g') ? re.flags : `${re.flags}g`);
@@ -378,13 +379,13 @@ export function parseActionText(text) {
       if (!/[不别没]\s*$/.test(u.slice(Math.max(0, m.index - 2), m.index))) break;
       if (!m[0].length) g.lastIndex++;
     }
+    if (m) found[kind] = m;
     if (m && (!best || m.index < best.m.index)) best = { kind, m };
   }
   if (!best) return null;
   if (best.kind === 'raise') return { kind: 'raise', to: cnToInt(best.m[1]) };
-  if (best.kind === 'raise?') return { kind: 'raise', to: null };
+  if (best.kind === 'raise?') return found.allin ? { kind: 'allin' } : { kind: 'raise', to: null }; // 「加注全下」「加注到全下」
   return { kind: best.kind };
-  return null;
 }
 
 // ---------- 胜率（上帝视角） ----------

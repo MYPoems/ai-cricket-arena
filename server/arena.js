@@ -47,6 +47,8 @@ const localDate = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart
 export function plainReply(text) {
   return String(text || '')
     .replace(/\*\*|__|`/g, '')
+    // 「键：「值」」去掉值外面的引号（发言里的引号保留，各游戏自己处理）
+    .replace(/^([^\n：:]{1,8}[：:]\s*)[「『“"]([^」』”"\n]{1,12})[」』”"]\s*$/gm, '$1$2')
     .replace(/^[ \t]*(?:[-*>•]|\d{1,2}[.、)])[ \t]+(?=[^\n]*[：:])/gm, '');
 }
 
@@ -58,7 +60,10 @@ async function withRetry(fn, signal, onRetry) {
       return await fn();
     } catch (err) {
       const st = err?.status ?? err?.statusCode;
-      const transient = !signal?.aborted && (st === undefined ? !/API Key|未知平台|不可用|没有填写/.test(err?.message || '') : st === 408 || st === 409 || st === 429 || st >= 500);
+      // 没有状态码时只把网络类错误当偶发（连接断开、超时、流中断）；代码异常、拒答、配置错误直接抛出
+      const network = /ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|socket|network|fetch failed|terminated|timeout|超时|连接/i.test(`${err?.code || ''} ${err?.name || ''} ${err?.message || ''}`);
+      const transient = !signal?.aborted && !err?.refusal
+        && (st === undefined ? network : st === 408 || st === 409 || st === 429 || st >= 500);
       if (!transient || i >= RETRY_WAITS.length) throw err;
       onRetry?.(err, i + 1, RETRY_WAITS[i]);
       await new Promise((resolve) => {
@@ -575,7 +580,8 @@ ${game.noun || '行动'}：${act}`;
     const humanH = this.#humanHandler(rt);
     return {
       ...sum,
-      options: m.options,
+      // 系列赛的种子不给浏览器（第 1 盘的种子就是本盘种子，拿到就能算出别人的牌）
+      options: m.options?.series ? { ...m.options, series: { ...m.options.series, seed: undefined } } : m.options,
       // 有玩家本人的隐藏信息对局进行中：不给记录、种子和开局参数（拿种子就能在浏览器里重放出所有人的牌）
       record: hiddenLive ? { players: record.players, actions: null } : record,
       startFen: m.start_fen,

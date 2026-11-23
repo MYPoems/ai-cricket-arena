@@ -45,7 +45,8 @@ export const PRESETS = {
       return budget ? { enable_thinking: true, thinking_budget: budget } : {};
     }),
     echoReasoning: false,
-    baseURLPattern: /^https:\/\/([a-z0-9-]+\.)+aliyuncs\.com\//i, // 只能改成阿里云自己的地址（工作空间专属地址）
+    // 只能改成百炼自己的地址：dashscope*.aliyuncs.com 或工作空间专属的 *.maas.aliyuncs.com（函数计算、OSS 之类用户可控的子域名不行）
+    baseURLPattern: /^https:\/\/(dashscope[a-z0-9-]*\.aliyuncs\.com|[a-z0-9-]+\.[a-z0-9-]+\.maas\.aliyuncs\.com)\//i,
     note: '百炼新版推荐用工作空间专属地址 https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1，可在选手配置里改。',
   },
   glm: {

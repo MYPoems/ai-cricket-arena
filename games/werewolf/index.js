@@ -850,7 +850,8 @@ const game = {
       votes: god ? { ...s.votes } : viewer && s.votes[viewer] ? { [viewer]: s.votes[viewer] } : {},
       voteLog: s.voteLog.map((v) => ({ ...v, votes: { ...v.votes }, counts: { ...v.counts }, tied: v.tied ? v.tied.slice() : null })),
       shots: s.shots.filter((x) => god || x.target || x.seat === viewer).map((x) => ({ ...x })),
-      log: s.log.map((e, i) => (visible(e, i) ? { seat: e.seat, label: e.label, kind: e.kind, day: e.day } : e.secret ? { seat: '', label: NIGHT.has(e.kind) ? '夜间行动' : '（未公开）', kind: 'hidden', day: e.day }
+      // 白天的隐藏步（猎人不开枪）对别人整条不出现；夜间行动留一条「夜间行动」
+      log: s.log.filter((e, i) => visible(e, i) || !e.secret || NIGHT.has(e.kind)).map((e) => ({ e, i: s.log.indexOf(e) })).map(({ e, i }) => (visible(e, i) ? { seat: e.seat, label: e.label, kind: e.kind, day: e.day } : e.secret ? { seat: '', label: NIGHT.has(e.kind) ? '夜间行动' : '（未公开）', kind: 'hidden', day: e.day }
         : { seat: e.seat, label: '已投票', kind: 'hidden', day: e.day })),
       result: s.result ? { team: s.result.team === 'wolf' ? '狼人' : '好人', reason: s.result.reason } : null,
       maxLen: MAX_LEN,

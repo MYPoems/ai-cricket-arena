@@ -90,6 +90,9 @@ export class Matchmaker {
           // 人多的游戏（狼人杀 8 人）选手不够时，用内置 AI 补座位（系统选手可以占多个座位）
           const filler = usable.filter((o) => o.system && o.kind === 'builtin');
           if (!wide.length || (wide.length < n - 1 && !filler.length)) continue;
+          // 真实选手（含挑战者）至少过半才开，否则积分意义不大
+          const real = 1 + wide.slice(0, n - 1).filter((o) => !o.system).length;
+          if (real * 2 < n) continue;
           const pick = await this.choose(ch, wide.slice(0, 5), g.id);
           // 多人游戏：主对手由模型挑，其余座位按分差就近补齐
           const others = [pick.opponent, ...wide.filter((o) => o.id !== pick.opponent.id)].slice(0, n - 1);

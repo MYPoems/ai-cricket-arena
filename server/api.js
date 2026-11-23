@@ -2,7 +2,7 @@
 
 import { gameList, getGame, replay } from '../games/index.js';
 import { PUZZLES } from '../games/xiangqi/puzzles.js';
-import { presetList, EFFORTS } from './providers/presets.js';
+import { presetList, presetOf, EFFORTS } from './providers/presets.js';
 import { listModels, callModel } from './providers/index.js';
 import { keyStatus, setKey } from './secrets.js';
 import { createCharacter, updateCharacter, getCharacter, publicCharacter, LOCKED, MAX_DAILY_LIMIT } from './characters.js';
@@ -31,14 +31,15 @@ export function routes(router, { db, hub, arena, matchmaker, compare, evaluator,
 
   // ---------- 密钥与设置 ----------
   router.post('/api/keys', ({ body }) => {
-    if (!body.provider) throw new HttpError(400, '缺少平台');
+    if (!presetOf(body.provider)) throw new HttpError(400, '未知平台');
     setKey(db, ownerId, body.provider, body.key || '');
     return { keys: keyStatus(db, ownerId) };
   });
 
-  router.get('/api/provider-models', async ({ query }) => {
+  // POST：会带着已保存的密钥去请求接口地址，必须经过同源检查（GET 链接可以被别的网站诱导点开）
+  router.post('/api/provider-models', async ({ body }) => {
     try {
-      return { models: await listModels(db, ownerId, query.provider, query.baseURL) };
+      return { models: await listModels(db, ownerId, body.provider, body.baseURL) };
     } catch (e) {
       throw new HttpError(400, `获取模型列表失败：${e.message}`);
     }
