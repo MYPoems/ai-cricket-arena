@@ -1,0 +1,9 @@
+node_modules
+data
+data-dev
+data-test
+.env
+.git
+.claude
+engines/*
+!engines/README.md

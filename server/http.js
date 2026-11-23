@@ -2,6 +2,7 @@
 
 import { createReadStream, existsSync, statSync } from 'node:fs';
 import { extname, join, normalize, resolve } from 'node:path';
+import { timingSafeEqual } from 'node:crypto';
 
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
@@ -81,9 +82,30 @@ function serveStatic(req, res, path, mounts) {
   return false;
 }
 
+/**
+ * 访问密码：设置了 ARENA_PASSWORD 时，所有页面和接口都要求 HTTP Basic 认证（用户名随意）。
+ * 这是上线账号系统之前的临时保护，避免挂到公网后别人用你的 API Key。
+ */
+function authorized(req) {
+  const pw = process.env.ARENA_PASSWORD;
+  if (!pw) return true;
+  const m = /^Basic\s+(.+)$/i.exec(req.headers.authorization || '');
+  if (!m) return false;
+  const decoded = Buffer.from(m[1], 'base64').toString('utf8');
+  const given = decoded.slice(decoded.indexOf(':') + 1);
+  const a = Buffer.from(given);
+  const b = Buffer.from(pw);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
 export function handler(router, mounts) {
   return async (req, res) => {
     const url = new URL(req.url, 'http://localhost');
+    if (!authorized(req)) {
+      res.writeHead(401, { 'WWW-Authenticate': 'Basic realm="AI Arena", charset="UTF-8"', 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end('需要访问密码');
+      return;
+    }
     try {
       if (url.pathname.startsWith('/api/')) {
         const m = router.match(req.method, url.pathname);

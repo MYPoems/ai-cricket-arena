@@ -152,3 +152,15 @@ test('内置 AI 能找到一步杀', () => {
   const after = R.play(g, c.move);
   assert.equal(R.result(after).reason, '将死');
 });
+
+test('内置题目：一步杀题确实能一步将死', async () => {
+  const { PUZZLES } = await import('../games/xiangqi/puzzles.js');
+  for (const p of PUZZLES) {
+    const g = p.fen ? R.newGame(p.fen) : p.moves.reduce((s, m) => R.play(s, m), R.newGame());
+    assert.equal(R.result(g).over, false, `${p.title} 不应已结束`);
+    if (/一步将死/.test(p.desc)) {
+      const mates = R.legalMoves(g.pos).filter((m) => R.result(R.play(g, m)).reason === '将死');
+      assert.ok(mates.length >= 1, `${p.title} 没有一步杀`);
+    }
+  }
+});

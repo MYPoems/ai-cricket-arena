@@ -157,7 +157,7 @@ export class Arena {
       this.hub.emit(channel, {
         type: 'move', ply, seat, characterId: ch.id, action: res.action, label,
         analysis: m.options.hideThoughts && ch.kind === 'model' ? null : res.text || null,
-        selfWinrate: res.winrate ?? null, latency, usage: res.usage || null, view: game.view(state),
+        selfWinrate: m.options.hideThoughts && ch.kind === 'model' ? null : res.winrate ?? null, latency, usage: res.usage || null, view: game.view(state),
       });
 
       // 评估走后局面，计算这步棋的质量（异步，不挡住对局）
@@ -373,7 +373,7 @@ export class Arena {
       options: m.options,
       startFen: m.start_fen,
       view: game.view(state),
-      turns: turns.map((t) => (hide && t.character_id && this.#isModel(t.character_id) ? { ...t, analysis: null, reasoning: null, attempts: null } : t)),
+      turns: turns.map((t) => (hide && t.character_id && this.#isModel(t.character_id) ? { ...t, analysis: null, reasoning: null, attempts: null, self_winrate: null } : t)),
       partial: rt?.partial && !hide ? rt.partial : rt?.partial ? { ...rt.partial, text: '', reasoning: '' } : null,
       paused: rt?.paused || false,
       waitingHuman: rt?.human ? rt.human.seat : null,

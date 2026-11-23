@@ -4,3 +4,4 @@ data/
 engines/*
 !engines/README.md
 *.log
+data-dev/

@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "arena-dev",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["--disable-warning=ExperimentalWarning", "server/main.js", "--dev", "--data=data-dev", "--port=3210"],
+      "port": 3210
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+# 服务器部署：docker compose up -d --build
+# 数据保存在 ./data；Linux 版 Pikafish 放在 ./engines。
+services:
+  arena:
+    build: .
+    container_name: ai-arena
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      HOST: 0.0.0.0
+      PORT: 3200
+    ports:
+      - "3200:3200"
+    volumes:
+      - ./data:/app/data
+      - ./engines:/app/engines
