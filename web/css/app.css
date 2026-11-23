@@ -1019,3 +1019,6 @@ svg.board.gomoku .ghost { pointer-events: none; opacity: .45; }
 svg.board.gomoku .ghost.b { fill: #1a1412; }
 svg.board.gomoku .ghost.w { fill: #fbf8f1; }
 svg.board.gomoku.can-move { cursor: pointer; }
+
+/* HTML 画的桌面（斗地主、德州）自带投影，外层不再加滤镜，免得动画每帧重算 */
+.board-wrap:has(> .board-html) { filter: none; }

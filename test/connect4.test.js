@@ -10,7 +10,7 @@ const DRAW = '324325534124675744724771125556373111326666';
 
 test('座位、落子位置与轮次', () => {
   assert.deepEqual(connect4.seats(2), ['r', 'b']);
-  assert.equal(connect4.seatName('r'), '红方');
+  assert.equal(connect4.seatName('r'), '朱方');
   const s0 = connect4.create({ players: 2, seed: 3 });
   assert.deepEqual(connect4.create({ seed: 1 }), s0, '开局与种子无关');
   assert.deepEqual(connect4.pending(s0), ['r']);
@@ -20,7 +20,7 @@ test('座位、落子位置与轮次', () => {
   assert.equal(s.board[3], 'r', '第 4 列最底');
   assert.equal(s.board[7 + 3], 'b', '叠在上面');
   assert.deepEqual(s.moves, [{ col: 4, row: 1, side: 'r' }, { col: 4, row: 2, side: 'b' }]);
-  assert.throws(() => connect4.apply(s, 'b', '3'), /不是黑方/);
+  assert.throws(() => connect4.apply(s, 'b', '3'), /不是金方/);
   assert.throws(() => connect4.apply(s, 'r', '8'), /无法识别/);
   assert.throws(() => connect4.apply(s, 'r', '0'), /无法识别/);
   const full = play('444444');
@@ -32,7 +32,7 @@ test('座位、落子位置与轮次', () => {
 
 test('横、竖、两条斜线连成四子获胜', () => {
   const h = play('1122334');
-  assert.deepEqual(connect4.outcome(h), { over: true, winner: 'r', ranks: { r: 1, b: 2 }, reason: '红方连成四子' });
+  assert.deepEqual(connect4.outcome(h), { over: true, winner: 'r', ranks: { r: 1, b: 2 }, reason: '朱方连成四子' });
   assert.deepEqual(h.winLine, [[0, 0], [1, 0], [2, 0], [3, 0]]);
   assert.deepEqual(connect4.pending(h), []);
   assert.throws(() => connect4.apply(h, 'b', '5'), /已经结束/);
@@ -50,7 +50,7 @@ test('横、竖、两条斜线连成四子获胜', () => {
   assert.equal(connect4.outcome(d2).winner, 'r');
   assert.deepEqual(d2.winLine.map(([c, r]) => `${c},${r}`).sort(), ['3,3', '4,2', '5,1', '6,0']);
 
-  // 黑方赢
+  // 金方赢
   const b = play('5121212');
   assert.equal(connect4.outcome(b).over, false);
   const bw = connect4.apply(b, 'b', '1');
@@ -64,7 +64,7 @@ test('下满平局', () => {
   assert.deepEqual(connect4.pending(s), []);
   assert.equal(connect4.evalSpec(s), null);
   assert.equal(connect4.outcome(play(DRAW.slice(0, 41))).over, false);
-  assert.deepEqual(connect4.forfeit(s, 'r', '红方认输'), { over: true, winner: 'b', ranks: { b: 1, r: 2 }, reason: '红方认输' });
+  assert.deepEqual(connect4.forfeit(s, 'r', '朱方认输'), { over: true, winner: 'b', ranks: { b: 1, r: 2 }, reason: '朱方认输' });
 });
 
 test('提示词：列号在上方的文字棋盘', () => {
@@ -76,7 +76,7 @@ test('提示词：列号在上方的文字棋盘', () => {
   assert.match(p, /还能下的列：1 2 3 4 5 6 7/);
   assert.doesNotMatch(connect4.turnPrompt(s, 'r'), /还能下的列/);
   const sys = connect4.systemPrompt('b', { style: '激进' });
-  assert.match(sys, /执黑方（O，后手）/);
+  assert.match(sys, /执金方（O，后手）/);
   assert.match(sys, /落子：列号，例如 4/);
   assert.match(sys, /激进/);
 });
@@ -99,9 +99,9 @@ test('解析模型回答', () => {
 });
 
 test('内置 AI：抓住一步胜，挡住对方的一步胜', () => {
-  const win = play('112233'); // 红方底行 1 2 3，第 4 列连四
+  const win = play('112233'); // 朱方底行 1 2 3，第 4 列连四
   for (const level of [1, 2, 3, 4]) assert.equal(connect4.builtinMove(win, 'r', { level }), '4', `level ${level}`);
-  const block = play('171727'); // 黑方第 7 列已有三子，红方必须挡
+  const block = play('171727'); // 金方第 7 列已有三子，朱方必须挡
   for (const level of [1, 2, 3, 4]) assert.equal(connect4.builtinMove(block, 'r', { level }), '7', `level ${level}`);
   // 有赢就先赢，不去挡
   const both = play('1727273');
@@ -124,7 +124,7 @@ test('局面评估：确定的胜 / 和 / 负，以及限时的启发式', async
   const win = await connect4.evalSpec(play('112233')).evaluate();
   assert.deepEqual([win.e, win.best, win.source], [1, '4', 'solver']);
 
-  // 红方底行 2 3 4 两头都空，黑方挡不住：黑方视角必败
+  // 朱方底行 2 3 4 两头都空，金方挡不住：金方视角必败
   const lost = connect4.evalSpec(play('22334'));
   assert.equal(lost.persp, 'b');
   const rl = await lost.evaluate();

@@ -113,6 +113,9 @@ export async function matchView(root, id, { characters }) {
   }
   if (recordMode) document.body.classList.add('record-mode');
 
+  // 座位上的选手名和头像，画面模块可以用来画名牌
+  const playerInfo = Object.fromEntries(seats.map((s) => [s, { name: seatChar(s)?.name || seatName(s), avatar: seatChar(s)?.avatar || '？', seatName: seatName(s) }]));
+
   // ---------- 高光大印 ----------
   // 将军、绝杀、炸弹、全下等时刻盖一枚朱印，1.6 秒后自己消失；短时间内只盖一次，不挡操作
   let lastStamp = 0;
@@ -126,6 +129,8 @@ export async function matchView(root, id, { characters }) {
   }
   function stampFor(label = '', view = null) {
     const t = String(label || '');
+    // 斗地主、德州的画面自己演炸弹金光和 ALL IN 横幅，不再叠盖大印
+    if (d.game === 'doudizhu' || d.game === 'poker') return /春天/.test(t) ? '春天' : null;
     if (/王炸/.test(t)) return '王炸';
     if (/炸弹/.test(t)) return '炸';
     if (/全下/i.test(t)) return '全下';
@@ -343,7 +348,7 @@ export async function matchView(root, id, { characters }) {
       if (best) arrows.push({ iccs: best, kind: 'best' });
     }
     const movable = latest && d.status === 'running' && waitingHuman && !paused ? waitingHuman : null;
-    stage.render(view, { movable, actions: movable ? d.humanActions : null, arrows, animate, replay: !!replaying, viewer: d.viewer });
+    stage.render(view, { movable, actions: movable ? d.humanActions : null, arrows, animate, replay: !!replaying, viewer: d.viewer, players: playerInfo });
     if (duo) {
       try { duoInfo = renderer.duoView(view, { movable, actions: movable ? d.humanActions : null, viewer: d.viewer }) || duoInfo; } catch (err) { console.error(err); }
       renderScene();
