@@ -322,7 +322,7 @@ export class Arena {
       const jobs = pend.map((seat, i) => {
         const ch = getCharacter(this.db, m.seats[seat]);
         const ply = base + i + 1;
-        rt.partials[seat] = { ply, seat, characterId: ch.id, text: '', reasoning: '', attempts: [], secret: isSecret(game, state, seat, null, humans) };
+        rt.partials[seat] = { ply, seat, characterId: ch.id, text: '', reasoning: '', attempts: [], secret: isSecret(game, state, seat, null, humans), at: Date.now() };
         if (!rt.partials[seat].secret) this.hub.emit(channel, { type: 'turn_start', ply, seat, characterId: ch.id, kind: ch.kind, simultaneous: pend.length > 1 });
         const offer = game.features?.draw ? pendingOfferTo(m, seat) : null;
         const t0 = Date.now();
@@ -387,8 +387,9 @@ export class Arena {
       }
       // 游戏要求的停顿（德州每手结束演结算、新一手弹开局提示），画面按同一份时长演完再继续
       const pause = game.interlude ? game.interlude(before, state) || 0 : 0;
-      if (pause) await sleep(pause, rt);
-      else if (m.options.delayMs) await sleep(m.options.delayMs, rt);
+      // 否则每一步之后至少停 turnPause（牌桌游戏：看清刚才那一手，再轮到下一位），开局设的间隔更长时按开局的
+      const gap = pause || Math.max(m.options.delayMs || 0, game.turnPause || 0);
+      if (gap) await sleep(gap, rt);
     }
   }
 
@@ -448,6 +449,7 @@ export class Arena {
     const secret = !!rt.partials[seat]?.secret;
     return new Promise((resolve, reject) => {
       rt.humans[seat] = {
+        at: Date.now(),
         seat, offer: !!offer,
         resolve: (action, offerDraw = false) => {
           const acts = game.actions(state, seat);
@@ -751,7 +753,7 @@ ${game.noun || '行动'}：${act}`;
     const hide = m.options.hideThoughts && running;
     const sum = this.summary(matchId);
     const secrets = hiddenLive ? secretPlies(game, record, v, humans) : new Set();
-    const partials = Object.values(rt?.partials || {}).filter((p) => !(hiddenLive && p.secret) && !rt?.humans?.[p.seat]).map((p) => (hide ? { ...p, text: '', reasoning: '' } : p));
+    const partials = Object.values(rt?.partials || {}).filter((p) => !(hiddenLive && p.secret) && !rt?.humans?.[p.seat]).map((p) => ({ ...(hide ? { ...p, text: '', reasoning: '' } : p), elapsed: p.at ? Date.now() - p.at : 0 }));
     // 只告诉这位玩家自己座位在等他行动
     const humanH = this.#humanHandler(rt, mySeat);
     return {
@@ -769,6 +771,8 @@ ${game.noun || '行动'}：${act}`;
       partial: partials[0] || null,
       paused: rt?.paused || false,
       waitingHuman: humanH ? humanH.seat : null,
+      // 已经想了多久（毫秒）：浏览器用它接上思考计时，不依赖两边的时钟一致
+      waitingElapsed: humanH ? Date.now() - humanH.at : null,
       humanActions: humanH ? game.actions(state, humanH.seat) : null,
       drawOfferToHuman: humanH?.offer || false,
       seatOrder: Object.keys(m.seats),

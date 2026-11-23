@@ -306,6 +306,28 @@ function rolesPanel(view) {
 }
 
 export default {
+  /**
+   * 场上公告（对局页在画面中央弹一张卡，停 2.6 秒）：天亮公布昨夜死讯 / 平安夜；白天有人被放逐、被猎人带走。
+   * prev 是上一个画面，返回 null 表示这一步没有要公告的。
+   */
+  /** 回放时公告卡也要演完：多停 2.6 秒 */
+  pauseAfter(prev, view) { return this.announce(prev, view) ? 2600 : 0; },
+
+  announce(prev, view) {
+    if (!prev || !view) return null;
+    const no = (s) => `${String(s).replace(/^\D+/, '')} 号`;
+    if (view.dawn && view.dawn.day !== prev.dawn?.day) {
+      const dead = view.dawn.dead || [];
+      return { kind: 'dawn', title: `第 ${view.dawn.day} 天 · 天亮了`, sub: dead.length ? `昨夜 ${dead.map(no).join('、')} 出局` : '昨夜平安夜，没有人出局' };
+    }
+    const before = new Set((prev.deaths || []).map((d) => d.seat));
+    const fresh = (view.deaths || []).filter((d) => !before.has(d.seat) && d.time === 'day');
+    if (fresh.length) {
+      const why = { vote: '被投票放逐', shot: '被猎人带走' };
+      return { kind: 'out', title: fresh.map((d) => no(d.seat)).join('、') + ' 出局', sub: fresh.map((d) => why[d.cause] || '出局').join('；') };
+    }
+    return null;
+  },
   aspect: [16, 10],
   seatColor: (seat, index) => COLORS[(index ?? no(seat) - 1) % COLORS.length],
 

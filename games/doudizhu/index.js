@@ -251,6 +251,9 @@ const game = {
     return state.phase === 'over' ? [] : [state.turn];
   },
 
+  /** 每家出牌后至少停多久（毫秒），让大家看清这一手再轮到下一家 */
+  turnPause: 1400,
+
   actions(state, seat) {
     if (state.phase === 'over' || seat !== state.turn) return [];
     if (state.phase === 'bid') {

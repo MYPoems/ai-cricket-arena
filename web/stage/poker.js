@@ -34,7 +34,7 @@ const LAYOUTS = {
     ring: { rx: 35.5, ry: 20.4 }, bets: { rx: 21.5, ry: 9.2, off: -16 }, marks: { rx: 24.5, ry: 11.6, off: 15 },
     seat: { w: 15.4, h: 4.9 }, clampX: [8.4, 71.6], clampY: [8.8, 44.4],
     board: { cx: 40, y: 16.2, cw: 5.3, gap: 0.65 },
-    pot: { cx: 40, y: 24.1 }, info: [1.4, 1.2], cmp: { cx: 40, y: 27.8, w: 26 },
+    pot: { cx: 40, y: 24.1 }, info: [1.4, 1.2], cmp: { cx: 40, y: 27.8, w: 26 }, act: { cx: 40, y: 31.4 },
     ctl: { x: 50.6, y: 39.9, w: 29, h: 9.6 },
   },
   port: {
@@ -43,7 +43,7 @@ const LAYOUTS = {
     ring: { rx: 21, ry: 25.2 }, bets: { rx: 12.5, ry: 16.8, off: -14 }, marks: { rx: 13.6, ry: 18.6, off: 18 },
     seat: { w: 13.8, h: 4.6 }, clampX: [7.4, 42.6], clampY: [8.8, 54.8],
     board: { cx: 25, y: 22, cw: 4.3, gap: 0.45 },
-    pot: { cx: 25, y: 28.6 }, info: [1, 1], cmp: { cx: 25, y: 32.4, w: 28 },
+    pot: { cx: 25, y: 28.6 }, info: [1, 1], cmp: { cx: 25, y: 32.4, w: 28 }, act: { cx: 25, y: 36.4 },
     ctl: { x: 1, y: 60.4, w: 48, h: 9.2 },
   },
 };
@@ -224,9 +224,47 @@ const CSS = `
 .pk-ctl input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; }
 .pk-ctl .r2 { display: grid; grid-template-columns: 1fr 1.25fr 1.45fr 1fr; gap: .55em; padding-bottom: .3em; }
 .pk-ctl .btn { font-size: 1.15em; padding: .3em .4em; min-width: 0; --d: .2em; overflow: hidden; text-overflow: ellipsis; }
+/* 按键提示：按钮右上角一个小角标（触屏上不显示） */
+.pk-ctl .btn[data-key]::after { content: attr(data-key); position: absolute; right: .3em; top: .2em; font: 700 .6em/1 var(--num); opacity: .55; }
+@media (hover: none) { .pk-ctl .btn[data-key]::after { display: none; } }
 .pk.port .pk-ctl .btn { font-size: 1.45em; }
 .pk.port .pk-ctl .pre button { font-size: 1.25em; }
 .pk.port .pk-ctl input[type=number] { font-size: 1.5em; }
+
+/* 轮到谁：桌心打一道光到他的座位，名牌外圈呼吸发亮，头上挂「思考中」「轮到你」 */
+.pk-beam { height: 9em; translate: 0 -50%; transform-origin: 0 50%; pointer-events: none; mix-blend-mode: screen;
+  background: linear-gradient(90deg, rgb(255 226 150 / 0) 6%, rgb(255 226 150 / .18) 45%, rgb(255 226 150 / .46) 100%);
+  clip-path: polygon(0 47%, 100% 0, 100% 100%, 0 53%); filter: blur(.25em); }
+.pk-seat.on { animation: pk-turn 1.6s ease-in-out infinite; z-index: 2; }
+@keyframes pk-turn { 50% { box-shadow: var(--hi), 0 0 0 .1em #040100, 0 0 0 .36em rgb(42 11 8 / .9), 0 0 0 .5em #f6dc94, 0 0 3.4em .8em rgb(255 214 120 / .55), 0 .55em .8em rgb(0 0 0 / .55); } }
+.pk-seat .who span.turn { color: #f6dc94; } .pk-seat .who span.turn::after { content: '…'; display: inline-block; animation: pk-dot 1.2s ease-in-out infinite; }
+.pk-seat .who span.me { color: #ff8a6a; font-weight: 800; }
+.pk-seat .tag { position: absolute; left: 50%; bottom: calc(100% + .45em); translate: -50% 0; display: flex; align-items: center; gap: .4em; white-space: nowrap; padding: .32em .8em .36em; border-radius: 1em;
+  font: 700 1.05em/1 var(--sans); letter-spacing: .1em; color: var(--on-gold); background: var(--gold-metal); box-shadow: var(--gold-key-sh), 0 .3em .6em rgb(0 0 0 / .45); z-index: 3; }
+.pk-seat .tag::after { content: ''; position: absolute; left: 50%; top: 100%; translate: -50% 0; border: .4em solid transparent; border-top-color: #c8983c; }
+.pk-seat .tag.me { color: #fff4e0; background: linear-gradient(180deg, #e2523d, #8e1b12); box-shadow: inset 0 .06em 0 rgb(255 220 200 / .5), 0 0 1.2em rgb(255 120 80 / .55); }
+.pk-seat .tag.me::after { border-top-color: #8e1b12; }
+.pk-seat .tag i { width: .36em; height: .36em; border-radius: 50%; background: currentColor; animation: pk-dot 1.2s ease-in-out infinite; }
+.pk-seat .tag i:nth-child(2) { animation-delay: .2s; } .pk-seat .tag i:nth-child(3) { animation-delay: .4s; }
+.pk.port .pk-seat .tag { bottom: auto; top: calc(100% + .45em); }
+.pk.port .pk-seat .tag::after { top: auto; bottom: 100%; border-top-color: transparent; border-bottom-color: #c8983c; }
+.pk-seat .tmr { position: absolute; right: -.5em; top: -.85em; font: 700 1em/1 var(--num); padding: .25em .5em .28em; border-radius: .8em; color: #2a1206; z-index: 3;
+  background: linear-gradient(180deg, #fff3c8, #f0cd78); box-shadow: 0 .1em 0 #8e6824, 0 .2em .4em rgb(0 0 0 / .4); font-variant-numeric: tabular-nums; }
+.pk-seat .tmr.warm { background: linear-gradient(180deg, #ffd9a0, #f09a3c); }
+.pk-seat .tmr.hot { color: #fff4e0; background: linear-gradient(180deg, #ff8a6a, #c42d1e); animation: tmr-pulse 1s ease-in-out infinite; }
+@keyframes tmr-pulse { 50% { transform: scale(1.12); } }
+/* 桌心：刚才那一手（谁、做了什么），每出一手弹一次 */
+.pk-act { translate: -50% -50%; display: flex; align-items: center; gap: .7em; padding: .45em 1.3em .45em .5em; border-radius: 2em; white-space: nowrap; pointer-events: none;
+  background: rgb(8 4 2 / .7); box-shadow: inset 0 .08em .25em rgb(0 0 0 / .7), 0 .06em 0 rgb(255 224 176 / .14), 0 0 0 .08em rgb(240 205 120 / .4), 0 .5em 1.2em rgb(0 0 0 / .45); }
+.pk-act .no { width: 2.1em; height: 2.1em; border-radius: 50%; display: grid; place-items: center; font: 700 1.1em/1 var(--num); color: #2a1206;
+  background: radial-gradient(circle at 36% 28%, #fff6d6, #f0cd78 50%, #a67a2a); box-shadow: inset 0 0 0 .1em rgb(255 246 214 / .6), 0 .1em 0 #6a4a14; }
+.pk-act .nm { font: 700 1.25em/1 var(--serif); color: #f2e3c2; max-width: 8em; overflow: hidden; text-overflow: ellipsis; }
+.pk-act .tx { font: 400 2.3em/1 var(--brush); background: var(--gold-text); -webkit-background-clip: text; background-clip: text; color: transparent; padding: .05em .05em 0; }
+.pk-act.fold .tx { background: none; color: rgb(220 210 190 / .7); }
+.pk-act.raise .tx, .pk-act.allin .tx { background: linear-gradient(180deg, #ffd2b8, #ff7a5a 50%, #e2523d); -webkit-background-clip: text; background-clip: text; }
+.pk-act.allin { box-shadow: inset 0 .08em .25em rgb(0 0 0 / .7), 0 0 0 .1em #e2523d, 0 0 1.6em rgb(255 110 70 / .5); }
+@keyframes pk-actin { 0% { transform: scale(.6) translateY(.6em); opacity: 0; } 55% { transform: scale(1.08); opacity: 1; } 100% { transform: none; } }
+@keyframes pk-beamin { from { opacity: 0; transform: rotate(var(--ang)) scaleX(.2); } }
 
 /* 开局提示、结算卡：桌面压暗，中间浮起一块纸牌匾 */
 .pk-veil { inset: 0; pointer-events: none; border-radius: 1.2em; background: radial-gradient(62% 60% at 50% 47%, rgb(4 2 1 / .38), rgb(4 2 1 / .7)); }
@@ -358,6 +396,28 @@ function chips(amount, x, y, { maxCols = 4, maxPer = 7, cls = '' } = {}) {
   return box;
 }
 
+
+/** 思考计时：行动者名牌上的「12s」，每秒自己更新（不重画整张桌）；越久越热：30 秒后橙、90 秒后红 */
+function thinkTimer(t0) {
+  const n = el('span', { class: 'tmr', 'data-t0': String(t0) });
+  paintTimer(n);
+  return n;
+}
+function paintTimer(n) {
+  const s = Math.max(0, Math.floor((Date.now() - Number(n.dataset.t0)) / 1000));
+  n.textContent = s >= 60 ? `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}` : `${s}s`;
+  n.classList.toggle('warm', s >= 30 && s < 90);
+  n.classList.toggle('hot', s >= 90);
+}
+let timerTick = null;
+function startTimerTick(root) {
+  clearInterval(timerTick);
+  timerTick = setInterval(() => {
+    const ns = root.isConnected ? root.querySelectorAll('.tmr') : [];
+    if (!ns.length) { clearInterval(timerTick); timerTick = null; return; }
+    ns.forEach(paintTimer);
+  }, 1000);
+}
 const seatNo = (seat) => Number(String(seat).slice(1));
 const short = (t, n) => { const a = [...String(t || '')]; return a.length > n ? `${a.slice(0, n - 1).join('')}…` : a.join(''); };
 
@@ -370,6 +430,7 @@ const pickView = (v) => v && ({
 export default {
   // 对局页用「牌桌 + 右侧聚光框 + 本手记录」版式：牌桌上已经有每个人的名牌、筹码和动作，两侧不再放选手卡
   hud: true,
+  turnTip: '轮到你了：在牌桌右下角的操作台出手。',
 
   /** 回放、录制时两步之间额外停多久：和服务端的每手停顿是同一份时长 */
   pauseAfter: (a, b) => pauseBetween(pickView(a), pickView(b)),
@@ -461,6 +522,22 @@ export default {
       onAction(v >= L.maxTo ? 'allin' : `raise:${v}`);
     });
 
+    // 快捷键：F 弃牌、C 或空格 过牌/跟注、R 加注、A 全下、1–5 选加注预设（在输入框里打字时不抢键）
+    const KEYS = { f: foldBtn, c: callBtn, ' ': callBtn, r: raiseBtn, a: allinBtn };
+    const kbd = (b, k) => { b.dataset.key = k; };
+    kbd(foldBtn, 'F'); kbd(callBtn, 'C'); kbd(raiseBtn, 'R'); kbd(allinBtn, 'A');
+    const onKey = (e) => {
+      if (!root.isConnected) { document.removeEventListener('keydown', onKey); return; }
+      if (ctl.hidden || e.ctrlKey || e.metaKey || e.altKey) return;
+      const tag = e.target?.tagName;
+      if ((tag === 'INPUT' && e.target.type !== 'range') || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      const k = e.key.toLowerCase();
+      if (/^[1-5]$/.test(k)) { const b = presets.children[Number(k) - 1]; if (b) { e.preventDefault(); b.click(); } return; }
+      const b = KEYS[k];
+      if (b && !b.disabled) { e.preventDefault(); b.classList.add('is-active'); setTimeout(() => b.classList.remove('is-active'), 120); b.click(); }
+    };
+    document.addEventListener('keydown', onKey);
+
     let ctlKey = '';
     function renderControls(view, movable, actions, L) {
       const show = !!movable && view.toAct === movable && Array.isArray(actions) && actions.length > 0;
@@ -483,7 +560,7 @@ export default {
       const raises = actions.filter((a) => a.id.startsWith('raise:'));
       const canRaise = !!(lg && lg.canRaise && lg.minTo < lg.maxTo);
       r1.classList.toggle('off', !canRaise);
-      presets.replaceChildren(...raises.map((a) => el('button', { type: 'button', 'data-v': a.id.slice(6), title: a.label, onclick: () => setAmount(Number(a.id.slice(6))) }, a.hint || a.id.slice(6))));
+      presets.replaceChildren(...raises.map((a, k) => el('button', { type: 'button', 'data-v': a.id.slice(6), title: `${a.label}（快捷键 ${k + 1}）`, onclick: () => setAmount(Number(a.id.slice(6))) }, a.hint || a.id.slice(6))));
       presets.hidden = !raises.length;
       if (lg) {
         range.min = num.min = lg.minTo;
@@ -498,7 +575,7 @@ export default {
     let layoutName = 'land';
     let last = null;
     let timer = null;
-    const fx = { prev: null, deal: null, board: { n: 0, t0: null, from: 0 }, bets: {}, collect: null, recap: null, allin: null, settle: null, intro: null };
+    const fx = { prev: null, deal: null, board: { n: 0, t0: null, from: 0 }, bets: {}, collect: null, recap: null, allin: null, settle: null, intro: null, act: { key: '', t0: null }, beam: { key: '', t0: null } };
     const redraw = () => last && draw(last.view, last.opts);
     let sumTimer = null;
 
@@ -577,6 +654,9 @@ export default {
     }
 
     const liveOf = (v) => v.players.filter((p) => p.inHand && !p.folded);
+    /** 这一手里最近的一次行动（盲注不算） */
+    const lastAct = (v) => [...(v.log || [])].reverse().find((e) => !e.blind) || null;
+    const actKind = (text) => (/全下/.test(text) ? 'allin' : /弃牌/.test(text) ? 'fold' : /加注|下注/.test(text) ? 'raise' : /跟注/.test(text) ? 'call' : 'check');
     const allinMoment = (v) => !!v && !v.result && liveOf(v).length >= 2 && liveOf(v).some((p) => p.allin);
     const sumBets = (v) => v.players.reduce((a, p) => a + (p.bet || 0), 0);
 
@@ -655,12 +735,18 @@ export default {
           fx.settle = { t0: t, flips, streets, reveal, cardAt: cardAt({ showdown, streets }) };
         }
       }
+      // 桌心的「刚才那一手」、照向行动者的光：换了才演进场
+      const la = lastAct(view);
+      const ak = la ? `${view.handNo}|${view.log.length}` : '';
+      if (ak !== fx.act.key) fx.act = { key: ak, t0: live ? t : null };
+      const bk = view.toAct ? `${view.handNo}|${view.toAct}|${view.log.length}` : '';
+      if (bk !== fx.beam.key) fx.beam = { key: bk, t0: live || !fx.prev ? t : null };
       const ai = allinMoment(view);
       if (ai && !fx.allin) fx.allin = t;
       if (!ai && !(fx.recap && fx.recap.allin)) fx.allin = null;
     }
 
-    function seatEl(view, p, g, L, { recap = null, best = new Set(), winners = new Set(), showEq = true }) {
+    function seatEl(view, p, g, L, { recap = null, best = new Set(), winners = new Set(), showEq = true, me = null, t0 = null }) {
       const S = L.seat;
       const acting = !recap && view.toAct === p.seat;
       const win = winners.has(p.seat);
@@ -674,6 +760,8 @@ export default {
       else if (p.handName) { status = p.handName; }
       else if (p.folded && p.inHand) status = '弃牌';
       else if (p.allin) { status = '全下'; sc = 'hot'; }
+      // 轮到他：第二行换成「思考中…」（金）或「轮到你」（朱），名牌外圈呼吸发亮
+      if (acting) { status = me === p.seat ? '轮到你' : '思考中'; sc = me === p.seat ? 'me' : 'turn'; }
       // 结算期间：赢家已经拿到底池、新一手的盲注还没下
       const np = recap ? view.players.find((q) => q.seat === p.seat) : null;
       const stack = np ? np.stack + (np.contrib || 0) : p.stack;
@@ -684,6 +772,7 @@ export default {
         acting ? el('div', { class: 'think' }, el('i'), el('i'), el('i')) : null);
       const won = recap ? null : view.result && p.won > 0 ? p.won : null;
       if (won) node.append(el('span', { class: 'won' }, `+${won}`));
+      if (acting && t0) node.append(thinkTimer(t0));
       return node;
     }
 
@@ -702,6 +791,14 @@ export default {
       kids.push(el('div', { class: 'pk-rail', style: `${pos(T.cx - T.rx - 1.6, T.cy - T.ry - 1.6)};width:${(T.rx + 1.6) * 2}em;height:${(T.ry + 1.6) * 2}em` }));
       kids.push(el('div', { class: 'pk-felt', style: `${pos(T.cx - T.rx + 0.3, T.cy - T.ry + 0.3)};width:${(T.rx - 0.3) * 2}em;height:${(T.ry - 0.3) * 2}em` }));
       kids.push(el('div', { class: 'pk-wm', style: pos(T.cx, T.cy + T.ry * 0.55) }, el('span', {}, '德州')));
+      if (!rc && !view.result && view.toAct && g[view.toAct]) {
+        const s = g[view.toAct];
+        const dx = s.x - T.cx, dy = s.y - T.cy;
+        const ang = (Math.atan2(dy, dx) * 180) / Math.PI;
+        const beam = el('div', { class: 'pk-beam', style: `${pos(T.cx, T.cy)};width:${Math.hypot(dx, dy).toFixed(2)}em;transform:rotate(${ang.toFixed(1)}deg);--ang:${ang.toFixed(1)}deg` });
+        play(beam, 'pk-beamin', 520, fx.beam.t0, 0, 'cubic-bezier(.2,.9,.3,1)');
+        kids.push(beam);
+      }
 
       // 全下：压暗
       const ai = rc ? rc.allin : allinMoment(view);
@@ -859,7 +956,7 @@ export default {
             kids.push(node);
           });
         }
-        kids.push(seatEl(view, p, s, L, { recap: rc, winners }));
+        kids.push(seatEl(view, p, s, L, { recap: rc, winners, me: movable && movable === viewer ? viewer : null, t0: opts.clock?.[p.seat] || null }));
         // 胜率
         if (!rc && p.equity !== null && p.equity !== undefined && p.inHand && !p.folded) {
           const live = liveOf(view);
@@ -868,6 +965,16 @@ export default {
           kids.push(el('div', { class: `pk-eq${p.equity === top && live.length > 1 ? ' lead' : ''}`, style: pos(s.x, s.y + S.h / 2 + 0.15) },
             el('span', { class: 'bar' }, el('i', { style: `width:${pct}%` })), el('b', {}, `${pct}%`)));
         }
+      }
+
+      // 桌心：刚才那一手（谁、做了什么）。全下胜率对比、结算卡出现时让位
+      const la = !rc && !view.result ? lastAct(view) : null;
+      if (la && !(ai && liveOf(view).filter((q) => q.equity !== null && q.equity !== undefined).length >= 2)) {
+        const who = view.players.find((q) => q.seat === la.seat);
+        const box2 = el('div', { class: `pk-act ${actKind(la.text)}`, style: pos(L.act.cx, L.act.y) },
+          el('span', { class: 'no' }, String(seatNo(la.seat))), el('span', { class: 'nm' }, short(who?.name || '', 6)), el('span', { class: 'tx' }, la.text));
+        play(box2, 'pk-actin', 460, fx.act.t0, 0, 'cubic-bezier(.2,1.3,.4,1)');
+        kids.push(box2);
       }
 
       // 一手结果：结算卡（翻完、抬牌之后弹出；摊牌时列出亮出的底牌和牌型）
@@ -931,6 +1038,7 @@ export default {
       }
 
       layer.replaceChildren(...kids);
+      if (layer.querySelector('.tmr')) startTimerTick(root);
       renderControls(view, movable, actions, L);
     }
 

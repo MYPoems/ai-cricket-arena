@@ -1473,3 +1473,16 @@ dialog[open]::backdrop { animation: dlg-veil 300ms ease-out both; }
   .arena.hud { --bw: min(calc(100vw - 2 * var(--pad)), 760px); --bh: calc(var(--bw) * var(--ah) / var(--aw)); }
   .arena.hud .stage-board { height: var(--bh); }
 }
+
+/* 场上公告：天亮死讯、有人出局——画面中央浮起一张纸牌匾，停一会儿自己淡去 */
+.arena .stage { position: relative; }
+.announce { position: absolute; left: 50%; top: 42%; z-index: 30; translate: -50% -50%; display: grid; justify-items: center; gap: 8px; min-width: min(420px, 86%); padding: 22px 34px 20px; border-radius: 18px; text-align: center; pointer-events: none;
+  color: #2a1209; background: var(--paper-face); box-shadow: inset 0 1px 0 rgb(255 255 255 / .85), 0 0 0 1px rgb(120 84 30 / .55), 0 4px 0 #b4955a, 0 24px 60px rgb(0 0 0 / .6);
+  animation: ann-in 520ms var(--spring) both, ann-out 420ms ease-in 2250ms both; }
+.announce b { font: 400 34px/1.15 var(--brush); color: #8e1b12; }
+.announce span { font: 600 16px/1.5 var(--sans); color: #5a3a1a; letter-spacing: .06em; }
+.announce.dawn b { color: #9a5d14; }
+.announce.out { box-shadow: inset 0 1px 0 rgb(255 255 255 / .85), 0 0 0 2px #c42d1e, 0 4px 0 #8e1b12, 0 24px 60px rgb(0 0 0 / .6), 0 0 40px rgb(226 82 61 / .35); }
+@keyframes ann-in { from { opacity: 0; transform: translateY(16px) scale(.9); } }
+@keyframes ann-out { to { opacity: 0; transform: translateY(-10px) scale(.97); } }
+@media (prefers-reduced-motion: reduce) { .announce { animation: ann-out 300ms ease-in 2300ms both; } }

@@ -782,6 +782,14 @@ const game = {
   evalSpec: () => null,
 
   /** viewer 为座位时只给该座位能看到的信息；null 为上帝视角。对局结束后全部公开 */
+  /** 天亮公布死讯、白天有人出局时停一下，让画面中央的公告卡演完（对局页公告停 2.6 秒） */
+  interlude(prev, next) {
+    if (!prev || !next) return 0;
+    if (next.dawn && next.dawn.day !== prev.dawn?.day) return 2600;
+    const day = (s) => s.deaths.filter((d) => d.time === 'day').length;
+    return day(next) > day(prev) ? 2600 : 0;
+  },
+
   view(state, viewer = null) {
     const s = state;
     const over = s.phase === 'over';

@@ -46,6 +46,14 @@ export async function matchView(root, id, { characters }) {
   // 回放和录制时不剧透：着法列表、走势图只画到当前步
   const noSpoil = () => !!replaying || recordMode;
   let paused = d.paused;
+  // 思考计时：每个座位这一轮从什么时候开始想（本机时钟）；接上服务端给的「已经想了多久」
+  const clock = new Map();
+  const resetClock = () => {
+    clock.clear();
+    for (const p of d.partials || []) clock.set(p.seat, Date.now() - (p.elapsed || 0));
+    if (d.waitingHuman) clock.set(d.waitingHuman, Date.now() - (d.waitingElapsed || 0));
+  };
+  resetClock();
   let waitingHuman = d.waitingHuman;
   let offerNext = false;
   let replaying = null; // { timer }
@@ -353,7 +361,7 @@ export async function matchView(root, id, { characters }) {
       h('span', { class: `st${f.live || f.human ? ' live' : ''}` }, status),
       f.turn?.label ? h('b', { class: 'act' }, f.turn.label) : f.live || f.human ? h('span', { class: 'dots' }, h('i'), h('i'), h('i')) : null)];
     const scroll = h('div', { class: 'spot-scroll', 'data-stick': f.live ? 'bottom' : '' });
-    if (mine) scroll.append(h('div', { class: 'spot-tip' }, '轮到你了：在牌桌右下角的操作台出手。'));
+    if (mine) scroll.append(h('div', { class: 'spot-tip' }, renderer.turnTip || '轮到你了：在牌桌上出手。'));
     else if (hidden) scroll.append(h('div', { class: 'spot-tip' }, '有真人在局：模型的思考对局结束后公开，这里只显示出手。'));
     else if (c && !isModel && c.kind !== 'human') scroll.append(h('div', { class: 'spot-tip' }, f.live ? '计算中…' : `${modelLine(c)}没有文字思考。`));
     else if (t) {
@@ -474,11 +482,11 @@ export async function matchView(root, id, { characters }) {
         h('span', { class: 'muted small', style: { whiteSpace: 'nowrap' } }, reviewing ? `${replaying ? '回放' : '复盘'} ${viewPly}/${n}` : `已走 ${n} 步`)),
       h('div', { class: 'bar-ctrl' },
         canReview() && n ? [
-          btn(replaying ? '⏸' : '⏵', replaying ? '暂停回放' : '从头回放', () => (replaying ? stopReplay() : startReplay(reviewing && viewPly < n ? viewPly : 0))),
+          btn(replaying ? '⏸' : '⏵', replaying ? '暂停回放（空格）' : '从头回放（空格）', () => (replaying ? stopReplay() : startReplay(reviewing && viewPly < n ? viewPly : 0))),
           h('select', { class: 'speed', title: '回放速度', onchange: (e) => { speed = Number(e.target.value); } },
             ...SPEEDS.map((s) => h('option', { value: s, selected: s === speed }, `${s}×`))),
-          reviewing ? btn('◀', '上一步', () => { stopReplay(); goto(Math.max(0, viewPly - 1)); }) : null,
-          reviewing ? btn('▶', '下一步', () => { stopReplay(); goto(Math.min(n, viewPly + 1)); }) : null,
+          reviewing ? btn('◀', '上一步（←）', () => { stopReplay(); goto(Math.max(0, viewPly - 1)); }) : null,
+          reviewing ? btn('▶', '下一步（→）', () => { stopReplay(); goto(Math.min(n, viewPly + 1)); }) : null,
           reviewing && running ? btn('⟳', '回到最新', () => { stopReplay(); goto(null); }) : null,
         ] : null,
         running && !hasHuman ? btn(paused ? '▶' : '⏸', paused ? '继续' : '暂停', () => post(`/matches/${id}/control`, { op: paused ? 'resume' : 'pause' })) : null,
@@ -487,7 +495,7 @@ export async function matchView(root, id, { characters }) {
         running && waitingHuman && d.features?.draw && !po ? h('button', { class: `btn sm${offerNext ? ' primary' : ''}`, title: '走下一步时同时向对方提出和棋', onclick: () => { offerNext = !offerNext; renderStatus(); } }, offerNext ? '走棋时提和 ✓' : '提和') : null,
         running && waitingHuman ? btn('🏳', '认输', async () => { if (confirm('确定认输？')) await post(`/matches/${id}/control`, { op: 'resign' }); }) : null,
         running && d.mode === 'casual' ? btn('■', '中止对局', async () => { if (confirm('中止这盘？')) await post(`/matches/${id}/control`, { op: 'abort' }); }) : null,
-        stage.setFlipped ? btn('⇅', '翻转', () => { flipped = !flipped; stage.setFlipped(flipped); renderStage(false); }) : null,
+        stage.setFlipped ? btn('⇅', '翻转（F）', () => { flipped = !flipped; stage.setFlipped(flipped); renderStage(false); }) : null,
         !running && canReview() && n ? btn('⏺', '录成视频（按当前回放速度）', async () => { await post(`/matches/${id}/record`, { speed }); toast(`已开始录制（${speed}×），完成后在「对局记录」里下载`); }) : null,
         h('a', { class: 'icon-btn', title: '导出记录', href: `/api/matches/${id}/export` }, '⤓'),
       ),
@@ -498,6 +506,15 @@ export async function matchView(root, id, { characters }) {
     }
   }
 
+  let lastAnnView = null;
+  function showAnnounce(a) {
+    const col = root.querySelector('.arena .stage');
+    if (!col) return;
+    col.querySelector('.announce')?.remove();
+    const card = h('div', { class: `announce ${a.kind || ''}`, role: 'status' }, h('b', {}, a.title), a.sub ? h('span', {}, a.sub) : null);
+    col.append(card);
+    setTimeout(() => card.remove(), 2700);
+  }
   function renderStage(animate = true) {
     const latest = viewPly === null;
     const ply = latest ? totalPlies() : viewPly;
@@ -508,7 +525,14 @@ export async function matchView(root, id, { characters }) {
       if (best) arrows.push({ iccs: best, kind: 'best' });
     }
     const movable = latest && d.status === 'running' && waitingHuman && !paused ? waitingHuman : null;
-    stage.render(view, { movable, actions: movable ? d.humanActions : null, arrows, animate, replay: !!replaying, viewer: d.viewer, players: playerInfo });
+    stage.render(view, { movable, actions: movable ? d.humanActions : null, arrows, animate, replay: !!replaying, viewer: d.viewer, players: playerInfo, clock: latest && d.status === 'running' ? Object.fromEntries(clock) : {} });
+    // 场上公告（天亮死讯、有人出局）：画面往前走了一步才弹，复盘往回翻、第一次打开时不弹
+    if (renderer.announce && animate && lastAnnView && view !== lastAnnView && (latest || replaying)) {
+      let a = null;
+      try { a = renderer.announce(lastAnnView, view); } catch (err) { console.error(err); }
+      if (a) showAnnounce(a);
+    }
+    lastAnnView = view;
     if (duo) {
       try { duoInfo = renderer.duoView(view, { movable, actions: movable ? d.humanActions : null, viewer: d.viewer }) || duoInfo; } catch (err) { console.error(err); }
       renderScene();
@@ -771,6 +795,7 @@ export async function matchView(root, id, { characters }) {
   const stop = listen([`match:${id}`], async (e) => {
     switch (e.type) {
       case 'turn_start':
+        clock.set(e.seat, Date.now());
         if (e.seat && e.seat === humanSeat) { partials.delete(e.seat); await refresh(); waitingHuman = d.waitingHuman; }
         else partials.set(e.seat, { ply: e.ply, seat: e.seat, characterId: e.characterId, character_id: e.characterId, text: '', reasoning: '', attempts: [] });
         seats.forEach(renderCamp);
@@ -779,9 +804,11 @@ export async function matchView(root, id, { characters }) {
         renderStage(false);
         break;
       case 'human_turn':
+        if (e.seat && !clock.has(e.seat)) clock.set(e.seat, Date.now());
         // 只有轮到我自己的座位才进入「轮到你」；别的真人在想时和模型一样显示思考中
         await refresh();
         waitingHuman = d.waitingHuman;
+        if (waitingHuman && !clock.has(waitingHuman)) clock.set(waitingHuman, Date.now() - (d.waitingElapsed || 0));
         if (e.seat && e.seat !== humanSeat && !partials.has(e.seat)) partials.set(e.seat, { ply: null, seat: e.seat, text: '', reasoning: '', attempts: [] });
         renderAll();
         break;
@@ -800,6 +827,7 @@ export async function matchView(root, id, { characters }) {
         break;
       }
       case 'move': {
+        if (e.seat) clock.delete(e.seat);
         if (e.secret) { await refresh(); if (viewPly === null) renderAll(); break; } // 对玩家隐藏的一步（别人的夜间行动）
         if (waitingHuman === e.seat) waitingHuman = null;
         const p = partials.get(e.seat);
@@ -843,6 +871,7 @@ export async function matchView(root, id, { characters }) {
         break;
       case 'end':
         d.viewer = null; // 结束后看上帝视角
+        clock.clear();
         await refresh();
         partials.clear();
         waitingHuman = null;
@@ -853,5 +882,25 @@ export async function matchView(root, id, { characters }) {
         break;
     }
   });
-  return () => { stop(); stopReplay(); fold?.destroy(); document.body.classList.remove('record-mode'); };
+  // ---------- 键盘 ----------
+  // ← → 单步，Home / End 回到开头、最新，空格 播放/暂停回放，F 翻转棋盘。轮到自己出手、或在输入框里打字时不抢键
+  const onKey = (e) => {
+    if (e.ctrlKey || e.metaKey || e.altKey || document.querySelector('dialog[open]')) return;
+    const tag = e.target?.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || e.target?.isContentEditable) return;
+    if (waitingHuman && viewPly === null) return;
+    const n = totalPlies();
+    const at = viewPly ?? n;
+    let used = true;
+    if (e.key === 'ArrowLeft' && canReview()) { stopReplay(); goto(Math.max(0, at - 1)); }
+    else if (e.key === 'ArrowRight' && canReview()) { stopReplay(); goto(at + 1 >= n ? (d.status === 'running' ? null : n) : at + 1); }
+    else if (e.key === 'Home' && canReview()) { stopReplay(); goto(0); }
+    else if (e.key === 'End') { stopReplay(); goto(d.status === 'running' ? null : n); }
+    else if (e.key === ' ' && canReview() && n) { if (replaying) stopReplay(); else startReplay(viewPly !== null && viewPly < n ? viewPly : 0); }
+    else if ((e.key === 'f' || e.key === 'F') && stage.setFlipped) { flipped = !flipped; stage.setFlipped(flipped); renderStage(false); }
+    else used = false;
+    if (used) e.preventDefault();
+  };
+  document.addEventListener('keydown', onKey);
+  return () => { document.removeEventListener('keydown', onKey); stop(); stopReplay(); fold?.destroy(); document.body.classList.remove('record-mode'); };
 }

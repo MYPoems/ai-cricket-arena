@@ -450,6 +450,11 @@ export default {
   evalSpec: () => null,
 
   /** viewer 为座位时只给该座位能看到的信息；null 为上帝视角。对局结束后全部公开 */
+  /** 有人被投出时停一下，让画面中央的公告卡演完 */
+  interlude(prev, next) {
+    return prev && next && next.out.length > prev.out.length ? 2600 : 0;
+  },
+
   view(state, viewer = null) {
     const over = state.phase === 'over';
     const god = !viewer || over;

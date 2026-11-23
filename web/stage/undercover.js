@@ -200,6 +200,18 @@ function historyBlock(view) {
 }
 
 export default {
+  /** 场上公告：有人被投出时，中央弹一张卡（出局时公开身份） */
+  /** 回放时公告卡也要演完：多停 2.6 秒 */
+  pauseAfter(prev, view) { return this.announce(prev, view) ? 2600 : 0; },
+
+  announce(prev, view) {
+    if (!prev || !view?.outInfo) return null;
+    const before = new Set((prev.outInfo || []).map((o) => o.seat));
+    const fresh = view.outInfo.filter((o) => !before.has(o.seat));
+    if (!fresh.length) return null;
+    const no = (s) => `${String(s).replace(/^\D+/, '')} 号`;
+    return { kind: 'out', title: `${fresh.map((o) => no(o.seat)).join('、')} 被投出`, sub: fresh.map((o) => (o.role ? `身份是${o.role}` : '')).filter(Boolean).join('；') || `第 ${view.round} 轮` };
+  },
   aspect: [16, 10],
   seatColor: (seat, index) => COLORS[(index ?? no(seat) - 1) % COLORS.length],
 

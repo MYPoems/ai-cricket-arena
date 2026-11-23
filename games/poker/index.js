@@ -6,7 +6,8 @@ import {
   code, cardText, cardsText, evaluate, handName, bestFive, equity, equityVsRandom, chen,
   makeRng, hashSeed, shuffledDeck,
 } from './cards.js';
-import { pauseBetween } from './timing.js';
+import { pauseBetween, T as TIMING } from './timing.js';
+const TURN_PAUSE = TIMING.TURN;
 
 const MAX = 6;
 const STREET_CN = ['翻牌前', '翻牌', '转牌', '河牌', '摊牌'];
@@ -665,6 +666,9 @@ const game = {
     if (eq > odds + 0.05) return call();
     return 'fold';
   },
+
+  /** 每个人出手后至少停多久（毫秒），让大家看清这一手再轮到下一位 */
+  turnPause: TURN_PAUSE,
 
   /** 两个局面之间对局要停多久（毫秒）：每一手结束演结算、新一手弹开局提示；prev 为 null 是开局 */
   interlude(prev, next) {
