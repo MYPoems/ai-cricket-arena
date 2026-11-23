@@ -42,11 +42,12 @@ const hub = new Hub();
 const aiPool = new AiPool(2);
 const evaluator = new Evaluator({ enginesDir: ENGINES, aiPool, movetime: db.getSetting('evalMovetime', 300) });
 const ev = await evaluator.init();
-console.log(`局面评估引擎：象棋 ${ev.engines.pikafish ? 'Pikafish' : '内置 AI'}，五子棋 ${ev.engines.rapfi ? 'Rapfi' : '内置估算'}${ev.error ? `；错误：${ev.error}` : ''}`);
+console.log(`局面评估引擎：象棋 ${ev.engines.pikafish ? 'Pikafish' : '内置 AI'}，五子棋 ${ev.engines.rapfi ? 'Rapfi' : '内置估算'}，国际象棋 ${ev.engines.stockfish ? 'Stockfish' : '内置估算'}${ev.error ? `；错误：${ev.error}` : ''}`);
 
 ensureSystemCharacters(db, OWNER);
 if (ev.engines.pikafish) ensureEngineCharacter(db, OWNER, 'pikafish');
 if (ev.engines.rapfi) ensureEngineCharacter(db, OWNER, 'rapfi');
+if (ev.engines.stockfish) ensureEngineCharacter(db, OWNER, 'stockfish');
 
 const arena = new Arena({ db, hub, aiPool, evaluator, ownerId: OWNER });
 const matchmaker = new Matchmaker(arena);

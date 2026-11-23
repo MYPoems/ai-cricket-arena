@@ -32,6 +32,19 @@
 - 每个座位的 `view` 里可以提供 `roles: { seat: '地主' }`、`out: [seat]`（已出局）供选手卡显示。
 - 画面模块：`aspect` 给出舞台宽高比（例如 [16, 10]），所有内容在这个比例内自适应（用 SVG viewBox 或百分比布局），不出现滚动条；`render(view, { movable, actions })` 中 `movable` 是玩家本人可以行动的座位，此时要提供操作方式（点选牌 + 按钮、输入框等），用户操作后调用 `onAction(actionId)`。
 
+## 局面评估（两人对弈游戏）
+
+有引擎或能自己算的两人游戏，提供 `evalSpec(state)`，对局页就会有胜率条、走势图和每步质量标记（最佳 / 好棋 / 缓着 / 失误 / 大漏着）：
+
+```js
+evalSpec(state) {
+  if (终局) return null;
+  return { engine: 'local', persp: 走棋方座位, evaluate: () => ({ e: 走棋方期望得分 0–1, best: 引擎认为最好的行动 id }) };
+}
+```
+
+`evaluate` 在服务端主线程上跑，每次必须在 300 毫秒内返回（限制搜索深度或时间）。外部引擎（国际象棋用 Stockfish：`{ engine: 'stockfish', fen, persp }`）由主会话接入。`features.winbar = true`，`features.evalEngine` 写引擎名（local 的写 'local'）。
+
 ## 验证
 
 - `node --disable-warning=ExperimentalWarning --test test/<id>.test.js` 全部通过。

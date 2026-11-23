@@ -121,6 +121,7 @@ export function ensureSystemCharacters(db, ownerId) {
 const ENGINE_CHARS = {
   pikafish: { name: 'Pikafish 守关', avatar: '🐟', game: '中国象棋' },
   rapfi: { name: 'Rapfi 守关', avatar: '⚫', game: '五子棋' },
+  stockfish: { name: 'Stockfish 守关', avatar: '♞', game: '国际象棋' },
 };
 
 /** 引擎守关选手：每个可用的引擎一名，provider 字段记引擎名 */
