@@ -16,6 +16,8 @@ export class Compare {
 
   create({ game: gameId = 'xiangqi', fen, title, characterIds }) {
     const game = getGame(gameId);
+    // 同题对比要从给定局面开始、两人轮流走：只支持能用 FEN 描述局面、没有隐藏信息的棋类
+    if (!game.fen || game.features?.hidden || game.players.min > 2) throw new HttpError(400, `${game.name}还不支持同题对比`);
     let state;
     try {
       state = game.create({ players: 2, setup: { fen } });

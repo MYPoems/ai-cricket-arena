@@ -99,6 +99,9 @@ export function parseReply(pos, text) {
   const line = [...t.matchAll(/着法\s*[:：]\s*([^\n]*)/g)].pop();
   let cand = line ? line[1].trim() : t.trim().split('\n').filter((l) => l.trim()).pop()?.trim() || '';
   cand = cand.replace(/[*`「」『』“”"]/g, '');
+  // 棋子符号和中文棋子名换成 SAN 字母：「♘f3」「马f3」是 Nf3，不能当成兵走 f3
+  const PIECE = { '♔': 'K', '♚': 'K', 王: 'K', '♕': 'Q', '♛': 'Q', 后: 'Q', '♖': 'R', '♜': 'R', 车: 'R', '♗': 'B', '♝': 'B', 象: 'B', '♘': 'N', '♞': 'N', 马: 'N', '♙': '', '♟': '', 兵: '' };
+  cand = cand.replace(/[♔♚王♕♛后♖♜车♗♝象♘♞马♙♟兵](?=\s*[a-h1-8x])/g, (c) => PIECE[c]);
   if (!line && !cand) return { move: null, uci: null, winrate, error: '没有找到着法（最后一行应为「着法：e2e4」这样的格式）' };
 
   // 中文写法的易位

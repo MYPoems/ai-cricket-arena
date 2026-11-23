@@ -299,7 +299,7 @@ test('解析模型回答：各阶段格式宽松，非法目标报错', () => {
   s = game.apply(s, 'p4', 'save');
   r = game.parseReply(s, 'p1', w('发言：「我是好人，大家听我说。」'));
   assert.equal(r.action, '我是好人，大家听我说。');
-  assert.match(game.parseReply(s, 'p1', w(`发言：${'长'.repeat(61)}`)).error, /61 个字/);
+  assert.equal(game.parseReply(s, 'p1', w(`发言：${'长'.repeat(61)}`)).action, '长'.repeat(60)); // 写长了截断
   assert.equal(game.parseReply(s, 'p1', '判断：x\n胜率：50%\n发言：\n我是好人').action, '我是好人');
   s = talk(s);
   assert.equal(game.parseReply(s, 'p1', w('投票：弃票')).action, 'none');

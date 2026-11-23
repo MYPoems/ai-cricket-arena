@@ -104,8 +104,8 @@ function finish(s, team, reason) {
 function checkWin(s) {
   const w = aliveWolves(s).length;
   const g = s.alive.length - w;
-  if (!w) { finish(s, 'good', '狼人全部出局，好人胜'); return true; }
-  if (w >= g) { finish(s, 'wolf', `存活狼人（${w} 人）不少于好人（${g} 人），狼人胜`); return true; }
+  if (!w) { finish(s, 'good', '狼人全部出局'); return true; }
+  if (w >= g) { finish(s, 'wolf', `存活狼人（${w} 人）不少于好人（${g} 人）`); return true; }
   return false;
 }
 
@@ -180,7 +180,7 @@ function advance(s) {
     return;
   }
   if (s.day >= MAX_DAYS) {
-    finish(s, 'wolf', `${MAX_DAYS} 天结束，狼人 ${list(aliveWolves(s))} 仍然存活，狼人胜`);
+    finish(s, 'wolf', `${MAX_DAYS} 天结束，狼人 ${list(aliveWolves(s))} 仍然存活`);
     return;
   }
   s.day += 1;
@@ -708,7 +708,7 @@ const game = {
     if (!raw.trim()) raw = t.slice(m.index + m[0].length).split('\n').find((l) => l.trim()) || '';
 
     if (p === 'speak' || p === 'tiespeak' || p === 'lastword') {
-      const sp = cleanSpeech(raw);
+      const sp = [...cleanSpeech(raw)].slice(0, MAX_LEN).join(''); // 模型写长了就截断，不算无效
       const err = speechError(sp);
       return err ? fail(err, sp) : { action: sp, attempted: sp, winrate, error: null };
     }

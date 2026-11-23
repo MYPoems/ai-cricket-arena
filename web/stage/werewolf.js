@@ -453,6 +453,12 @@ export default {
   /** 着法列表：和对局记录一一对应；玩家视角里别人的夜间行动打码 */
   moveList(view) {
     const speech = (t) => ([...t].length > 8 ? `「${[...t].slice(0, 8).join('')}…」` : `「${t}」`);
-    return (view?.log || []).map((e) => ({ seat: e.seat, label: ['speak', 'tiespeak', 'lastword'].includes(e.kind) ? speech(e.label) : e.label }));
+    const out = [];
+    for (const e of view?.log || []) {
+      // 玩家视角：连续的「夜间行动」合并成一条，否则条数会暴露预言家、女巫是否还活着
+      if (e.kind === 'hidden' && out.at(-1)?.hidden) continue;
+      out.push({ seat: e.seat, label: ['speak', 'tiespeak', 'lastword'].includes(e.kind) ? speech(e.label) : e.label, hidden: e.kind === 'hidden' });
+    }
+    return out;
   },
 };

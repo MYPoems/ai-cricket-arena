@@ -332,7 +332,8 @@ const game = {
     if (st.anti) parts.push('反春 ×2');
     parts.push(`共 ${st.score} 分`);
     const who = st.landlordWins ? '地主' : `农民（${seatName(state.winner)}）`;
-    return { over: true, winner: state.winner, ranks, score: st.score, reason: `${who}出完牌获胜（${parts.join('，')}）` };
+    const teams = { 地主: [l], 农民: SEATS.filter((x) => x !== l) };
+    return { over: true, winner: state.winner, ranks, teams, score: st.score, reason: `${who}出完牌获胜（${parts.join('，')}）` };
   },
 
   forfeit(state, seat, reason) {
@@ -344,7 +345,7 @@ const game = {
       ranks = Object.fromEntries(SEATS.map((x) => [x, (x === l) === loserIsLandlord ? 2 : 1]));
     }
     const winner = SEATS.find((x) => ranks[x] === 1);
-    return { over: true, winner, ranks, reason };
+    return { over: true, winner, ranks, ...(l ? { teams: { 地主: [l], 农民: SEATS.filter((x) => x !== l) } } : {}), reason };
   },
 
   label(state, seat, action) {

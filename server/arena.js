@@ -40,6 +40,36 @@ function canOffer(m, seat, ply) {
 const localDate = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
 /** 对局记录 → 重建用的参数；兼容只有 start_fen 的旧对局 */
+/**
+ * 去掉模型回答里的 Markdown 标记再交给游戏解析：「**出牌**：`3 3`」「1. 合作」这类写法很常见，
+ * 各游戏的格式都是「键：值」，加粗、反引号、行首列表编号没有意义。
+ */
+export function plainReply(text) {
+  return String(text || '')
+    .replace(/\*\*|__|`/g, '')
+    .replace(/^[ \t]*(?:[-*>•]|\d{1,2}[.、)])[ \t]+(?=[^\n]*[：:])/gm, '');
+}
+
+/** 接口偶发失败（网络、限流、5xx、超时）时退避重试；密钥错、参数错之类直接抛出 */
+const RETRY_WAITS = [5000, 20000, 60000];
+async function withRetry(fn, signal, onRetry) {
+  for (let i = 0; ; i++) {
+    try {
+      return await fn();
+    } catch (err) {
+      const st = err?.status ?? err?.statusCode;
+      const transient = !signal?.aborted && (st === undefined ? !/API Key|未知平台|不可用|没有填写/.test(err?.message || '') : st === 408 || st === 409 || st === 429 || st >= 500);
+      if (!transient || i >= RETRY_WAITS.length) throw err;
+      onRetry?.(err, i + 1, RETRY_WAITS[i]);
+      await new Promise((resolve) => {
+        const t = setTimeout(resolve, RETRY_WAITS[i]);
+        signal?.addEventListener('abort', () => { clearTimeout(t); resolve(); }, { once: true });
+      });
+      if (signal?.aborted) throw err;
+    }
+  }
+}
+
 /** 有玩家本人的隐藏信息对局里，这一步是否要对玩家隐藏（别人的夜间行动等；game.secret 由游戏提供） */
 export function isSecret(game, state, seat, action, human) {
   if (!human || seat === human || !game.features?.hidden || !game.secret) return false;
@@ -401,11 +431,16 @@ ${game.noun || '行动'}：${act}`;
       partial.reasoning = '';
       partial.attempt = attempt;
       const hide = m.options.hideThoughts;
-      const res = await callModel(this.db, ch, conv.system, conv.messages, (d) => {
-        if (d.kind === 'text') partial.text += d.text;
-        else partial.reasoning += d.text;
-        if (!hide) this.hub.emit(channel, { type: 'delta', ply: partial.ply, seat, attempt, kind: d.kind, text: d.text });
-      }, rt.abort.signal, { mockText });
+      const res = await withRetry(() => {
+        partial.text = '';
+        partial.reasoning = '';
+        return callModel(this.db, ch, conv.system, conv.messages, (d) => {
+          if (d.kind === 'text') partial.text += d.text;
+          else partial.reasoning += d.text;
+          if (!hide) this.hub.emit(channel, { type: 'delta', ply: partial.ply, seat, attempt, kind: d.kind, text: d.text });
+        }, rt.abort.signal, { mockText });
+      }, rt.abort.signal, (err, n, wait) => console.warn(`[对局 ${m.id}] ${ch.name} 接口出错（${err.message}），${wait / 1000} 秒后第 ${n} 次重试`));
+      res.text = plainReply(res.text);
       for (const k of Object.keys(usage)) usage[k] += res.usage?.[k] || 0;
       served = res.model;
       conv.messages.push(res.message);

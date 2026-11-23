@@ -183,7 +183,7 @@ test('胜负：卧底全部出局平民胜；剩 3 人或卧底不少于平民�
   assert.equal(o.over, true);
   assert.equal(o.winnerTeam, '平民');
   assert.deepEqual(o.ranks, { p1: 1, p2: 1, p3: 1, p4: 2, p5: 1, p6: 1 });
-  assert.match(o.reason, /卧底 4号 全部出局，平民胜/);
+  assert.match(o.reason, /卧底 4号 全部出局/);
   assert.match(o.reason, /平民词「饺子」，卧底词「包子」/);
   assert.deepEqual(game.pending(s), []);
   assert.throws(() => game.apply(s, 'p1', 'x'), /已经结束/);
@@ -239,7 +239,7 @@ test('解析模型回答：发言', () => {
   assert.equal(game.parseReply(s, 'p1', '胜率：55%\n发言：\n  北方人爱吃  ').action, '北方人爱吃');
   assert.match(game.parseReply(s, 'p1', '判断：……\n胜率：50%').error, /没有找到发言/);
   assert.match(game.parseReply(s, 'p1', '发言：饺子真好吃').error, /不能出现你的词/);
-  assert.match(game.parseReply(s, 'p1', `发言：${'好'.repeat(40)}`).error, /40 个字/);
+  assert.equal(game.parseReply(s, 'p1', `发言：${'好'.repeat(40)}`).action, '好'.repeat(30)); // 写长了截断
   assert.match(game.parseReply(s, 'p2', '发言：轮不到我').error, /不是你发言/);
   assert.equal(game.parseReply(s, 'p1', '发言：蒸的').winrate, null);
 });

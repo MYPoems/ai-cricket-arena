@@ -84,12 +84,16 @@ export class Matchmaker {
           const game = getGame(g.id);
           const n = game.players.default;
           const usable = pool.filter((o) => o.kind !== 'engine' || (o.provider || 'pikafish') === game.features?.evalEngine);
-          const cands = this.candidates(ch, usable, g.id, s.maxTierGap);
-          const wide = cands.length >= n - 1 ? cands : this.candidates(ch, usable, g.id, s.maxTierGap + 1);
-          if (wide.length < n - 1) continue;
-          const pick = await this.choose(ch, wide, g.id);
+          const limit = Math.max(5, n - 1);
+          const cands = this.candidates(ch, usable, g.id, s.maxTierGap, limit);
+          const wide = cands.length >= n - 1 ? cands : this.candidates(ch, usable, g.id, s.maxTierGap + 1, limit);
+          // 人多的游戏（狼人杀 8 人）选手不够时，用内置 AI 补座位（系统选手可以占多个座位）
+          const filler = usable.filter((o) => o.system && o.kind === 'builtin');
+          if (!wide.length || (wide.length < n - 1 && !filler.length)) continue;
+          const pick = await this.choose(ch, wide.slice(0, 5), g.id);
           // 多人游戏：主对手由模型挑，其余座位按分差就近补齐
           const others = [pick.opponent, ...wide.filter((o) => o.id !== pick.opponent.id)].slice(0, n - 1);
+          for (let i = 0; others.length < n - 1; i++) others.push(filler[i % filler.length]);
           const players = shuffle([ch, ...others]);
           const seatIds = game.seats(n);
           const seats = Object.fromEntries(seatIds.map((sid, i) => [sid, players[i].id]));
@@ -142,7 +146,7 @@ export class Matchmaker {
   }
 
   /** 候选对手：段位相差不超过 gap，同一对手当天不超过 samePairPerDay 盘；按分差排序取前 5 */
-  candidates(ch, pool, gameId, gap) {
+  candidates(ch, pool, gameId, gap, limit = 5) {
     const s = this.settings();
     const me = tierFor(this.db, ch.id, gameId);
     const mePlacing = me.played < PLACEMENT_GAMES;
@@ -158,7 +162,7 @@ export class Matchmaker {
       list.push({ ...o, tier: t, h2h: this.h2h(ch.id, o.id, gameId) });
     }
     list.sort((a, b) => Math.abs(a.tier.points - me.points) - Math.abs(b.tier.points - me.points));
-    return list.slice(0, 5);
+    return list.slice(0, limit);
   }
 
   h2h(a, b, gameId) {
@@ -177,7 +181,7 @@ export class Matchmaker {
 
   /** 模型选手自己挑对手；其他选手或解析失败时随机挑 */
   async choose(ch, cands, gameId) {
-    const fallback = () => ({ opponent: cands[Math.floor(Math.random() * Math.min(3, cands.length))], game: gameId, declaration: '' });
+    const fallback = () => ({ opponent: cands[Math.floor(Math.random() * Math.min(3, cands.length))], declaration: '' });
     if (ch.kind !== 'model') return fallback();
     const me = tierFor(this.db, ch.id, gameId);
     const games = gameList();
@@ -189,21 +193,17 @@ export class Matchmaker {
       '候选对手：',
       ...cands.map((o, i) => `${i + 1}. ${o.name}（${o.tier.label}，${o.tier.points} 分；你们交手 ${o.h2h.w} 胜 ${o.h2h.d} 和 ${o.h2h.l} 负）`),
       '',
-      `可选游戏：${games.map((g) => `${g.id}（${g.name}）`).join('、')}`,
-      '',
-      '请严格按三行回答：',
+      '请严格按两行回答：',
       '对手：编号',
-      '游戏：游戏代码',
       '宣言：一句不超过 30 字的挑战宣言',
     ].join('\n');
     try {
       const r = await callModel(this.db, ch, '你是一名追求更高排名的 AI 棋手，回答简短。', [{ role: 'user', content: prompt }]);
       const n = Number(/对手[:：]\s*(\d+)/.exec(r.text)?.[1]);
-      const g = /游戏[:：]\s*([a-z]+)/i.exec(r.text)?.[1];
       const d = /宣言[:：]\s*(.+)/.exec(r.text)?.[1]?.trim().slice(0, 60) || '';
       const opponent = cands[n - 1];
       if (!opponent) return fallback();
-      return { opponent, game: games.some((x) => x.id === g) ? g : gameId, declaration: d };
+      return { opponent, declaration: d };
     } catch (e) {
       this.#log(`${ch.name} 选对手失败（${e.message}），改为系统随机匹配`);
       return fallback();

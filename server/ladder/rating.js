@@ -58,8 +58,12 @@ export function applyResult(db, game, matchId, seats, ranks) {
   const best = Math.min(...rankArr);
   const allSame = rankArr.every((r) => r === best);
   const changes = {};
+  const seen = new Set();
   db.tx(() => {
     entries.forEach(([seat, cid], i) => {
+      // 同一名选手（补位的内置 AI）占了多个座位：只按第一个座位结算一次
+      if (seen.has(cid)) return;
+      seen.add(cid);
       const o = olds[i];
       const n = updated[i][0];
       const before = score(o);

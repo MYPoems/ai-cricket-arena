@@ -33,8 +33,10 @@ export function characterProfile(db, arena, c) {
   for (const m of matches) {
     if (m.status !== 'finished') continue;
     const mySeat = Object.entries(m.seats).find(([, id]) => id === c.id)?.[0];
+    // 团队游戏（斗地主、卧底、狼人杀）：队友不算交手对象
+    const myTeam = Object.values(m.result?.teams || {}).find((t) => t.includes(mySeat)) || [];
     for (const [seat, id] of Object.entries(m.seats)) {
-      if (seat === mySeat || id === c.id) continue;
+      if (seat === mySeat || id === c.id || myTeam.includes(seat)) continue;
       const rec = h2h.get(id) || { opponent: m.players[seat], w: 0, d: 0, l: 0 };
       const o = seatOutcome(m.result, mySeat);
       if (o === 'd') rec.d++;

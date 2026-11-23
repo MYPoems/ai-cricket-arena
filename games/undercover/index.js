@@ -117,16 +117,16 @@ function finish(s, team, reason) {
 function checkWin(s) {
   const spies = s.spies.filter((x) => s.alive.includes(x));
   const civs = s.alive.length - spies.length;
-  if (!spies.length) { finish(s, 'civ', `卧底 ${list(s.spies)} 全部出局，平民胜`); return true; }
-  if (s.alive.length <= 3) { finish(s, 'spy', `只剩 ${s.alive.length} 人，卧底 ${list(spies)} 仍然存活，卧底胜`); return true; }
-  if (spies.length >= civs) { finish(s, 'spy', `存活的卧底（${spies.length} 人）不少于平民（${civs} 人），卧底胜`); return true; }
+  if (!spies.length) { finish(s, 'civ', `卧底 ${list(s.spies)} 全部出局`); return true; }
+  if (s.alive.length <= 3) { finish(s, 'spy', `只剩 ${s.alive.length} 人，卧底 ${list(spies)} 仍然存活`); return true; }
+  if (spies.length >= civs) { finish(s, 'spy', `存活的卧底（${spies.length} 人）不少于平民（${civs} 人）`); return true; }
   return false;
 }
 
 function endRound(s) {
   if (s.round >= MAX_ROUNDS) {
     const spies = s.spies.filter((x) => s.alive.includes(x));
-    finish(s, 'spy', `${MAX_ROUNDS} 轮结束，卧底 ${list(spies)} 仍然存活，卧底胜`);
+    finish(s, 'spy', `${MAX_ROUNDS} 轮结束，卧底 ${list(spies)} 仍然存活`);
     return;
   }
   s.round += 1;
@@ -401,7 +401,7 @@ export default {
       if (!m) return { action: null, attempted: null, winrate, error: '没有找到发言（最后一行应为「发言：……」）' };
       let raw = m[1];
       if (!raw.trim()) raw = t.slice(m.index + m[0].length).split('\n').find((l) => l.trim()) || '';
-      const sp = cleanSpeech(raw);
+      const sp = [...cleanSpeech(raw)].slice(0, MAX_LEN).join(''); // 模型写长了就截断，不算无效
       if (state.queue[0] !== seat) return { action: null, attempted: sp, winrate, error: '现在不是你发言' };
       const err = speechError(sp, state.words[seat]);
       return err ? { action: null, attempted: sp, winrate, error: err } : { action: sp, attempted: sp, winrate, error: null };

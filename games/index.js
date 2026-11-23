@@ -38,8 +38,8 @@ export function registerGame(g) {
 }
 
 export function getGame(id) {
-  const g = GAMES[id];
-  if (!g) throw new Error(`未知游戏：${id}`);
+  const g = typeof id === 'string' && Object.hasOwn(GAMES, id) ? GAMES[id] : null;
+  if (!g) throw Object.assign(new Error(`未知游戏：${id}`), { status: 400 });
   return g;
 }
 
