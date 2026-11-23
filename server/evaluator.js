@@ -5,10 +5,13 @@
 
 import { spawn } from 'node:child_process';
 import { readdirSync, existsSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import { createInterface } from 'node:readline';
 
-const logistic = (cp) => 1 / (1 + Math.exp(-cp / 300));
+// 分数 → 期望得分。不用引擎自带的胜负和概率：它按引擎之间对弈校准，少一个车就是 0%，
+// 而大模型失误很多，局势远没有那么绝对。用分数换算后少一车约 8%、少一兵约 46%，胜率条更能看出变化。
+// Pikafish 和内置 AI 的分数尺度接近（车都约 600 分），共用同一个换算。
+const logistic = (cp) => 1 / (1 + Math.exp(-cp / 250));
 
 export function findPikafish(dir) {
   if (!existsSync(dir)) return null;
@@ -40,7 +43,7 @@ class Pikafish {
   }
 
   async start() {
-    this.proc = spawn(this.bin, [], { stdio: ['pipe', 'pipe', 'ignore'], windowsHide: true });
+    this.proc = spawn(this.bin, [], { cwd: dirname(this.bin), stdio: ['pipe', 'pipe', 'ignore'], windowsHide: true }); // 权重文件 pikafish.nnue 和程序放在一起
     this.proc.on('exit', () => { this.dead = true; });
     this.proc.on('error', () => { this.dead = true; });
     createInterface({ input: this.proc.stdout }).on('line', (line) => {
@@ -87,9 +90,9 @@ class Pikafish {
         if (mate) out.mate = Number(mate[1]);
         if (wdl) out.wdl = [Number(wdl[1]), Number(wdl[2]), Number(wdl[3])];
       }
-      if (out.wdl) out.e = (out.wdl[0] + out.wdl[1] / 2) / 1000;
-      else if (out.mate !== undefined) out.e = out.mate > 0 ? 1 : 0;
+      if (out.mate !== undefined) out.e = out.mate > 0 ? 1 : 0;
       else if (out.cp !== undefined) out.e = logistic(out.cp);
+      else if (out.wdl) out.e = (out.wdl[0] + out.wdl[1] / 2) / 1000;
       else out.e = 0.5;
       return out;
     };
