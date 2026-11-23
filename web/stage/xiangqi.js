@@ -1,9 +1,9 @@
-// 中国象棋画面：复用印刷棋谱样式的 SVG 棋盘。
+// 中国象棋画面：朱漆托盘 + 榧木棋盘 + 立体木棋（见 ../js/board.js）。
 
-import { Board } from '../js/board.js';
+import { Board, XQ_SIZE } from '../js/board.js';
 
 export default {
-  aspect: [572, 632],
+  aspect: XQ_SIZE,
   seatColor: (seat) => (seat === 'r' ? 'var(--red)' : 'var(--black-side)'),
   /** 玩家执黑时棋盘翻转，让自己在下方 */
   flipFor: (seat) => seat === 'b',

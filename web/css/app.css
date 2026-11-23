@@ -546,6 +546,8 @@ dialog .dlg-foot { padding: 12px 22px 16px; border-top: 1px solid var(--groove-d
 .mthumb { position: relative; width: 96px; height: 96px; border-radius: max(4px, calc(var(--rad, 12px) - var(--bz) - 8px)); overflow: hidden; display: grid; place-items: center; background: #0e0302; }
 .mthumb::after { content: ''; position: absolute; inset: 0; pointer-events: none; border-radius: inherit; box-shadow: inset 0 0 0 1px rgb(0 0 0 / .7), inset 0 4px 10px rgb(0 0 0 / .7), inset 0 -1px 0 rgb(255 228 184 / .12); }
 .mthumb svg { width: 100%; height: 100%; display: block; }
+/* 缩略画面铺满凹窗，不被内容的固有高度撑开 */
+.mthumb > .board-wrap { position: absolute; inset: 0; display: grid; place-items: center; }
 .mcard .g { font: 700 15px/1.3 var(--serif); color: var(--gold-2); display: flex; justify-content: space-between; gap: 8px; }
 .mcard .hl { font-weight: 700; font-size: 14px; margin-top: 2px; }
 .mcard.hot .hl { color: var(--zhu-2); }
@@ -732,8 +734,8 @@ pre.code { margin: 0; padding: 14px 80px 14px 16px; overflow-x: auto; border-rad
 
 .stage-board { height: var(--bh); flex: none; display: flex; justify-content: center; }
 /* 棋盘、牌桌落在桌面上：一层贴地的硬影、一层远处的柔影 */
-.stage-board .board-wrap { width: var(--bw); height: var(--bh); filter: drop-shadow(0 2px 1px rgb(0 0 0 / .55)) drop-shadow(0 16px 20px rgb(0 0 0 / .5)); }
-:root[data-theme="light"] .stage-board .board-wrap { filter: drop-shadow(0 2px 1px rgb(90 55 15 / .4)) drop-shadow(0 16px 20px rgb(90 55 15 / .3)); }
+.stage-board .board-wrap { width: var(--bw); height: var(--bh); filter: drop-shadow(0 14px 16px rgb(0 0 0 / .5)); } /* 棋盘自己画了托盘侧壁，这里只留一层远影，免得每步都重算两层滤镜 */
+:root[data-theme="light"] .stage-board .board-wrap { filter: drop-shadow(0 14px 16px rgb(90 55 15 / .3)); }
 /* 走势图、着法时间轴：漆槽 */
 .stage-curve { position: relative; height: 54px; flex: none; border-radius: var(--r); overflow: hidden; background: var(--well-bg); box-shadow: var(--well-sh); }
 .curve { width: 100%; height: 100%; display: block; cursor: pointer; }
