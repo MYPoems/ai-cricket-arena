@@ -44,6 +44,11 @@ svg.board.connect4 .c4-land { fill: none; stroke: #fff0c0; stroke-width: 2; stro
 svg.board.connect4 .c4-col { fill: #ffe6a8; opacity: 0; pointer-events: none; transition: opacity .15s; }
 svg.board.connect4 .c4-col.on { opacity: .16; }
 svg.board.connect4 .c4-hit.on { cursor: pointer; }
+/* 触屏两步落子：第一下选中一列（预览子轻轻呼吸），再点同一列才投下 */
+svg.board.connect4.pre .c4-ghost { animation: c4-pre 1.1s ease-in-out infinite; }
+svg.board.connect4.pre .c4-col.on { opacity: .24; }
+@keyframes c4-pre { 0%, 100% { opacity: .5; } 50% { opacity: .9; } }
+@media (prefers-reduced-motion: reduce) { svg.board.connect4.pre .c4-ghost { animation: none; } }
 svg.board.connect4 .c4-win-glow { stroke: #f3d27e; stroke-opacity: .28; stroke-width: 18; stroke-linecap: round; fill: none; }
 svg.board.connect4 .c4-win-line { stroke: #fff3cf; stroke-width: 5; stroke-linecap: round; fill: none; }
 svg.board.connect4 .c4-halo { pointer-events: none; animation: c4-halo 1.8s ease-in-out infinite; }
@@ -157,29 +162,47 @@ export default {
       return c >= 0 && c < COLS ? c : null;
     };
     const heightOf = (c) => { let r = 0; while (r < ROWS && board[r * COLS + c]) r++; return r; };
+    let preCol = null; // 触屏上第一下点的列，再点同一列才投子
+    const coarse = typeof matchMedia === 'function' ? matchMedia('(pointer: coarse)') : null;
+    /** 触屏（或手指点的）要两步确认；桌面鼠标仍是点一下就投 */
+    const twoStep = (evt) => !!coarse?.matches || evt.pointerType === 'touch' || evt.pointerType === 'pen';
     const clearHover = () => {
+      preCol = null;
+      el.classList.remove('pre');
       ghost.setAttribute('x', -200);
       land.setAttribute('cx', -200);
       colHi.classList.remove('on');
       hit.classList.remove('on');
     };
+    const showCol = (c) => {
+      ghost.setAttribute('href', `#${id}-s${movable}`);
+      ghost.setAttribute('x', CX(c));
+      colHi.setAttribute('x', CX(c) - S / 2);
+      colHi.classList.add('on');
+      hit.classList.add('on');
+      const r = heightOf(c);
+      if (r < ROWS) { land.setAttribute('cx', CX(c)); land.setAttribute('cy', CY(r)); }
+    };
     hit.addEventListener('pointermove', (evt) => {
+      if (evt.pointerType !== 'mouse') return; // 手指划过不画悬停，触屏用两步确认
       const c = movable ? colAt(evt) : null;
-      if (c !== null && legal.has(String(c + 1))) {
-        ghost.setAttribute('href', `#${id}-s${movable}`);
-        ghost.setAttribute('x', CX(c));
-        colHi.setAttribute('x', CX(c) - S / 2);
-        colHi.classList.add('on');
-        hit.classList.add('on');
-        const r = heightOf(c);
-        if (r < ROWS) { land.setAttribute('cx', CX(c)); land.setAttribute('cy', CY(r)); }
-      } else clearHover();
+      if (c !== null && legal.has(String(c + 1))) showCol(c);
+      else clearHover();
     });
-    hit.addEventListener('pointerleave', clearHover);
+    hit.addEventListener('pointerleave', (evt) => { if (evt.pointerType === 'mouse') clearHover(); });
     hit.addEventListener('click', (evt) => {
       if (!movable) return;
       const c = colAt(evt);
-      if (c !== null && legal.has(String(c + 1))) { clearHover(); onAction(String(c + 1)); }
+      if (c === null || !legal.has(String(c + 1))) { if (twoStep(evt)) clearHover(); return; }
+      if (twoStep(evt) && preCol !== c) {
+        clearHover();
+        showCol(c);
+        preCol = c;
+        el.classList.add('pre');
+        return;
+      }
+      clearHover();
+      onAction(String(c + 1));
     });
 
     // ---------- 增量画子 ----------
@@ -210,6 +233,10 @@ export default {
         if (mv) {
           const ids = actions ? actions.map((a) => a.id) : Array.from({ length: COLS }, (_, c) => c).filter((c) => !board[(ROWS - 1) * COLS + c]).map((c) => String(c + 1));
           legal = new Set(ids);
+          if (preCol !== null) {
+            // 预览的列还能下就跟着棋盘更新落点圈，满了就收起
+            if (legal.has(String(preCol + 1))) showCol(preCol); else clearHover();
+          }
         } else { legal = new Set(); clearHover(); }
 
         const moves = view.moves || [];

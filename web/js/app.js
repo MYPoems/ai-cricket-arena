@@ -190,7 +190,7 @@ function paintUser() {
   navAdmin.hidden = u?.role !== 'admin';
   navAdmin.style.display = u?.role === 'admin' ? '' : 'none';
   // 游客：要登录才能用的栏目（开局、设置）不放进导航
-  for (const a of document.querySelectorAll('#nav [data-r="play"], #nav [data-r="settings"]')) a.style.display = u ? '' : 'none';
+  for (const a of document.querySelectorAll('#nav [data-r="play"], #nav [data-r="settings"], #tabbar [data-r="play"]')) a.style.display = u ? '' : 'none';
   for (const b of [pendingBadge, moreBadge]) {
     b.hidden = !session.pending;
     b.style.display = session.pending ? '' : 'none';
@@ -221,13 +221,13 @@ themeBtn.addEventListener('click', toggleTheme);
 paintTheme();
 
 // ---------- 手机底栏：大厅、组局、蛐蛐、天梯、更多（弹出其余栏目） ----------
-const TAB_ICONS = { lobby: 'home', rooms: 'users', characters: 'cricket', ladder: 'trophy', more: 'menu' };
+const TAB_ICONS = { lobby: 'home', play: 'swords', rooms: 'users', characters: 'cricket', ladder: 'trophy', more: 'menu' };
 for (const el of document.querySelectorAll('#tabbar [data-r]')) el.prepend(icon(TAB_ICONS[el.dataset.r], 22));
 document.getElementById('moreBtn').addEventListener('click', () => {
   const u = session.user;
   const item = (href, ic, label, extra = null) => h('a', { class: 'sheet-item', href }, icon(ic, 20), h('span', {}, label), extra);
   const dlg = dialog('更多', h('nav', { class: 'sheet-list', 'aria-label': '更多栏目' },
-    u ? item('#/new', 'swords', '开局') : null,
+    null, // 「开局」已经在底栏上
     item('#/history', 'history', '对局记录'),
     u ? item('#/settings', 'settings', '设置') : null,
     u?.role === 'admin' ? item('#/admin', 'shield', '审批', session.pending ? h('span', { class: 'badge' }, session.pending) : null) : null,

@@ -268,6 +268,7 @@ export default {
   },
 
   createStage({ onAction }) {
+    const ucListRO = typeof ResizeObserver === 'function' ? new ResizeObserver((es) => { for (const e of es) e.target.scrollTop = e.target.scrollHeight; }) : { disconnect() {}, observe(l) { l.scrollTop = l.scrollHeight; } };
     injectStyle();
     const root = el('div', { class: 'uc-stage' });
 
@@ -331,7 +332,10 @@ export default {
           (view.phase === 'speak' || view.phase === 'tiespeak') && !(view.voteLog || []).some((v) => v.round >= view.round - 1) ? null : votePanel(view),
           historyBlock(view),
         ].filter(Boolean));
-        for (const l of body.querySelectorAll('.uc-list')) l.scrollTop = l.scrollHeight; // 最新的在下面
+        // 最新的在下面。滚动交给 ResizeObserver 在浏览器排完版后做（新列表第一次被观察时就会回调）：
+        // 刚换完内容马上读 scrollHeight 会逼浏览器在对局页一连串改动中间多排一次版
+        ucListRO.disconnect();
+        for (const l of body.querySelectorAll('.uc-list')) ucListRO.observe(l);
       },
     };
   },

@@ -248,8 +248,11 @@ const CSS = `
 .pk-beam { height: 9em; translate: 0 -50%; transform-origin: 0 50%; pointer-events: none; mix-blend-mode: screen;
   background: linear-gradient(90deg, rgb(255 226 150 / 0) 6%, rgb(255 226 150 / .18) 45%, rgb(255 226 150 / .46) 100%);
   clip-path: polygon(0 47%, 100% 0, 100% 100%, 0 53%); filter: blur(.25em); }
-.pk-seat.on { animation: pk-turn 1.6s ease-in-out infinite; z-index: 2; }
-@keyframes pk-turn { 50% { box-shadow: var(--hi), 0 0 0 .1em #040100, 0 0 0 .36em rgb(42 11 8 / .9), 0 0 0 .5em #f6dc94, 0 0 3.4em .8em rgb(255 214 120 / .55), 0 .55em .8em rgb(0 0 0 / .55); } }
+/* 呼吸光不逐帧动画 box-shadow（每帧重绘），改成伪元素上的光圈只动 opacity（合成层完成） */
+.pk-seat.on { z-index: 2; }
+.pk-seat.on::after { content: ''; position: absolute; inset: -.14em; z-index: -1; border-radius: inherit; pointer-events: none; opacity: 0; will-change: opacity;
+  box-shadow: 0 0 0 .1em #040100, 0 0 0 .36em rgb(42 11 8 / .9), 0 0 0 .5em #f6dc94, 0 0 3.4em .8em rgb(255 214 120 / .55); animation: pk-turn 1.6s ease-in-out infinite; }
+@keyframes pk-turn { 50% { opacity: 1; } }
 .pk-seat .who span.turn { color: #f6dc94; } .pk-seat .who span.turn::after { content: '…'; display: inline-block; animation: pk-dot 1.2s ease-in-out infinite; }
 .pk-seat .who span.me { color: #ff8a6a; font-weight: 800; }
 /* 浅色主题的名牌是宣纸色：金字、朱字换深一档（对比度 ≥ 4.5:1） */
@@ -418,7 +421,7 @@ const CSS = `
 .pk.port .pk-stats .tr > .spk, .pk.port .pk-stats .th > span:nth-child(4) { display: none; }
 
 @media (prefers-reduced-motion: reduce) {
-  .pk-seat.on, .pk-seat .think i, .pk-seat .tag i, .pk-seat .tmr.hot, .pk-seat .who span.turn::after, .pk-ctl .btn.arm { animation: none !important; }
+  .pk-seat.on::after, .pk-seat .think i, .pk-seat .tag i, .pk-seat .tmr.hot, .pk-seat .who span.turn::after, .pk-ctl .btn.arm { animation: none !important; }
 }
 `;
 
@@ -431,6 +434,18 @@ function injectStyle() {
 }
 
 /** 建 DOM：el('div', { class, style, onclick }, ...子节点 / 文字) */
+/** 容器里前面几个固定节点不动，只把后面的动态节点换成 kids */
+function setLayer(box, fixed, kids) {
+  if (!fixed.every((n, i) => box.childNodes[i] === n)) { box.replaceChildren(...fixed, ...kids); return; }
+  if (box.childNodes.length > fixed.length) {
+    const r = document.createRange();
+    r.setStartAfter(fixed.at(-1));
+    r.setEndAfter(box.lastChild);
+    r.deleteContents();
+  }
+  box.append(...kids);
+}
+
 function el(tag, attrs = {}, ...kids) {
   const e = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs || {})) {
@@ -834,6 +849,7 @@ export default {
     let timer = null;
     const fx = { prev: null, deal: null, board: { n: 0, t0: null, from: 0 }, bets: {}, collect: null, end: null, allin: null, intro: null, act: { key: '', t0: null }, beam: { key: '', t0: null }, wakes: [] };
     const redraw = () => last && draw(last.view, last.opts);
+    const tables = {}; // 横版、竖版的桌子（栏杆、桌布、水印）
     let sumTab = null; // 终局结算卡看哪一页：null 自动（先看这一手，停够后换到全场统计）
     let sumHidden = null; // 收起的是哪一张结算卡（`第几手|是否终局`）：收起后桌角留「结算 ▸」小签
     // Esc 收起结算卡（牌桌在页面上、没有弹窗挡着时）
@@ -1294,10 +1310,11 @@ export default {
       const spots = chipSpots(src, viewer, g, L, markSeats);
       const kids = [];
 
-      // 桌子
-      kids.push(el('div', { class: 'pk-rail', style: `${pos(T.cx - T.rx - 1.6, T.cy - T.ry - 1.6)};width:${(T.rx + 1.6) * 2}em;height:${(T.ry + 1.6) * 2}em` }));
-      kids.push(el('div', { class: 'pk-felt', style: `${pos(T.cx - T.rx + 0.3, T.cy - T.ry + 0.3)};width:${(T.rx - 0.3) * 2}em;height:${(T.ry - 0.3) * 2}em` }));
-      kids.push(el('div', { class: 'pk-wm', style: pos(T.cx, T.cy + T.ry * 0.55) }, el('span', {}, '德州')));
+      // 桌子：栏杆、桌布、水印只随横竖版变，按版式各建一次（每步重建整张桌子会重排、重绘大块渐变）
+      const table = tables[layoutName] ||= [
+        el('div', { class: 'pk-rail', style: `${pos(T.cx - T.rx - 1.6, T.cy - T.ry - 1.6)};width:${(T.rx + 1.6) * 2}em;height:${(T.ry + 1.6) * 2}em` }),
+        el('div', { class: 'pk-felt', style: `${pos(T.cx - T.rx + 0.3, T.cy - T.ry + 0.3)};width:${(T.rx - 0.3) * 2}em;height:${(T.ry - 0.3) * 2}em` }),
+        el('div', { class: 'pk-wm', style: pos(T.cx, T.cy + T.ry * 0.55) }, el('span', {}, '德州'))];
       const liveNow = isLive(opts);
       if (liveNow && !E && !view.result && view.toAct && g[view.toAct]) {
         const s = g[view.toAct];
@@ -1554,7 +1571,7 @@ export default {
         }
       }
 
-      layer.replaceChildren(...kids);
+      setLayer(layer, table, kids);
       if (layer.querySelector('.tmr')) startTimerTick(root);
       renderControls(view, movable, actions, L);
       renderPre(view, opts, L, !!E);

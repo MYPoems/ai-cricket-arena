@@ -22,6 +22,7 @@ export function roomRoutes(router, { db, hub, arena }) {
     for (const s of game.seats(r.players)) {
       const x = r.seats[s];
       const c = x ? db.get('SELECT c.id, c.name, c.avatar, c.kind, c.provider, c.model, c.level, c.system, c.owner_id, c.agent_timeout, c.last_seen FROM characters c WHERE c.id = ?', x.characterId) : null;
+      if (c?.kind === 'human') c.name = db.get('SELECT name FROM users WHERE id = ?', c.owner_id)?.name || c.name; // 真人显示账号名
       const by = x ? db.get('SELECT id, name FROM users WHERE id = ?', x.userId) : null;
       seats[s] = c ? { character: c, by } : null;
     }

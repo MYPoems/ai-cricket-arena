@@ -134,6 +134,8 @@ function openConn(chans, key) {
     const want = new Set(wantedChannels());
     for (const ch of chans) if (want.has(ch)) owner.set(ch, c);
     prune();
+    // 连上（或断线重连上）了：告诉订阅者，让它们补拉一次最新状态——连接建立之前发出的事件收不到
+    for (const ch of chans) if (owner.get(ch) === c) dispatch({ ch, type: '_open' });
   };
   c.es.onmessage = (e) => {
     if (c.dead) return;

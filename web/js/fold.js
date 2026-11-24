@@ -1,7 +1,7 @@
 // 多人局中间舞台的「折叠」：屏幕放不下时，票型、身份、出局、全部记录这些面板收成一排胶囊按钮，
 // 点开后从按钮处长成一张卡片（桌面贴着中间一列的底部，手机是底部弹层），收起时缩回按钮。
 //
-// 判断放不放得下：每次重画后，先按全部展开的样子量——整列溢出、焦点区被挤到 110 以下、或者焦点区里的
+// 判断放不放得下（只在版式签名变了时量，见 update；平时重画不读布局）：先按全部展开的样子量——整列溢出、焦点区被挤到 110 以下、或者焦点区里的
 // 内容放不下且矮于 FOLD_AT，就算放不下。放不下时逐步收：先把「全部记录」收成按钮，还不够就从最高的面板起
 // 一块一块收，放得下就停，没收的面板照常显示。手机宽度（≤640）全部收起；641–1100 页面本身能滚动，不收。
 //
@@ -64,39 +64,81 @@ export function createFold({ arena, stageCol, focusEl, panelRoot, logBox, moves,
   }
 
   // ---------- 大屏铺满：按内容实际高度算放大倍数 --k ----------
-  // 先按基准尺寸（--k = 1）量出中间一列和两侧座位的内容高度，再放大到正好铺满屏高（最多 1.8 倍）；
-  // 放大后如果有地方被挤（焦点区比基准时还矮、整列溢出、座位超出），逐步回缩。
+  // 按基准尺寸（--k = 1）一次量完中间一列和两侧座位的内容高度、座位卡里名字的宽度，直接算出放大倍数
+  // （最多 1.8 倍）；放大后再核对一次，估得不准才回缩（最多再量 2 次）。
+  // 量布局很贵（改 --k 会让整页的字重新排版），所以只在版式签名变了（窗口大小、座位数、面板组成、折叠状态）
+  // 或面板内容把中间一列撑出界时才重量；平时重画只按记下的结果把面板收起来，不读布局。
   const span = (box) => {
     const kids = [...box.children].filter((c) => c.offsetParent !== null);
     return kids.length ? kids.at(-1).getBoundingClientRect().bottom - kids[0].getBoundingClientRect().top : 0;
   };
+  const NM_MIN = 84;
+  const seatsOf = (cols) => cols.flatMap((c) => [...c.querySelectorAll('.seat:not(.seat-ghost)')]);
+  // 横向也要放得下：座位卡里的名字不能被头像、身份牌挤成一条竖缝（8、9 人局的座位栏不随放大变宽）
+  const squeezed = (cols) => seatsOf(cols).some((s) => s.scrollWidth > s.clientWidth + 1 || (s.querySelector('.nm')?.clientWidth ?? 99) < NM_MIN);
   function fit() {
     const cols = [...arena.querySelectorAll(':scope > .seats')];
-    const ratios = [span(stageCol) / stageCol.clientHeight, ...cols.map((c) => span(c) / c.clientHeight)].filter((x) => x > 0);
+    const ratios = [span(stageCol) / stageCol.clientHeight, ...cols.map((c) => span(c) / c.clientHeight)].filter((x) => x > 0 && Number.isFinite(x));
     if (!ratios.length) return;
     const focus1 = focusEl.clientHeight;
-    let k = Math.min(1.8, Math.max(1, Math.floor((0.97 / Math.max(...ratios)) * 50) / 50));
-    for (let i = 0; i < 14 && k > 1; i++) {
+    // 名字能放大到几倍：座位卡宽度不变，号码牌、头像、身份牌和内边距按 k 放大，名字宽度 ≈ w − (w − 名字宽) × k
+    let kW = 1.8;
+    for (const s of seatsOf(cols)) {
+      const nm = s.querySelector('.nm');
+      if (!nm) continue;
+      const w = s.clientWidth, n = nm.clientWidth;
+      if (s.scrollWidth > w + 1 || n < NM_MIN) { kW = 1; break; }
+      if (w - n > 0) kW = Math.min(kW, (w - NM_MIN) / (w - n));
+    }
+    let k = Math.max(1, Math.floor(Math.min(1.8, kW, 0.97 / Math.max(...ratios)) * 50) / 50);
+    for (let i = 0; i < 3 && k > 1; i++) {
       arena.style.setProperty('--k', String(k));
-      // 横向也要放得下：座位卡里的名字不能被头像、身份牌挤成一条竖缝（8、9 人局的座位栏不随放大变宽）
-      const squeezed = cols.some((c) => [...c.querySelectorAll('.seat')].some((s) => s.scrollWidth > s.clientWidth + 1 || (s.querySelector('.nm')?.clientWidth ?? 99) < 84));
-      const over = squeezed || stageCol.scrollHeight > stageCol.clientHeight + 1 || focusEl.clientHeight < focus1 - 2 || cols.some((c) => span(c) > c.clientHeight + 1);
+      const over = stageCol.scrollHeight > stageCol.clientHeight + 1 || focusEl.clientHeight < focus1 - 2 || cols.some((c) => span(c) > c.clientHeight + 1) || squeezed(cols);
       if (!over) return;
-      k = Math.max(1, Math.round((k - 0.06) * 100) / 100);
+      k = Math.max(1, Math.round((k - (i ? 0.12 : 0.06)) * 100) / 100);
     }
     arena.style.setProperty('--k', String(k));
   }
 
-  function update() {
-    const desktop = !medium();
+  // 版式签名：只用不读布局就拿得到的东西（窗口大小、断点、座位数、面板组成、座位卡右侧最多挂几枚身份牌/票数——
+  // 挂得最多的那张卡最挤；投票时每多一票只是又一张卡挂上票数，不必重量）
+  let layoutKey = null;
+  let hiddenKeys = new Set();
+  const layoutSig = () => [innerWidth, innerHeight, phone(), medium(),
+    arena.querySelectorAll(':scope > .seats > .seat').length,
+    panels().map(keyOf).join(','),
+    Math.max(0, ...[...arena.querySelectorAll(':scope > .seats > .seat .side')].map((s) => s.querySelectorAll(':scope > :not(.wave)').length))].join('|');
+
+  // 量过的签名记下结果（放大倍数、收起哪些面板）：投票开始又结束、夜里白天来回切，签名回到见过的样子时直接套用，不再量
+  const memo = new Map();
+  function measure(desktop) {
     if (desktop) arena.style.setProperty('--k', '1'); else arena.style.removeProperty('--k');
     // 量的时候焦点区不撑开（fit-measure），量完再让它把剩下的高度占满，屏幕上不留整块空白
     arena.classList.add('fit-measure');
     const hidden = decide();
+    hiddenKeys = new Set(hidden.map(keyOf));
     folded = arena.classList.contains('folded');
     if (desktop && !folded) fit();
     arena.classList.remove('fit-measure');
-    focusEl.querySelector('.said')?.classList.toggle('tall', (focusEl.querySelector('.said')?.clientHeight || 0) >= 240);
+    return { k: arena.style.getPropertyValue('--k'), folded, hidden: hiddenKeys };
+  }
+  function reuse(r) {
+    if (r.k) arena.style.setProperty('--k', r.k); else arena.style.removeProperty('--k');
+    arena.classList.toggle('folded', r.folded);
+    folded = r.folded;
+    hiddenKeys = r.hidden;
+  }
+
+  function update(force = false) {
+    const s = layoutSig();
+    if (force || s !== layoutKey) {
+      layoutKey = s;
+      if (!force && memo.has(s)) reuse(memo.get(s));
+      else memo.set(s, measure(!medium()));
+    }
+    // 画面重画后面板是新节点：按记下的结果收起（不量）
+    for (const p of panels()) p.classList.toggle('fold-hide', hiddenKeys.has(keyOf(p)));
+    const hidden = panels().filter((p) => hiddenKeys.has(keyOf(p)));
     // 按钮内容没变就不重建（量的时候会频繁调用，重建会丢掉键盘焦点）
     const items = folded ? [...hidden.map((p) => [keyOf(p), p.dataset.sum || '']), ['记录', logLabel()]] : [];
     const sig = JSON.stringify(items);
@@ -235,19 +277,29 @@ export function createFold({ arena, stageCol, focusEl, panelRoot, logBox, moves,
   addEventListener('keydown', onKey);
   addEventListener('resize', onResize);
 
-  // 焦点区内容变了（换人看、思考流式输出）也要重新量，合并到下一帧做一次
+  // 焦点区内容变了（换人看、思考流式输出）时合并到下一帧过一遍签名（签名没变就不量）
   let pend = 0;
-  // 最多每 400ms 量一次（流式输出时焦点区每帧都在变，没必要每帧量）
+  // 最多每 400ms 一次（流式输出时焦点区每帧都在变）
   let lastRun = 0;
   const schedule = () => {
     if (pend) return;
     const wait = Math.max(0, 400 - (performance.now() - lastRun));
     pend = setTimeout(() => requestAnimationFrame(() => { pend = 0; lastRun = performance.now(); update(); }), wait);
   };
+  // 面板内容变多、把中间一列撑出界时才重量。ResizeObserver 在浏览器排完版之后回调，这里读布局不会多排一次
+  let overAt = -1;
+  const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(() => {
+    if (!arena.isConnected || medium()) return;
+    // 面板已经全收起来了：再量也收不出地方
+    if (folded && panels().every((p) => hiddenKeys.has(keyOf(p)))) return;
+    const sh = stageCol.scrollHeight;
+    if (sh > stageCol.clientHeight + 1 && sh !== overAt) { overAt = sh; memo.delete(layoutKey); layoutKey = null; schedule(); }
+  }) : null;
+  ro?.observe(panelRoot);
   return {
     el: dock,
     update,
     schedule,
-    destroy() { removeEventListener('keydown', onKey); removeEventListener('resize', onResize); closeSheet(true); },
+    destroy() { removeEventListener('keydown', onKey); removeEventListener('resize', onResize); ro?.disconnect(); clearTimeout(pend); closeSheet(true); },
   };
 }

@@ -751,6 +751,8 @@ ${game.noun || '行动'}：${act}`;
     for (const [seat, cid] of Object.entries(m.seats)) {
       // owner：这只蛐蛐是谁的（组局里显示「谁带来的」）
       players[seat] = this.db.get('SELECT c.id, c.name, c.avatar, c.kind, c.provider, c.model, c.level, c.owner_id, c.system, u.name AS owner FROM characters c LEFT JOIN users u ON u.id = c.owner_id WHERE c.id = ?', cid);
+      // 真人角色在别人眼里显示账号名（庄家的真人角色叫「我」，别人看到「我」会以为是自己）
+      if (players[seat]?.kind === 'human' && players[seat].owner) players[seat].name = players[seat].owner;
     }
     let game = null;
     try { game = getGame(m.game); } catch { /* 游戏已下线 */ }

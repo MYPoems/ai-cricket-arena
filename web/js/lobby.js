@@ -59,7 +59,10 @@ export async function lobbyView(root, { go, session, meta }) {
 
   // ---------- 今日擂台 ----------
   function drawHero() {
-    const pick = [...data.live].sort((a, b) => heat(b) - heat(a))[0];
+    // 擂台只推荐真在打的局：AI 对 AI、走了至少 10 步、没暂停、10 分钟内动过；都不满足才退而求其次
+    const fresh = (x) => !x.humanWaiting && !x.paused && (x.plies || 0) >= 10 && Date.now() - new Date(x.lastAt || 0).getTime() < 10 * 60e3;
+    const pool = data.live.filter(fresh);
+    const pick = [...(pool.length ? pool : data.live.filter((x) => !x.humanWaiting))].sort((a, b) => heat(b) - heat(a))[0];
     if (!pick) {
       const last = data.recent[0];
       hero.replaceChildren(h('div', { class: 'lattice' }), h('span', { class: 'wm' }, '斗'),
@@ -157,14 +160,18 @@ export async function lobbyView(root, { go, session, meta }) {
     const whoRow = h('div', { class: 'who' });
     const el = h('a', { class: 'card mcard', href: `#/match/${m.id}`, style: { gridTemplateColumns: '1fr' } },
       head, h('div', { class: 'mthumb', style: { width: '100%', height: '200px' } }, h('div', { class: 'board-wrap', style: { width: '100%', height: '100%' } }, stage.el)), hl, whoRow, sub);
-    const c = { el, stage, head, hl, sub, whoRow, m };
-    paint(c, false);
+    // 闪一下金边（新的一步）：动画演完自己摘掉类名，不用「删类名 → 读 offsetWidth → 加类名」逼浏览器排版
+    el.addEventListener('animationend', (e) => { if (e.animationName === 'flash') el.classList.remove('flash'); });
+    // dirty：有没画上去的变化；thumb：缩略画面也要重画；shown：画过缩略画面；visible：在屏幕附近
+    const c = { el, stage, head, hl, sub, whoRow, m, dirty: false, thumb: true, anim: false, flash: false, shown: false, visible: false };
+    paintText(c);
+    queue(c);
     return c;
   }
 
-  function paint(c, animate = true) {
+  /** 卡片上的文字（便宜）：标题、思考中、进度、选手 */
+  function paintText(c) {
     const m = c.m;
-    try { c.stage.render(m.view, { movable: null, arrows: [], animate }); } catch { /* 缩略画面画不出来时不影响卡片 */ }
     c.el.classList.toggle('hot', !!m.hot);
     c.head.replaceChildren(h('span', {}, m.gameName, h('span', { class: 'small muted', style: { marginLeft: '8px', fontFamily: 'var(--sans)', fontWeight: 400 } }, MODE_NAMES[m.mode])),
       m.paused ? h('span', { class: 'small muted' }, '已暂停') : m.thinking ? h('span', { class: 'thinking-dot' }, `${m.seatNames?.[m.thinking] || ''}思考中`) : null);
@@ -175,9 +182,59 @@ export async function lobbyView(root, { go, session, meta }) {
     c.sub.textContent = `开局 ${fmtTime(m.started_at)}`;
   }
 
+  // 场上对局多时每个事件都重画缩略画面会把大厅卡死：变化先记下，攒到一起每秒画一次（所有卡合在同一帧里画，
+  // 排版、分层这些整页的开销一秒只付一次）；只画在屏幕附近的卡（IntersectionObserver）。新卡、刚滚进来的卡马上画
+  const PAINT_GAP = 1000;
+  const due = new Set();
+  let paintRaf = 0, tick = 0, tickAt = 0, lastFlush = -Infinity;
+  const byEl = new WeakMap();
+  const io = typeof IntersectionObserver === 'function' ? new IntersectionObserver((es) => {
+    for (const e of es) {
+      const c = byEl.get(e.target);
+      if (!c) continue;
+      c.visible = e.isIntersecting;
+      if (c.visible && c.dirty) queue(c, { thumb: false });
+    }
+  }, { rootMargin: '300px 0px' }) : null;
+  function queue(c, { thumb = true, anim = false, flash = false } = {}) {
+    c.dirty = true;
+    c.thumb ||= thumb;
+    c.anim ||= anim;
+    c.flash ||= flash;
+    if (!byEl.has(c.el)) { byEl.set(c.el, c); if (io) io.observe(c.el); else c.visible = true; }
+    if (!c.visible) return;
+    due.add(c);
+    if (paintRaf) return;
+    const now = performance.now();
+    const at = c.shown ? Math.max(now, lastFlush + PAINT_GAP) : now; // 还没画过的卡不等
+    if (tick && tickAt <= at) return;
+    clearTimeout(tick);
+    tickAt = at;
+    tick = setTimeout(() => { tick = 0; paintRaf = requestAnimationFrame(flushPaints); }, at - now);
+  }
+  // 一帧里最多画 3 张缩略画面，剩下的接着下一帧画：一次全画完那一帧会很长
+  const PER_FRAME = 3;
+  function flushPaints() {
+    paintRaf = 0;
+    lastFlush = performance.now();
+    const list = [...due].slice(0, PER_FRAME);
+    for (const c of list) due.delete(c);
+    if (due.size) paintRaf = requestAnimationFrame(flushPaints);
+    for (const c of list) {
+      if (!c.dirty || !c.visible || !c.el.isConnected) continue;
+      c.dirty = false;
+      c.shown = true;
+      if (c.thumb) { try { c.stage.render(c.m.view, { movable: null, arrows: [], animate: c.anim }); } catch { /* 缩略画面画不出来时不影响卡片 */ } }
+      paintText(c);
+      if (c.flash) c.el.classList.add('flash');
+      c.thumb = c.anim = c.flash = false;
+    }
+  }
+  const dropCard = (c) => { due.delete(c); io?.unobserve(c.el); byEl.delete(c.el); };
+
   function drawGrid() {
     const ids = new Set(data.live.map((m) => m.id));
-    for (const id of [...cards.keys()]) if (!ids.has(id)) cards.delete(id);
+    for (const [id, c] of [...cards]) if (!ids.has(id)) { dropCard(c); cards.delete(id); }
     let list = data.live.filter((m) => filter === 'all' || m.game === filter);
     list = sort === 'new' ? list.sort((a, b) => (b.started_at || '').localeCompare(a.started_at || ''))
       : sort === 'tier' ? list.sort((a, b) => (b.mode !== 'casual') - (a.mode !== 'casual') || heat(b) - heat(a))
@@ -192,7 +249,7 @@ export async function lobbyView(root, { go, session, meta }) {
     }
     grid.replaceChildren(...list.map((m) => {
       let c = cards.get(m.id);
-      if (!c) { c = card(m); cards.set(m.id, c); } else { c.m = { ...c.m, ...m, hot: c.m.hot || m.hot }; paint(c, false); }
+      if (!c) { c = card(m); cards.set(m.id, c); } else { c.m = { ...c.m, ...m, hot: c.m.hot || m.hot }; queue(c); }
       return c.el;
     }));
   }
@@ -215,6 +272,8 @@ export async function lobbyView(root, { go, session, meta }) {
     stopEvents?.();
     const chans = ['lobby', ...data.live.map((m) => `match:${m.id}`)];
     stopEvents = listen(chans, (e) => {
+      // 思考的流式输出（delta）、无效着法：大厅上不显示，直接丢掉
+      if (e.type === 'delta' || e.type === 'illegal') return;
       if (e.ch === 'lobby') {
         if (e.type === 'match_created' || e.type === 'match_finished' || e.type === 'room_updated') reload();
         return;
@@ -222,22 +281,20 @@ export async function lobbyView(root, { go, session, meta }) {
       const id = e.ch.slice(6);
       const c = cards.get(id);
       if (!c) return;
-      if (e.type === 'turn_start') { c.m.thinking = e.seat; paint(c, false); }
+      if (e.type === 'turn_start') { c.m.thinking = e.seat; queue(c, { thumb: false }); }
       else if (e.type === 'move') {
         if (!e.view) { reload(); return; }
         Object.assign(c.m, { view: e.view, lastMove: e.action, lastLabel: e.label, plies: e.ply, thinking: null });
         if (e.label && HOT_RE.test(e.label)) c.m.hot = true;
-        paint(c, true);
-        c.el.classList.remove('flash'); void c.el.offsetWidth; c.el.classList.add('flash');
+        queue(c, { anim: true, flash: true });
       } else if (e.type === 'eval') {
         if (e.eval?.quality?.tag === '大漏着') c.m.hot = true;
         if (e.eval?.redE !== undefined) c.m.redE = e.eval.redE;
-        paint(c, false);
-      } else if (e.type === 'control') { c.m.paused = e.paused; paint(c, false); }
+        queue(c, { thumb: false });
+      } else if (e.type === 'control') { c.m.paused = e.paused; queue(c, { thumb: false }); }
       else if (e.type === 'end') reload();
     });
   }
-
   let reloading = null;
   async function reload() {
     if (reloading) return;
@@ -254,5 +311,5 @@ export async function lobbyView(root, { go, session, meta }) {
   drawAll();
   subscribe();
   void tierBadge;
-  return () => { stopEvents?.(); clearTimeout(reloading); };
+  return () => { stopEvents?.(); clearTimeout(reloading); io?.disconnect(); cancelAnimationFrame(paintRaf); clearTimeout(tick); };
 }

@@ -134,6 +134,8 @@ const CSS = `
   0 .06em 0 #e4d7b6, 0 .12em 0 #c6b388, 0 .16em 0 rgb(60 36 8 / .55), 0 .6em .8em -.05em rgb(0 0 0 / .55), 0 0 .9em rgb(240 205 120 / .55); }
 .ddz-c.sel.pick:hover { translate: 0 -1.5em; }
 .ddz-play.stale { opacity: .42; }
+/* 桌上的牌、底牌交接、牌型标签、气泡、提示只是画面：铺满桌面的出牌层不能挡住手牌（出过牌后点不到、划不动手牌） */
+.ddz-play, .ddz-give, .ddz-lbl, .ddz-bub, .ddz-tip { pointer-events: none; }
 /* 面前那一手：小一号、阴影浅一些 */
 .ddz-play.front .ddz-c { box-shadow: inset 0 0 0 .05em rgb(110 76 28 / .5), inset 0 .07em 0 #fff, 0 .08em 0 #c6b388, 0 .12em 0 rgb(60 36 8 / .55), 0 .3em .4em -.05em rgb(0 0 0 / .5); }
 
@@ -178,8 +180,10 @@ const CSS = `
   animation: ddz-alarm 1.1s ease-in-out infinite; }
 .ddz-plate .think { position: absolute; left: 50%; bottom: -.95em; translate: -50% 0; display: flex; gap: .25em; padding: .3em .55em; border-radius: .8em; background: var(--well-bg); box-shadow: var(--well-sh); }
 /* 轮到谁：名牌外圈呼吸发亮，挂一块「思考中」「轮到你」 */
-.ddz-plate.on { animation: ddz-turn 1.6s ease-in-out infinite; z-index: 2; }
-@keyframes ddz-turn { 50% { box-shadow: var(--hi), 0 0 0 .1em #040100, 0 0 0 .38em rgb(42 11 8 / .9), 0 0 0 .52em #f6dc94, 0 0 3.2em .8em rgb(255 214 120 / .55), 0 .55em .8em rgb(0 0 0 / .55); } }
+.ddz-plate.on { z-index: 2; }
+.ddz-plate.on::after { content: ''; position: absolute; inset: -.14em; z-index: -1; border-radius: inherit; pointer-events: none; opacity: 0; will-change: opacity;
+  box-shadow: 0 0 0 .1em #040100, 0 0 0 .38em rgb(42 11 8 / .9), 0 0 0 .52em #f6dc94, 0 0 3.2em .8em rgb(255 214 120 / .55); animation: ddz-turn 1.6s ease-in-out infinite; }
+@keyframes ddz-turn { 50% { opacity: 1; } }
 .ddz-plate .tag { position: absolute; left: 50%; top: calc(100% + .5em); translate: -50% 0; display: flex; align-items: center; gap: .4em; white-space: nowrap; padding: .34em .85em .38em; border-radius: 1em;
   font: 700 1.1em/1 var(--sans); letter-spacing: .1em; color: var(--on-gold); background: var(--gold-metal); box-shadow: var(--gold-key-sh), 0 .3em .6em rgb(0 0 0 / .45); z-index: 3; animation: ddz-pop .36s cubic-bezier(.2,1.5,.4,1) both; }
 .ddz-plate .tag::before { content: ''; position: absolute; left: 50%; bottom: 100%; translate: -50% 0; border: .4em solid transparent; border-bottom-color: #f0cd78; }
@@ -352,6 +356,7 @@ const CSS = `
 @media (prefers-reduced-motion: reduce) {
   .ddz-cd .fg { animation: none !important; }
   .ddz-cd.red { animation: none; }
+  .ddz-plate.on::after { animation: none; }
 }
 `;
 
@@ -364,6 +369,18 @@ function injectStyle() {
 }
 
 /** 建 DOM：el('div', { class, style, onclick }, ...子节点 / 文字) */
+/** 容器里前面几个固定节点不动，只把后面的动态节点换成 kids */
+function setLayer(box, fixed, kids) {
+  if (!fixed.every((n, i) => box.childNodes[i] === n)) { box.replaceChildren(...fixed, ...kids); return; }
+  if (box.childNodes.length > fixed.length) {
+    const r = document.createRange();
+    r.setStartAfter(fixed.at(-1));
+    r.setEndAfter(box.lastChild);
+    r.deleteContents();
+  }
+  box.append(...kids);
+}
+
 function el(tag, attrs = {}, ...kids) {
   const e = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs || {})) {
@@ -598,6 +615,8 @@ export default {
     };
 
     const redraw = () => last && draw(last.view, last.opts);
+    // 桌布、栏杆、水印：不随局面变，只建一次（每步重建整张桌子会重排、重绘大块渐变）
+    const felt = [el('div', { class: 'ddz-rail' }), el('div', { class: 'ddz-top' }), el('div', { class: 'ddz-wm' }, '斗')];
     let resHidden = null; // 收起的是哪一张结算卡：收起后桌角留「结算 ▸」小签
     // Esc 收起结算卡（牌桌在页面上、没有弹窗挡着时）
     const onEsc = (e) => {
@@ -673,19 +692,13 @@ export default {
     let cur = null; // 当前决策点：{ list, d, leading }，给「点一下补全」用
 
     /**
-     * 点一下补全（只在一张都没选时）：跟牌时选上包含这张的最省牌的一手；
-     * 领出时只对炸弹和五张以上的顺子补全，其余就是这一张。
+     * 点一下补全（只在一张都没选时）：只在跟牌（要压过上家）时，选上包含这张的最省牌的一手（提示顺序里的第一手）；
+     * 领出时点一下就只选这一张——炸弹、顺子用拖选或「提示」，不替人拆牌。
      */
     function autoComplete(i) {
-      if (!cur) return;
+      if (!cur || cur.leading) return;
       const name = cur.d[i];
-      let pick = null;
-      if (!cur.leading) pick = cur.list.find((a) => a.id.split(' ').includes(name));
-      else {
-        const four = cur.d.filter((x) => x === name).length === 4;
-        if (four) pick = cur.list.find((a) => /^炸弹/.test(a.label) && a.id.split(' ').includes(name));
-        if (!pick) pick = cur.list.filter((a) => /^顺子/.test(a.label) && a.id.split(' ').includes(name)).sort((x, y) => y.id.split(' ').length - x.id.split(' ').length)[0] || null;
-      }
+      const pick = cur.list.find((a) => a.id.split(' ').includes(name));
       if (!pick) return;
       const ids = pickIds(pick.id, cur.d);
       // 被点的那张一定要在里面（同点数有几张时，换成被点的那张）
@@ -933,7 +946,7 @@ export default {
       let autoKeep = false; // 这一帧还是「只能要不起」的那一步
       root.classList.toggle('can-move', canAct);
 
-      const kids = [el('div', { class: 'ddz-rail' }), el('div', { class: 'ddz-top' }), el('div', { class: 'ddz-wm' }, '斗')];
+      const kids = [];
       const calm = reduced();
       const T = now();
       const within = (t0, dur) => !calm && t0 !== null && t0 !== undefined && T - t0 < dur;
@@ -1125,7 +1138,7 @@ export default {
       }
       // 不再是「只能要不起」的那一步：取消还没出手的自动要不起
       if (!autoKeep && autoPass.key) { clearTimeout(autoPass.timer); autoPass = { key: '', timer: null }; }
-      box.replaceChildren(...kids);
+      setLayer(box, felt, kids);
       if (box.querySelector('.tmr, .ddz-cd')) startTimerTick(root);
     }
 

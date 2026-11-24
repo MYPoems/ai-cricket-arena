@@ -38,8 +38,16 @@ svg.board.othello .oth-num-sh { fill: #1a0403; fill-opacity: .9; }
 svg.board.othello .oth-tag { font: 400 17px/1 var(--brush); fill: #e6c578; fill-opacity: .7; }
 svg.board.othello .oth-win { font: 400 19px/1 var(--brush); fill: #f3d27e; letter-spacing: .2em; }
 svg.board.othello .oth-pass { font: 600 12.5px/1 var(--sans); fill: #f08a74; letter-spacing: .12em; }
-svg.board.othello .oth-legal { pointer-events: none; animation: oth-breathe 2.2s ease-in-out infinite; }
-@keyframes oth-breathe { 0%, 100% { opacity: .5; } 50% { opacity: 1; } }
+/* 可落点：金色实心圆点，约格宽的 35%，半透明 */
+svg.board.othello .oth-legal { pointer-events: none; fill: #f3d27e; opacity: .55; stroke: #fff2c0; stroke-opacity: .5; stroke-width: 1; }
+/* 触屏两步落子：第一下先放一颗预览子（轻轻呼吸），再点同一格才落下 */
+svg.board.othello .oth-pre { pointer-events: none; }
+svg.board.othello .oth-pre use { animation: oth-pre 1.1s ease-in-out infinite; }
+svg.board.othello .oth-pre circle { fill: none; stroke: #f3d27e; stroke-width: 2.4; transform-box: fill-box; transform-origin: center; animation: oth-pre-ring 1.1s ease-out infinite; }
+@keyframes oth-pre { 0%, 100% { opacity: .62; } 50% { opacity: .9; } }
+@keyframes oth-pre-ring { from { transform: scale(.9); opacity: .9; } to { transform: scale(1.35); opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { svg.board.othello .oth-pre use, svg.board.othello .oth-pre circle { animation: none; } }
+@media (max-width: 640px) { svg.board.othello .oth-coord { font-size: 17px; fill-opacity: .85; } }
 svg.board.othello .oth-st, svg.board.othello .oth-mark { pointer-events: none; }
 svg.board.othello .oth-last { fill: #e2523d; stroke: #ffe9c8; stroke-width: 1.3; stroke-opacity: .8; }
 svg.board.othello .oth-best { fill: none; stroke: #f3d27e; stroke-width: 2.4; stroke-dasharray: 4 4; }
@@ -176,12 +184,28 @@ export default {
     const marks = svg('g');
     const fx2 = svg('g', { 'pointer-events': 'none' });
     const ghost = svg('use', { class: 'oth-ghost', href: `#${id}-db`, x: -200, y: -200 });
+    const preDisc = svg('use', { href: `#${id}-db` });
+    const preRing = svg('circle', { r: R + 3 });
+    const pre = svg('g', { class: 'oth-pre', display: 'none' }, preDisc, preRing);
     const hit = svg('rect', { class: 'oth-hit', x: fx, y: fy, width: fs, height: fs, fill: 'transparent' });
-    el.append(grid, coords, head, legalG, shadows, stonesG, marks, ghost, fx2, hit);
+    el.append(grid, coords, head, legalG, shadows, stonesG, marks, ghost, pre, fx2, hit);
 
     // ---------- 交互 ----------
     let movable = null;
     let legal = new Set();
+    let preAt = null; // 触屏上第一下点的格，再点同一格才落子
+    const coarse = typeof matchMedia === 'function' ? matchMedia('(pointer: coarse)') : null;
+    /** 触屏（或手指点的）要两步确认；桌面鼠标仍是点一下就落 */
+    const twoStep = (evt) => !!coarse?.matches || evt.pointerType === 'touch' || evt.pointerType === 'pen';
+    const showPre = (l) => {
+      preAt = l;
+      const p = parse(l);
+      if (!p) { pre.setAttribute('display', 'none'); return; }
+      preDisc.setAttribute('href', `#${id}-d${movable}`);
+      preDisc.setAttribute('x', CX(p.x)); preDisc.setAttribute('y', CY(p.y));
+      preRing.setAttribute('cx', CX(p.x)); preRing.setAttribute('cy', CY(p.y));
+      pre.removeAttribute('display');
+    };
     const cellAt = (evt) => {
       const ctm = el.getScreenCTM();
       if (!ctm) return null;
@@ -193,6 +217,7 @@ export default {
     };
     const hideGhost = () => { ghost.setAttribute('x', -200); ghost.setAttribute('y', -200); hit.classList.remove('on'); };
     hit.addEventListener('pointermove', (evt) => {
+      if (evt.pointerType !== 'mouse') return; // 手指划过不画悬停子，触屏用预览子
       const l = movable ? cellAt(evt) : null;
       if (l && legal.has(l)) {
         const p = parse(l);
@@ -205,7 +230,11 @@ export default {
     hit.addEventListener('click', (evt) => {
       if (!movable) return;
       const l = cellAt(evt);
-      if (l && legal.has(l)) { hideGhost(); onAction(l); }
+      if (!l || !legal.has(l)) { if (twoStep(evt)) showPre(null); return; }
+      if (twoStep(evt) && preAt !== l) { hideGhost(); showPre(l); return; }
+      hideGhost();
+      showPre(null);
+      onAction(l);
     });
 
     // ---------- 增量画子 ----------
@@ -297,6 +326,7 @@ export default {
         legal = new Set(mv ? (actions ? actions.map((a) => a.id) : view.legal || []) : []);
         el.classList.toggle('can-move', !!mv);
         if (!mv) hideGhost();
+        if (preAt && !legal.has(preAt)) showPre(null);
 
         const moves = view.moves || [];
         const fresh = animate && shownMoves !== null && moves.length === shownMoves + 1;
@@ -332,7 +362,7 @@ export default {
         const show = view.over ? [] : mv ? [...legal] : view.legal || [];
         for (const l of show) {
           const p = parse(l);
-          if (p) legalG.append(svg('circle', { class: 'oth-legal', cx: CX(p.x), cy: CY(p.y), r: 17, fill: ref('legal') }));
+          if (p) legalG.append(svg('circle', { class: 'oth-legal', cx: CX(p.x), cy: CY(p.y), r: S * 0.175 }));
         }
 
         marks.replaceChildren();

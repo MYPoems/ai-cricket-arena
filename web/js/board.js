@@ -56,7 +56,14 @@ svg.board.xq { overflow: visible; }
 svg.board.xq .xq-coord { font: 600 15px/1 var(--num); fill: #e8c674; letter-spacing: .02em; }
 svg.board.xq .xq-river { font-family: var(--brush); font-size: 40px; letter-spacing: 18px; }
 svg.board.xq .xq-pc { cursor: default; }
-svg.board.xq.can-move .xq-pc.mine { cursor: pointer; }
+svg.board.xq.can-move .xq-pc.mine { cursor: grab; }
+/* 本人可走子时棋盘不让给浏览器的滚动、缩放手势，手指才能拖子 */
+svg.board.xq.can-move { touch-action: none; }
+svg.board.xq.dragging, svg.board.xq.dragging * { cursor: grabbing !important; }
+svg.board.xq .xq-pc.drag-ghost { opacity: .3; pointer-events: none; }
+svg.board.xq g.xq-pc.drag .xq-bd { transform: translate(-1px, -6px) scale(1.04); }
+svg.board.xq g.xq-pc.drag .xq-sh { transform: translate(9px, 15px) scale(1.2); opacity: .45; }
+svg.board.xq .xq-hit.on { fill: rgb(240 205 120 / .3); stroke: #f0cd78; stroke-width: 2.4; }
 svg.board.xq .xq-pc text { font: 900 31px/1 var(--serif); text-anchor: middle; dominant-baseline: central; pointer-events: none; }
 svg.board.xq .xq-pc.r .xq-t { fill: #b3261a; }
 svg.board.xq .xq-pc.b .xq-t { fill: #1f140f; }
@@ -89,6 +96,113 @@ function injectStyle() {
 
 let seq = 0;
 
+/** 指针在 svg 坐标系里的位置 */
+function svgPoint(el, e) {
+  const m = el.getScreenCTM?.();
+  if (!m) return null;
+  return new DOMPoint(e.clientX, e.clientY).matrixTransform(m.inverse());
+}
+
+/**
+ * 拖子走棋（象棋、国际象棋共用）。按住己方棋子移动超过 3px 进入拖动：原位留一个淡影（.3），棋子跟着指针（放大 1.1、影子拉远），
+ * 合法落点照常显示，指针下的落点高亮；在合法落点松手就走子（和点两下走子同一条路），否则约 180ms 弹回原位、保持选中。
+ * 没拖起来（移动不到 3px）的按下、抬起不拦，照常走点击逻辑；拖完紧跟的那次 click 吞掉，免得把选中或升变框点掉。
+ * a: { pick(target) → 可拖的格 | null, node(格) → 棋子元素, home(格) → [x, y], at(x, y) → 格 | null,
+ *      start(格)：选中并画出落点, drop(from, to) → true（已走子 / 在等选升变，棋子停在落点）| false（弹回） }
+ * 落点判断看 el 里有没有 [data-to=格] 的点击区（两个棋盘的合法落点都这么画）。
+ */
+export function dragPieces(el, layer, a) {
+  let press = null, drag = null, squelch = 0;
+  const hit = (to) => (to === null ? null : el.querySelector(`[data-to="${to}"]`));
+  const hover = (to) => {
+    for (const n of el.querySelectorAll('[data-to].on')) n.classList.remove('on');
+    hit(to)?.classList.add('on');
+  };
+  const place = (g, [x, y], extra = '') => { g.style.transform = `translate(${x}px, ${y}px)${extra}`; };
+  const glide = (g, from, ms) => {
+    if (!from || !g.animate || reduceMotion()) return;
+    g.animate([{ transform: from }, { transform: g.style.transform }], { duration: ms, easing: 'cubic-bezier(.3, .7, .4, 1)' });
+  };
+
+  function begin(e) {
+    const sq = press.sq;
+    press = null;
+    a.start(sq);
+    const g = a.node(sq);
+    if (!g) return;
+    const ghost = g.cloneNode(true);
+    ghost.removeAttribute('data-sq');
+    ghost.classList.remove('sel');
+    ghost.classList.add('drag-ghost');
+    g.before(ghost);
+    layer.append(g);
+    g.classList.add('drag');
+    el.classList.add('dragging');
+    drag = { id: e.pointerId, sq, g, ghost };
+    try { el.setPointerCapture(e.pointerId); } catch { /* 指针已经抬起 */ }
+    move(e);
+  }
+  function move(e) {
+    const p = svgPoint(el, e);
+    if (!p) return;
+    place(drag.g, [p.x, p.y], ' scale(1.1)');
+    const to = a.at(p.x, p.y);
+    hover(to !== drag.sq && hit(to) ? to : null);
+  }
+  function end(e) {
+    const { id, sq, g, ghost } = drag;
+    drag = null;
+    hover(null);
+    el.classList.remove('dragging');
+    try { el.releasePointerCapture(id); } catch { /* 已释放 */ }
+    const from = g.style.transform;
+    g.classList.remove('drag');
+    if (ghost.isConnected) ghost.replaceWith(g);
+    else { g.remove(); return; } // 棋子已经重建，这个元素作废
+    const p = e ? svgPoint(el, e) : null;
+    const to = p ? a.at(p.x, p.y) : null;
+    if (to !== null && to !== sq && hit(to) && a.drop(sq, to)) {
+      g.parentNode?.append(g); // 走动的子画在最上面
+      place(g, a.home(to));
+      glide(g, from, 110);
+      return;
+    }
+    place(g, a.home(sq));
+    glide(g, from, 180);
+  }
+
+  el.addEventListener('pointerdown', (e) => {
+    squelch = 0; // 新的一次按下：拖完没跟来的 click 不再等
+    if (drag || !e.isPrimary || (e.pointerType === 'mouse' && e.button !== 0)) return;
+    const sq = a.pick(e.target);
+    press = sq === null || sq === undefined ? null : { id: e.pointerId, sq, x: e.clientX, y: e.clientY };
+  });
+  el.addEventListener('pointermove', (e) => {
+    if (drag) { if (e.pointerId === drag.id) move(e); return; }
+    if (press && e.pointerId === press.id && Math.hypot(e.clientX - press.x, e.clientY - press.y) >= 3) begin(e);
+  });
+  el.addEventListener('pointerup', (e) => {
+    press = null;
+    if (drag && e.pointerId === drag.id) { squelch = performance.now() + 400; end(e); }
+  });
+  const abort = (e) => { press = null; if (drag && (!e || e.pointerId === drag.id)) end(null); };
+  el.addEventListener('pointercancel', abort);
+  // 触屏按下时指针隐式被棋子元素捕获，改由 el 捕获时那个子元素会冒泡上来一个 lostpointercapture，不算
+  el.addEventListener('lostpointercapture', (e) => { if (e.target === el) abort(e); });
+  el.addEventListener('click', (e) => {
+    if (performance.now() < squelch) { squelch = 0; e.stopImmediatePropagation(); e.preventDefault(); }
+  }, true);
+  return { cancel: () => abort(null), get active() { return !!drag; } };
+}
+
+/** 拖到落点后服务端没认这步（出错、超时）：棋子滑回原位 */
+export function slideHome(g, home) {
+  if (!g?.isConnected) return;
+  const from = g.style.transform;
+  g.style.transform = `translate(${home[0]}px, ${home[1]}px)`;
+  if (from && g.animate && !reduceMotion()) g.animate([{ transform: from }, { transform: g.style.transform }], { duration: 220, easing: 'cubic-bezier(.3, .7, .4, 1)' });
+}
+
 /** 箭头多边形：杆宽 w，箭头宽 hw、长 hl；起点让开棋子中心一点 */
 export function arrowPath(x1, y1, x2, y2, { w = 10, hw = 26, hl = 22, start = 14, end = 6 } = {}) {
   const dx = x2 - x1, dy = y2 - y1, len = Math.hypot(dx, dy) || 1;
@@ -119,8 +233,42 @@ export class Board {
     this.above = svg('g', { 'pointer-events': 'none' }); // 落点金圈、选中圈
     this.overlay = svg('g');               // 合法落点
     this.arrows = svg('g', { 'pointer-events': 'none' });
-    this.el.append(this.below, this.ghosts, this.pieces, this.above, this.overlay, this.arrows);
+    this.dragLayer = svg('g', { 'pointer-events': 'none' }); // 拖动中的棋子
+    this.el.append(this.below, this.ghosts, this.pieces, this.above, this.overlay, this.arrows, this.dragLayer);
+    this.pending = null; // 拖到落点、等服务端回话的那一步 { from, to }
     this.el.addEventListener('click', (e) => this.#click(e));
+    this.drag = dragPieces(this.el, this.dragLayer, {
+      pick: (t) => {
+        const pc = this.state.movable && this.onMove ? t.closest?.('.xq-pc[data-sq]') : null;
+        const s = pc ? Number(pc.getAttribute('data-sq')) : null;
+        return s !== null && sideOf(this.state.board[s]) === this.state.movable ? s : null;
+      },
+      node: (s) => this.els.get(s),
+      home: (s) => [this.x(fileOf(s)), this.y(rankOf(s))],
+      at: (x, y) => {
+        const c = Math.round((x - GX) / S), rr = Math.round((y - GY) / S);
+        if (c < 0 || c > 8 || rr < 0 || rr > 9) return null;
+        return sq(this.flipped ? 8 - c : c, this.flipped ? rr : 9 - rr);
+      },
+      start: (s) => { this.selected = s; this.render(this.state, { animate: false }); },
+      drop: (from, to) => {
+        this.selected = null;
+        const p = this.pending = { from, to };
+        const done = this.onMove(this.#iccs(from, to));
+        this.render(this.state, { animate: false });
+        // 服务端没认这步（出错）：过一会儿棋盘还没变，棋子滑回原位
+        Promise.resolve(done).catch(() => {}).finally(() => setTimeout(() => {
+          if (this.pending !== p) return;
+          this.pending = null;
+          slideHome(this.els.get(from), [this.x(fileOf(from)), this.y(rankOf(from))]);
+        }, 2000));
+        return true;
+      },
+    });
+  }
+
+  #iccs(from, to) {
+    return `${String.fromCharCode(97 + fileOf(from))}${rankOf(from)}${String.fromCharCode(97 + fileOf(to))}${rankOf(to)}`;
   }
 
   url(name) { return `url(#${this.id}${name})`; }
@@ -296,12 +444,17 @@ export class Board {
   render(state, { animate = true } = {}) {
     const prev = this.state;
     this.state = state;
+    const sig = state.board.join(',') + (this.flipped ? '|f' : '');
+    if (this.drag?.active && (!state.movable || sig !== this.sig)) this.drag.cancel();
     if (this.selected !== null && (!state.movable || state.board[this.selected] !== prev.board?.[this.selected])) this.selected = null;
     this.el.classList.toggle('can-move', !!state.movable);
     const last = state.lastMove ? iccsToMove(state.lastMove) : null;
-    const sig = state.board.join(',') + (this.flipped ? '|f' : '');
     let moved = false;
     if (sig !== this.sig) {
+      // 拖过去的那步：棋子已经在落点上了，不再从起点滑一遍
+      const pend = this.pending;
+      this.pending = null;
+      if (pend && last && pend.from === last.from && pend.to === last.to) animate = false;
       moved = this.#buildPieces(this.sig === null ? null : prev.board, last, animate);
       this.sig = sig;
     }
@@ -459,8 +612,7 @@ export class Board {
       const to = Number(t.getAttribute('data-to'));
       const from = this.selected;
       this.selected = null;
-      const iccs = `${String.fromCharCode(97 + fileOf(from))}${rankOf(from)}${String.fromCharCode(97 + fileOf(to))}${rankOf(to)}`;
-      this.onMove(iccs);
+      this.onMove(this.#iccs(from, to));
       this.render(this.state, { animate: false });
       return;
     }

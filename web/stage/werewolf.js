@@ -402,6 +402,7 @@ export default {
   },
 
   createStage({ onAction }) {
+    const wwListRO = typeof ResizeObserver === 'function' ? new ResizeObserver((es) => { for (const e of es) e.target.scrollTop = e.target.scrollHeight; }) : { disconnect() {}, observe(l) { l.scrollTop = l.scrollHeight; } };
     injectStyle();
     const root = el('div', { class: 'ww-stage' });
 
@@ -482,7 +483,10 @@ export default {
         // 白天：发言改到对局页焦点区按人看，这里只留公告和票型
         else parts.push(newsBlock(view), todayVotes(view).length || isVoting(view) ? votePanel(view) : null);
         body.replaceChildren(...parts.filter(Boolean));
-        for (const l of body.querySelectorAll('.ww-list')) l.scrollTop = l.scrollHeight; // 最新的在下面
+        // 最新的在下面。滚动交给 ResizeObserver 在浏览器排完版后做（新列表第一次被观察时就会回调）：
+        // 刚换完内容马上读 scrollHeight 会逼浏览器在对局页一连串改动中间多排一次版
+        wwListRO.disconnect();
+        for (const l of body.querySelectorAll('.ww-list')) wwListRO.observe(l);
       },
     };
   },

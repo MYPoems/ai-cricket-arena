@@ -45,6 +45,9 @@ function liveCard(db, arena, id) {
     redE: last?.eval?.e0 ?? last?.eval?.redE ?? m.options?.startEval?.e0 ?? m.options?.startEval?.redE ?? null,
     thinking: Object.values(rt?.partials || {}).find((p) => !(hiddenLive && p.secret))?.seat || Object.keys(rt?.humans || {}).find((s) => !rt.partials[s]?.secret) || null,
     paused: !!rt?.paused,
+    // 在等真人出手（大厅擂台不推荐这种局）；最近一步的时间（挂着没人动的局沉下去）
+    humanWaiting: Object.keys(rt?.humans || {}).length > 0,
+    lastAt: db.get('SELECT created_at FROM turns WHERE match_id = ? ORDER BY ply DESC LIMIT 1', id)?.created_at || m.created_at,
     started_at: m.started_at,
   };
 }

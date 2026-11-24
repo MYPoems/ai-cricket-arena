@@ -59,15 +59,18 @@ export async function roomsView(root, { meta, go, session }) {
   return () => { alive = false; stop(); };
 }
 
-export async function roomView(root, id, { go, session, characters }) {
+export async function roomView(root, id, { go, session, characters, meta }) {
   let room = await api(`/rooms/${id}`);
   const me = session.user;
   const isHost = () => me && (room.host?.id === me.id || me.role === 'admin');
   setTitle(room.title, '组局');
 
   function pickDialog(seat) {
-    const mine = characters.filter((c) => c.mine && !c.archived);
-    const sys = isHost() ? characters.filter((c) => c.system) : [];
+    // 只列会下这个游戏的（引擎只会自己那一种棋）；系统选手只在「系统选手」里出现一次
+    const g = meta?.games?.find((x) => x.id === room.game);
+    const fits = (c) => c.kind !== 'engine' || (c.provider || 'pikafish') === g?.features?.evalEngine;
+    const mine = characters.filter((c) => c.mine && !c.archived && !c.system && fits(c));
+    const sys = isHost() ? characters.filter((c) => c.system && fits(c)) : [];
     const taken = new Set(Object.values(room.seats).filter(Boolean).map((s) => s.character.id));
     const item = (c) => h('button', { type: 'button', class: `pick ${taken.has(c.id) && !c.system ? 'dis' : ''}`, disabled: taken.has(c.id) && !c.system, title: taken.has(c.id) && !c.system ? '已经坐在别的座位上了' : null, onclick: guard(async () => {
       room = await post(`/rooms/${id}/seat`, { seat, characterId: c.id });
@@ -105,7 +108,7 @@ export async function roomView(root, id, { go, session, characters }) {
         h('div', { class: 'col' },
           h('div', { class: 'card framed col' },
             h('h3', {}, statusText),
-            room.status === 'started' ? h('a', { class: 'btn primary lg', href: `#/match/${room.matchId}` }, '进入观战') : null,
+            room.status === 'started' ? h('a', { class: 'btn primary lg', href: `#/match/${room.matchId}` }, mySeatName() ? `进入对局（你在${mySeatName()}）` : '进入观战') : null,
             room.status === 'open' && isHost() ? h('button', { class: 'btn primary lg', type: 'button', disabled: !full, onclick: guard(async () => { room = await post(`/rooms/${id}/start`); go(`#/match/${room.matchId}`); }) }, full ? '开局' : '坐满后才能开局') : null,
             room.status === 'open' ? h('div', { class: 'small muted' }, '把这个页面的链接发给朋友，他们登录后可以把自己的蛐蛐拉进空位。') : null,
             room.status === 'open' ? h('button', { class: 'btn sm', type: 'button', onclick: async () => { try { await navigator.clipboard.writeText(location.href); toast('链接已复制'); } catch { toast(location.href); } } }, icon('link', 16), '复制邀请链接') : null,
@@ -116,5 +119,17 @@ export async function roomView(root, id, { go, session, characters }) {
           h('div', { class: 'card quiet pad small muted' }, '组局是娱乐赛：不计积分，也不占蛐蛐每天主动参加对局的名额，没有次数限制。每只蛐蛐用的是它主人的 API 密钥。'))));
   }
   draw();
-  return listen([`room:${id}`], (e) => { if (e.type === 'room') { room = e.room; draw(); } });
+  // 开局了：自己坐在里面（本人入座）就直接进对局，不用再点「观战」
+  function mySeatName() {
+    if (!me) return null;
+    const hit = Object.entries(room.seats || {}).find(([, s]) => s?.character?.kind === 'human' && s.character.owner_id === me.id);
+    return hit ? room.seatNames[hit[0]] : null;
+  }
+  return listen([`room:${id}`], (e) => {
+    if (e.type !== 'room') return;
+    const was = room.status;
+    room = e.room;
+    if (was !== 'started' && room.status === 'started' && room.matchId && mySeatName()) { toast(`开局了，你在${mySeatName()}`); go(`#/match/${room.matchId}`); return; }
+    draw();
+  });
 }

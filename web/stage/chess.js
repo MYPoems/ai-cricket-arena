@@ -9,7 +9,7 @@
 // 玩家本人执子时：点选、合法落点（圆点 / 吃子圈）、升变选择（后车象马）。
 
 import { parseFen, legalMoves, moveToUci } from '/games/chess/rules.js';
-import { arrowPath } from '../js/board.js';
+import { arrowPath, dragPieces, slideHome } from '../js/board.js';
 
 const NS = 'http://www.w3.org/2000/svg';
 const S = 64;          // 格宽
@@ -126,7 +126,11 @@ svg.board.chs { overflow: visible; }
 .mthumb > .board-wrap > svg.board.chs { position: absolute; inset: 0; }
 svg.board.chs .ch-coord { font: 600 15px/1 var(--num); fill: #e8c674; text-anchor: middle; dominant-baseline: central; }
 svg.board.chs .ch-pc { cursor: default; }
-svg.board.chs.can-move .ch-pc.mine { cursor: pointer; }
+svg.board.chs.can-move .ch-pc.mine { cursor: grab; }
+/* 本人可走子时棋盘不让给浏览器的滚动、缩放手势，手指才能拖子 */
+svg.board.chs.can-move { touch-action: none; }
+svg.board.chs.dragging, svg.board.chs.dragging * { cursor: grabbing !important; }
+svg.board.chs .ch-pc.drag-ghost { opacity: .3; pointer-events: none; }
 svg.board.chs .ch-bd, svg.board.chs .ch-sh { transition: transform .18s var(--ease), opacity .18s; }
 svg.board.chs .ch-pc.sel .ch-bd { transform: translate(-1px, -5px) scale(1.06); }
 svg.board.chs .ch-pc.sel .ch-sh { transform: translate(4px, 3px) scale(1.15); opacity: .5; }
@@ -141,6 +145,9 @@ svg.board.chs .ch-dot { fill: rgb(40 18 6 / .42); pointer-events: none; }
 svg.board.chs .ch-cap { fill: none; stroke: rgb(40 18 6 / .45); stroke-width: 5; pointer-events: none; }
 svg.board.chs .ch-hit { fill: transparent; cursor: pointer; }
 svg.board.chs .ch-hit:hover { fill: rgb(240 205 120 / .3); }
+svg.board.chs .ch-hit.on { fill: rgb(240 205 120 / .34); stroke: #f6d685; stroke-width: 3; }
+svg.board.chs g.ch-pc.drag .ch-bd { transform: translate(-1px, -6px) scale(1.04); }
+svg.board.chs g.ch-pc.drag .ch-sh { transform: translate(7px, 6px) scale(1.25); opacity: .42; }
 svg.board.chs .ch-arrow { fill: #2f7a68; fill-opacity: .82; stroke: #123a30; stroke-width: 1.2; stroke-opacity: .6; }
 svg.board.chs .ch-arrow.hint { fill: #1c120c; fill-opacity: .5; stroke: none; }
 svg.board.chs .ch-promo-bg { fill: #0b0302; opacity: .62; cursor: pointer; }
@@ -293,8 +300,9 @@ function createStage({ onAction }) {
   const overlay = svg('g');                               // 合法落点
   const arrows = svg('g', { 'pointer-events': 'none' });
   const fx = svg('g', { 'pointer-events': 'none' });      // 升变闪光
+  const dragLayer = svg('g', { 'pointer-events': 'none' }); // 拖动中的棋子
   const promoLayer = svg('g');
-  el.append(coords, below, ghosts, pieces, overlay, arrows, fx, promoLayer);
+  el.append(coords, below, ghosts, pieces, overlay, arrows, fx, dragLayer, promoLayer);
 
   function drawCoords() {
     coords.replaceChildren();
@@ -355,6 +363,10 @@ function createStage({ onAction }) {
 
   function buildPieces(prevBoard, last, animate) {
     const b = view.board;
+    // 拖过去的那步：棋子已经在落点上了，不再从起点滑一遍
+    const pend = pending;
+    pending = null;
+    if (pend && last && pend.from === last.from && pend.to === last.to) animate = false;
     const mv = animate && !reduceMotion() ? readMove(prevBoard, b, last) : null;
     for (const a of el.getAnimations?.({ subtree: true }) || []) if (a.id === 'ch-move') a.cancel();
     ghosts.replaceChildren();
@@ -525,7 +537,8 @@ function createStage({ onAction }) {
       const pr = promo;
       promo = null;
       selected = null;
-      if (opt) onAction(`${sqName(pr.from)}${sqName(pr.to)}${opt.getAttribute('data-promo')}`);
+      if (opt) submit(`${sqName(pr.from)}${sqName(pr.to)}${opt.getAttribute('data-promo')}`, pr.dragged ? pr : null);
+      else if (pr.dragged) slideHome(els.get(pr.from), [X(pr.from), Y(pr.from)]); // 拖到底线后取消升变：兵回原位
       draw(false);
       return;
     }
@@ -551,11 +564,51 @@ function createStage({ onAction }) {
     if (selected !== null) { selected = null; draw(false); }
   });
 
+  /** 提交一步。拖过去的（drop 有值）：记下来，棋盘变了就不再播滑动；服务端没认（出错）时过一会儿滑回原位 */
+  let pending = null;
+  function submit(mid, drop = null) {
+    const p = drop ? { from: drop.from, to: drop.to } : null;
+    if (p) pending = p;
+    const done = onAction(mid);
+    if (!p) return;
+    Promise.resolve(done).catch(() => {}).finally(() => setTimeout(() => {
+      if (pending !== p) return;
+      pending = null;
+      slideHome(els.get(p.from), [X(p.from), Y(p.from)]);
+    }, 2000));
+  }
+
+  const drag = dragPieces(el, dragLayer, {
+    pick: (t) => {
+      const pc = opts.movable && !promo ? t.closest?.('.ch-pc[data-sq]') : null;
+      const s = pc ? Number(pc.getAttribute('data-sq')) : null;
+      return s !== null && sideOf(view.board[s]) === opts.movable ? s : null;
+    },
+    node: (s) => els.get(s),
+    home: (s) => [X(s), Y(s)],
+    at: (x, y) => {
+      const c = Math.floor((x - F) / S), r = Math.floor((y - F) / S);
+      if (c < 0 || c > 7 || r < 0 || r > 7) return null;
+      return (flipped ? r : 7 - r) * 8 + (flipped ? 7 - c : c);
+    },
+    start: (s) => { selected = s; promo = null; draw(false); },
+    drop: (from, to) => {
+      const t = targets().find((x) => x.to === to);
+      if (!t) return false;
+      if (t.ids.length > 1) { promo = { from, to, dragged: true }; draw(false); return true; }
+      selected = null;
+      submit(t.ids[0], { from, to });
+      draw(false);
+      return true;
+    },
+  });
+
   drawCoords();
   return {
     el,
     setFlipped(v) {
       if (flipped === !!v) return;
+      drag.cancel();
       flipped = !!v;
       sig = null;
       drawCoords();
@@ -564,9 +617,14 @@ function createStage({ onAction }) {
     render(v, { movable = null, actions = null, arrows: ar = [], animate = true } = {}) {
       prevBoard = view.board;
       const changed = (v.fen || '') !== (view.fen || '');
+      if (drag.active && (!movable || changed)) drag.cancel();
       view = { ...v, ep: (v.fen || '').split(' ')[3] };
       opts = { movable, actions, arrows: ar };
-      if (!movable || changed) { selected = null; promo = null; }
+      if (!movable || changed) {
+        if (promo?.dragged && !changed) slideHome(els.get(promo.from), [X(promo.from), Y(promo.from)]);
+        selected = null;
+        promo = null;
+      }
       if (selected !== null && sideOf(view.board[selected]) !== movable) selected = null;
       el.classList.toggle('can-move', !!movable);
       draw(animate && changed);

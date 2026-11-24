@@ -48,6 +48,14 @@ svg.board.gomoku .gk-threat.four { animation-duration: 1.4s; }
 svg.board.gomoku .gk-last { fill: #e2523d; stroke: #fff1d6; stroke-width: 1.2; stroke-opacity: .7; }
 svg.board.gomoku .gk-best { fill: none; stroke: #c42d1e; stroke-width: 2.4; stroke-dasharray: 4 4; }
 svg.board.gomoku .gk-ghost { opacity: .5; pointer-events: none; }
+/* 触屏两步落子：第一下先放一颗预览子（轻轻呼吸），再点同一点才落下 */
+svg.board.gomoku .gk-pre { pointer-events: none; }
+svg.board.gomoku .gk-pre use { animation: gk-pre 1.1s ease-in-out infinite; }
+svg.board.gomoku .gk-pre circle { fill: none; stroke: #f3d27e; stroke-width: 2.2; transform-box: fill-box; transform-origin: center; animation: gk-pre-ring 1.1s ease-out infinite; }
+@keyframes gk-pre { 0%, 100% { opacity: .62; } 50% { opacity: .9; } }
+@keyframes gk-pre-ring { from { transform: scale(.9); opacity: .9; } to { transform: scale(1.45); opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { svg.board.gomoku .gk-pre use, svg.board.gomoku .gk-pre circle { animation: none; } }
+@media (max-width: 640px) { svg.board.gomoku .gk-coord { font-size: 18px; fill-opacity: .82; } }
 svg.board.gomoku.can-move { cursor: pointer; }
 svg.board.gomoku .gk-ripple { fill: none; stroke: #fff4d8; stroke-width: 2; vector-effect: non-scaling-stroke; pointer-events: none; }
 svg.board.gomoku .gk-win-glow { stroke: #f3d27e; stroke-opacity: .2; stroke-width: 11; stroke-linecap: round; fill: none; }
@@ -178,11 +186,26 @@ export default {
     const marks = svg('g');
     const winG = svg('g');
     const ghost = svg('use', { class: 'gk-ghost', href: `#${id}-sb`, x: -200, y: -200 });
-    el.append(grid, coords, threatsG, shadows, stonesG, winG, marks, ghost);
+    const preStone = svg('use', { href: `#${id}-sb` });
+    const preRing = svg('circle', { r: R + 2 });
+    const pre = svg('g', { class: 'gk-pre', display: 'none' }, preStone, preRing);
+    el.append(grid, coords, threatsG, shadows, stonesG, winG, marks, ghost, pre);
 
     // ---------- 交互 ----------
     let board = [];
     let movable = null;
+    let preAt = null; // 触屏上第一下点的位置 { x, y }，再点同一点才落子
+    const coarse = typeof matchMedia === 'function' ? matchMedia('(pointer: coarse)') : null;
+    /** 触屏（或手指点的）要两步确认；桌面鼠标仍是点一下就落 */
+    const twoStep = (evt) => !!coarse?.matches || evt.pointerType === 'touch' || evt.pointerType === 'pen';
+    const showPre = (p) => {
+      preAt = p;
+      if (!p) { pre.setAttribute('display', 'none'); return; }
+      preStone.setAttribute('href', `#${id}-s${movable}`);
+      preStone.setAttribute('x', X(p.x)); preStone.setAttribute('y', Y(p.y));
+      preRing.setAttribute('cx', X(p.x)); preRing.setAttribute('cy', Y(p.y));
+      pre.removeAttribute('display');
+    };
     const pointAt = (evt) => {
       const ctm = el.getScreenCTM();
       if (!ctm) return null;
@@ -194,6 +217,7 @@ export default {
     };
     const hideGhost = () => { ghost.setAttribute('x', -200); ghost.setAttribute('y', -200); };
     el.addEventListener('pointermove', (evt) => {
+      if (evt.pointerType !== 'mouse') return; // 手指划过不画悬停子，触屏用预览子
       const p = movable ? pointAt(evt) : null;
       if (p && !board[p.y * N + p.x]) {
         ghost.setAttribute('href', `#${id}-s${movable}`);
@@ -204,7 +228,11 @@ export default {
     el.addEventListener('click', (evt) => {
       if (!movable) return;
       const p = pointAt(evt);
-      if (p && !board[p.y * N + p.x]) { hideGhost(); onAction(label(p.x, p.y)); }
+      if (!p || board[p.y * N + p.x]) return;
+      if (twoStep(evt) && !(preAt && preAt.x === p.x && preAt.y === p.y)) { hideGhost(); showPre(p); return; }
+      hideGhost();
+      showPre(null);
+      onAction(label(p.x, p.y));
     });
 
     // ---------- 增量画子 ----------
@@ -288,6 +316,7 @@ export default {
         movable = mv;
         el.classList.toggle('can-move', !!mv);
         if (!mv) hideGhost();
+        if (preAt && (!mv || board[preAt.y * N + preAt.x])) showPre(null);
 
         const moves = view.moves || [];
         const fresh = animate && shownMoves !== null && moves.length === shownMoves + 1;
