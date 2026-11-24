@@ -10,7 +10,7 @@ import { scryptSync, randomBytes, timingSafeEqual, createHash } from 'node:crypt
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { newId, now } from './db.js';
-import { HttpError } from './http.js';
+import { HttpError, ipOf } from './http.js';
 
 export const ADMIN_ID = 'local';
 const COOKIE = 'dsqq_sid';
@@ -111,9 +111,14 @@ function limit(key, max, windowMs) {
   if (arr.length >= max) throw new HttpError(429, '操作太频繁，请稍后再试');
   arr.push(t);
   hits.set(key, arr);
-  if (hits.size > 5000) hits.clear();
+  // 记录太多时只清掉最旧的一半（整个清空的话，有人灌一堆不同的键就能把自己的限速一起冲掉）
+  if (hits.size > 5000) for (const k of [...hits.keys()].slice(0, 2500)) hits.delete(k);
 }
-const ipOf = (req) => String(req.headers['cf-connecting-ip'] || req.headers['x-forwarded-for'] || req.socket?.remoteAddress || '').split(',')[0].trim();
+
+// 用户名不存在时也算一次同样耗时的哈希：从响应快慢分不出这个用户名有没有注册
+const DUMMY_HASH = hashPassword(randomBytes(12).toString('base64url'));
+/** 还在排队等审批的申请最多这么多（再多先让庄家处理） */
+const MAX_PENDING = 200;
 
 // ---------- 路由 ----------
 
@@ -132,6 +137,7 @@ export function authRoutes(router, { db, hub, onApproved }) {
     const username = String(body.username || '').trim();
     checkCredentials(username, body.password);
     if (db.get('SELECT 1 FROM users WHERE username = ?', username)) throw new HttpError(409, '这个用户名已经被用了');
+    if (db.get("SELECT COUNT(*) AS n FROM users WHERE status = 'pending'").n >= MAX_PENDING) throw new HttpError(429, '等待审批的申请太多了，请过一阵再来');
     const note = String(body.note || '').trim().slice(0, 200);
     const id = newId('u');
     db.insert('users', { id, name: username, username, pass_hash: hashPassword(body.password), role: 'user', status: 'pending', note, created_at: now() });
@@ -142,9 +148,13 @@ export function authRoutes(router, { db, hub, onApproved }) {
   router.post('/api/auth/login', ({ req, res, body }) => {
     const username = String(body.username || '').trim();
     limit(`login:${ipOf(req)}`, 10, 600e3);
+    // 超长的用户名、密码不可能登录成功，不进限速表、也不拿去算哈希
+    const password = String(body.password ?? '');
+    if (!username || username.length > 64 || password.length > 200) throw new HttpError(401, '用户名或密码不对');
     limit(`login-u:${username}`, 10, 600e3);
     const u = db.get('SELECT * FROM users WHERE username = ?', username);
-    if (!u || !verifyPassword(body.password, u.pass_hash)) throw new HttpError(401, '用户名或密码不对');
+    const ok = verifyPassword(password, u?.pass_hash || DUMMY_HASH);
+    if (!u || !u.pass_hash || !ok) throw new HttpError(401, '用户名或密码不对');
     if (u.status === 'pending') throw new HttpError(403, '注册申请还在等庄家审批');
     if (u.status === 'rejected') throw new HttpError(403, '注册申请没有通过');
     if (u.status !== 'active') throw new HttpError(403, '账号已停用');
@@ -161,7 +171,8 @@ export function authRoutes(router, { db, hub, onApproved }) {
 
   router.post('/api/auth/password', ({ req, body }) => {
     const u = db.get('SELECT * FROM users WHERE id = ?', req.user.id);
-    if (!verifyPassword(body.old, u.pass_hash)) throw new HttpError(400, '原密码不对');
+    limit(`pw:${u.id}`, 10, 600e3); // 拿到登录状态的人不能拿这个接口慢慢试原密码
+    if (String(body.old ?? '').length > 200 || !verifyPassword(body.old, u.pass_hash)) throw new HttpError(400, '原密码不对');
     checkCredentials(u.username, body.password);
     db.update('users', { id: u.id }, { pass_hash: hashPassword(body.password) });
     // 其他设备上的登录全部失效，只留当前这个

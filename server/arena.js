@@ -10,6 +10,8 @@ import { moveQuality } from './evaluator.js';
 import { HttpError } from './http.js';
 
 export const MAX_RETRIES = 3; // 无效行动最多重来 3 次，仍无效判负
+export const MAX_LIVE = 200; // 全站同时进行的对局上限（手动开局、组局）
+export const MAX_LIVE_PER_USER = 10; // 一个用户同时开着的对局上限
 const NOTES_IN_PROMPT = 5;
 
 class Abort extends Error {}
@@ -67,8 +69,9 @@ async function withRetry(fn, signal, onRetry) {
       if (!transient || i >= RETRY_WAITS.length) throw err;
       onRetry?.(err, i + 1, RETRY_WAITS[i]);
       await new Promise((resolve) => {
-        const t = setTimeout(resolve, RETRY_WAITS[i]);
-        signal?.addEventListener('abort', () => { clearTimeout(t); resolve(); }, { once: true });
+        const onAbort = () => { clearTimeout(t); resolve(); };
+        const t = setTimeout(() => { signal?.removeEventListener('abort', onAbort); resolve(); }, RETRY_WAITS[i]);
+        signal?.addEventListener('abort', onAbort, { once: true });
       });
       if (signal?.aborted) throw err;
     }
@@ -180,7 +183,10 @@ export class Arena {
     }
     const humans = Object.values(chars).filter((c) => c.kind === 'human');
     if (new Set(humans.map((c) => c.id)).size < humans.length) throw new HttpError(400, '同一位真人玩家不能占两个座位');
-    const setup = { ...(options.setup || {}), ...(options.fen ? { fen: options.fen } : {}) };
+    const agents = Object.values(chars).filter((c) => c.kind === 'agent');
+    const outsiders = humans.length + agents.length;
+    // game.newSetup：新开的对局默认带上的开局参数（例如规则版本；旧记录没有它，重放时按旧规则）
+    const setup = { ...(game.newSetup || {}), ...(options.setup || {}), ...(options.fen ? { fen: options.fen } : {}) };
     if (mode === 'ranked') {
       const bad = Object.values(chars).filter((c) => !canRank(this.db, c));
       if (bad.length) throw new HttpError(400, `${bad.map((c) => c.name).join('、')} 不能参加排位赛（本机订阅和自定义接口只能下娱乐赛）`);
@@ -216,8 +222,9 @@ export class Arena {
       options: {
         showLegal: options.showLegal !== false,
         delayMs: Math.max(0, Math.min(10000, Number(options.delayMs ?? (mode === 'casual' ? 600 : 0)))),
-        // 隐藏信息游戏里有玩家本人时强制隐藏思考（模型会在思考里写自己的牌、词、身份）
-        hideThoughts: humans.length > 0 && game.features?.hidden ? true : options.hideThoughts ?? humans.length > 0,
+        // 隐藏信息游戏里有玩家本人或自带 agent 时强制隐藏思考（模型会在思考里写自己的牌、词、身份；agent 和它的主人能看对局页）。
+        // 有 agent 的排位赛也隐藏：对手的思考实时公开等于把计划告诉 agent。都在对局结束后公开
+        hideThoughts: (outsiders > 0 && game.features?.hidden) || (agents.length > 0 && mode === 'ranked') ? true : options.hideThoughts ?? humans.length > 0,
         ...(options.series ? { series: options.series } : {}),
       },
       seats: Object.fromEntries(seatIds.map((s) => [s, seats[s]])),
@@ -235,6 +242,17 @@ export class Arena {
     return m.id;
   }
 
+  /**
+   * 手动开局、组局开局的上限：全站同时进行的对局数，和一个用户同时开着的对局数（庄家不限；自动匹配另有并发设置）。
+   * 每盘对局都占着内置 AI / 引擎的算力和一条循环，不设上限的话一个账号就能把服务拖垮
+   */
+  checkCapacity(user) {
+    if (!user || user.role === 'admin') return;
+    if (this.live.size >= MAX_LIVE) throw new HttpError(429, '现在进行中的对局太多了，等几盘结束再开');
+    const mine = this.db.get("SELECT COUNT(*) AS n FROM matches WHERE status = 'running' AND created_by = ?", user.id).n;
+    if (mine >= MAX_LIVE_PER_USER) throw new HttpError(429, `你同时开着 ${mine} 盘对局（最多 ${MAX_LIVE_PER_USER} 盘），等几盘结束再开`);
+  }
+
   played(characterId, gameId) {
     return this.db.get('SELECT played FROM ratings WHERE character_id = ? AND game = ?', characterId, gameId)?.played || 0;
   }
@@ -242,6 +260,15 @@ export class Arena {
   /** 真人玩家的座位（可以有多位，各自是不同账号） */
   humanSeats(m) {
     return Object.entries(m.seats).filter(([, cid]) => this.db.get('SELECT kind FROM characters WHERE id = ?', cid)?.kind === 'human').map(([seat]) => seat);
+  }
+
+  /**
+   * 能自己打开网页、请求公开接口的座位：真人，和自带 agent（agent 是外面的程序，它和它的主人都能请求对局详情和事件流）。
+   * 隐藏信息对局里只要有这样的座位，进行中就不对外给上帝视角、种子、别人的思考和私密行动；
+   * 有引擎评估的棋类里，进行中也不对外给评估（里面有引擎推荐的最佳着法）。
+   */
+  outsideSeats(m) {
+    return Object.entries(m.seats).filter(([, cid]) => ['human', 'agent'].includes(this.db.get('SELECT kind FROM characters WHERE id = ?', cid)?.kind)).map(([seat]) => seat);
   }
 
   /** 这个账号在这盘里坐的真人座位 */
@@ -270,7 +297,11 @@ export class Arena {
           this.#finish(m, rt, null, `接口错误：${err.message}`);
         }
       })
-      .finally(() => this.live.delete(matchId));
+      .finally(() => {
+        this.live.delete(matchId);
+        // 对局已经结束：还挂着的真人等待（限时器）、agent 回合、停顿都随之取消，不留到超时才清
+        rt.abort.abort();
+      });
   }
 
   /** 局面评估（有引擎的游戏）；返回 { raw, e0 }，e0 为第一个座位的期望得分 */
@@ -290,15 +321,17 @@ export class Arena {
     let state = replay(game, recordOf(m));
     const channel = `match:${m.id}`;
     const hidden = !!game.features?.hidden;
-    const humans = this.humanSeats(m);
-    const publicView = () => (hidden && humans.length ? null : game.view(state, null)); // 有真人时不广播局面，各自刷新详情
+    const humans = this.outsideSeats(m); // 真人和自带 agent：对它们要保密的对局
+    const publicView = () => (hidden && humans.length ? null : game.view(state, null)); // 有真人（或 agent）时不广播局面，各自刷新详情
+    // 进行中不对外给引擎评估（含最佳着法）：真人和 agent 都能从事件流里读到，等于开着引擎下棋；评估照常入库，结束后公开
+    const evalPublic = !humans.length;
 
     if (!m.options.startEval && game.evalSpec) {
       const ev = await this.#evaluate(game, state, seatIds);
       if (ev) {
         m.options.startEval = { e: ev.raw.e, best: ev.raw.best, source: ev.raw.source, e0: ev.e0, redE: ev.e0 };
         this.db.update('matches', { id: m.id }, { options: m.options });
-        this.hub.emit(channel, { type: 'eval', ply: 0, eval: m.options.startEval });
+        if (evalPublic) this.hub.emit(channel, { type: 'eval', ply: 0, eval: m.options.startEval });
       }
     }
     let prevEval = null;
@@ -383,7 +416,7 @@ export class Arena {
             if (prevEval?.raw && prevEval.persp === seat && after.persp !== seat) quality = moveQuality(prevEval.raw, after.raw, res.action);
             const ev = { raw: after.raw, persp: after.persp, e0: after.e0, redE: after.e0, source: after.raw.source, ...(quality ? { quality } : {}) };
             this.db.update('turns', { match_id: m.id, ply }, { eval: ev });
-            this.hub.emit(channel, { type: 'eval', ply, eval: ev });
+            if (evalPublic) this.hub.emit(channel, { type: 'eval', ply, eval: ev });
             prevEval = after;
           }
         }
@@ -419,11 +452,29 @@ export class Arena {
     const { ch, game, state, seat, offer, rt, auto } = ctx;
     // 代答步：不调模型、不提示真人，直接交代答行动。私密步要像真的一样停一会儿（1.5–5 秒随机），
     // 旁人收到的事件和真的私密行动一样（human_turn 占位 + 私密 move），从时间上也分不出来
+    const secret = !!rt.partials[seat]?.secret;
+    const pad = AUTO_DELAY_MS[0] + Math.random() * (AUTO_DELAY_MS[1] - AUTO_DELAY_MS[0]);
     if (auto !== null && auto !== undefined) {
-      if (rt.partials[seat]?.secret) await sleep(AUTO_DELAY_MS[0] + Math.random() * (AUTO_DELAY_MS[1] - AUTO_DELAY_MS[0]), rt);
+      if (secret) await sleep(pad, rt);
       if (rt.abort.signal.aborted) throw new Abort();
       return { action: auto };
     }
+    // 真的私密行动（夜里）：内置 AI、随机选手瞬间就答完，而代答步要停 1.5–5 秒——旁人掐表就能分出哪一步真有人在行动
+    //（比如预言家还活着没有）。所以不是真人的私密步也至少停这么久再交；模型、agent 想得更久就按实际的
+    if (secret && ch.kind !== 'human') {
+      const t0 = Date.now();
+      const res = await this.#askMove(ctx);
+      const left = pad - (Date.now() - t0);
+      if (left > 0) await sleep(left, rt);
+      if (rt.abort.signal.aborted) throw new Abort();
+      return res;
+    }
+    return this.#askMove(ctx);
+  }
+
+  /** 真的去问这个座位的选手要行动 */
+  async #askMove(ctx) {
+    const { ch, game, state, seat, offer } = ctx;
     // 内置 AI 和引擎：自己不占优（期望得分低于 55%）就接受和棋；随机走子不接受
     if (offer && (ch.kind === 'builtin' || ch.kind === 'engine') && game.evalSpec) {
       const spec = game.evalSpec(state);
@@ -480,11 +531,11 @@ export class Arena {
       rt.humans[seat] = handle;
       // 限时：挂机不能卡住整局（成熟平台都有回合计时和托管）
       const limit = Math.max(30, Number(m.options.humanTimeout) || HUMAN_TIMEOUT_S) * 1000;
-      const timer = setTimeout(() => {
+      const timer = setTimeout(async () => {
         if (rt.humans[seat] !== handle) return;
-        const acts = (() => { try { return game.actions(state, seat) || []; } catch { return []; } })();
-        const safe = ['check', '不出', 'none', 'fold', 'pass'].find((id) => acts.some((a) => a.id === id));
-        done(safe ? { action: safe, timeout: true } : { forfeit: `${game.seatName(seat)}超时` });
+        const action = await timeoutAction(game, state, seat, Object.keys(m.seats).length).catch(() => null);
+        if (rt.humans[seat] !== handle) return; // 算托管行动的工夫里本人出手了，或对局已中止
+        done(action !== null ? { action, timeout: true, text: TIMEOUT_NOTE } : { forfeit: `${game.seatName(seat)}超时` });
       }, limit);
       // 私密行动（夜里）不说是谁：各位玩家收到后刷新详情，只有轮到的那位能拿到自己的行动
       this.hub.emit(`match:${m.id}`, { type: 'human_turn', seat: secret ? null : seat });
@@ -497,7 +548,7 @@ export class Arena {
    * 所以有真人的隐藏信息对局里只告诉大家「第几次无效」，理由和原话等对局结束后从记录里看
    */
   #illegalEvent(m, game, e) {
-    if (game.features?.hidden && this.humanSeats(m).length) return { type: 'illegal', ply: e.ply, seat: e.seat, attempt: e.attempt };
+    if (game.features?.hidden && this.outsideSeats(m).length) return { type: 'illegal', ply: e.ply, seat: e.seat, attempt: e.attempt };
     return { type: 'illegal', ...e };
   }
 
@@ -540,7 +591,8 @@ ${game.noun || '行动'}：${act}`;
       partial.text = '';
       partial.reasoning = '';
       partial.attempt = attempt;
-      const hide = m.options.hideThoughts;
+      // 旧对局（开局时还没有这条规则）里有 agent 的隐藏信息局也按隐藏处理
+      const hide = m.options.hideThoughts || (!!game.features?.hidden && this.outsideSeats(m).length > 0);
       if (isAgent) {
         const retry = attempt ? attempts[attempts.length - 1].error : null;
         const res = await this.#agentCall({ m, rt, ch, game, state, seat, conv, partial, channel, hide, attempt, turn, retry, showLegal });
@@ -625,11 +677,13 @@ ${game.noun || '行动'}：${act}`;
         if (settled) return;
         settled = true;
         clearTimeout(timer);
+        rt.abort.signal.removeEventListener('abort', onAbort); // 每个回合挂一个监听，回合结束就摘掉，不留到整盘结束
         this.#dropAgentTurn(t);
         resolve(value);
       };
       t.think = (text) => {
-        const chunk = String(text || '').slice(0, 4000);
+        // 一个回合里推送的思考合计最多 AGENT_THINK_MAX 字（进内存、进数据库、推给所有观众）
+        const chunk = String(text || '').slice(0, Math.min(4000, Math.max(0, AGENT_THINK_MAX - partial.reasoning.length - 1)));
         if (!chunk || settled) return;
         partial.reasoning += (partial.reasoning ? '\n' : '') + chunk;
         if (!hide) this.hub.emit(channel, { type: 'delta', ply: partial.ply, seat, attempt, kind: 'reasoning', text: (partial.reasoning === chunk ? '' : '\n') + chunk });
@@ -638,7 +692,8 @@ ${game.noun || '行动'}：${act}`;
         if (settled) throw new HttpError(409, '这个回合已经结束');
         const text = String(reply || '').slice(0, 8000);
         const u = meta.usage || {};
-        const usage = { input: Math.max(0, Math.round(Number(u.input) || 0)), output: Math.max(0, Math.round(Number(u.output) || 0)) };
+        const tok = (v) => Math.max(0, Math.min(1e7, Math.round(Number(v) || 0))); // 自报的用量封顶，免得一个离谱的数把统计冲坏
+        const usage = { input: tok(u.input), output: tok(u.output) };
         return new Promise((report) => {
           finish({
             text, reasoning: partial.reasoning || null, usage,
@@ -651,13 +706,14 @@ ${game.noun || '行动'}：${act}`;
       const timer = setTimeout(() => {
         finish(t.fetched ? { timeout: true, text: '', reasoning: partial.reasoning || null, message: { role: 'assistant', content: '' } } : { offline: true });
       }, timeoutMs);
-      rt.abort.signal.addEventListener('abort', () => {
+      const onAbort = () => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
         this.#dropAgentTurn(t);
         reject(new Abort());
-      }, { once: true });
+      };
+      rt.abort.signal.addEventListener('abort', onAbort, { once: true });
       this.#publishAgentTurn(t);
     });
   }
@@ -772,18 +828,20 @@ ${game.noun || '行动'}：${act}`;
     const game = getGame(m.game);
     const record = recordOf(m);
     const state = replay(game, record);
-    const humans = this.humanSeats(m);
+    const humans = this.outsideSeats(m); // 真人和自带 agent
     const mySeat = this.seatOf(m, userId);
     const running = m.status === 'running';
+    // 进行中有真人或 agent：不给引擎评估（里面有最佳着法），结束后公开
+    const evalHidden = running && humans.length > 0 && !!game.evalSpec;
     const hiddenLive = !!game.features?.hidden && humans.length > 0 && running;
     // 不剧透：没有真人的隐藏信息对局，观众可以主动选公共视角（viewer = '*'）——身份、底牌、夜间行动和思考都先不看
     const pov = !hiddenLive && running && !!game.features?.hidden && viewer === PUBLIC_VIEWER;
     const masked = hiddenLive || pov;
-    let v = viewer && m.seats[viewer] ? viewer : null;
+    let v = viewer && Object.hasOwn(m.seats, viewer) ? viewer : null;
     if (hiddenLive) v = mySeat; // 观众（null）在下面换成公共视角
     const turns = this.db.all('SELECT * FROM turns WHERE match_id = ? ORDER BY ply', matchId);
     const rt = this.live.get(matchId);
-    const hide = (m.options.hideThoughts && running) || pov;
+    const hide = (m.options.hideThoughts && running) || pov || hiddenLive;
     const sum = this.summary(matchId);
     const secrets = masked ? secretPlies(game, record, v, hiddenLive ? humans : [PUBLIC_VIEWER]) : new Set();
     const secretNow = (p) => (pov ? isSecret(game, state, p.seat, null, [PUBLIC_VIEWER]) : p.secret);
@@ -793,7 +851,9 @@ ${game.noun || '行动'}：${act}`;
     return {
       ...sum,
       // 系列赛的种子不给浏览器（第 1 盘的种子就是本盘种子，拿到就能算出别人的牌）
-      options: m.options?.series ? { ...m.options, series: { ...m.options.series, seed: undefined } } : m.options,
+      options: { ...m.options, ...(m.options?.series ? { series: { ...m.options.series, seed: undefined } } : {}), ...(evalHidden ? { startEval: undefined } : {}) },
+      // 给页面的标记：这盘进行中只有公共视角（有真人或自带 agent 的隐藏信息对局）；评估先不给
+      hiddenLive, evalHidden,
       // 有玩家本人的隐藏信息对局进行中：不给记录、种子和开局参数（拿种子就能在浏览器里重放出所有人的牌）
       record: masked ? { players: record.players, actions: null } : record,
       startFen: m.start_fen,
@@ -801,7 +861,9 @@ ${game.noun || '行动'}：${act}`;
       pov: pov ? 'public' : null,
       mySeat,
       view: game.view(state, (hiddenLive && !v) || pov ? PUBLIC_VIEWER : v),
-      turns: turns.filter((t) => !secrets.has(t.ply)).map((t) => (hide && t.character_id && this.#isModel(t.character_id) ? { ...t, analysis: null, reasoning: null, attempts: null, self_winrate: null } : t)),
+      turns: turns.filter((t) => !secrets.has(t.ply))
+        .map((t) => (hide && t.character_id && this.#isModel(t.character_id) ? { ...t, analysis: null, reasoning: null, attempts: null, self_winrate: null } : t))
+        .map((t) => (evalHidden && t.eval ? { ...t, eval: null } : t)),
       partials,
       partial: partials[0] || null,
       paused: rt?.paused || false,
@@ -855,5 +917,33 @@ function sleep(ms, rt) {
 /** 私密代答步的随机停顿范围（毫秒） */
 export const AUTO_DELAY_MS = [1500, 5000];
 
-/** 真人每一步的限时（秒）：超时按默认行动（过牌、不出、弃票、弃牌），没有就判超时负 */
+/** 真人每一步的限时（秒）：超时按默认行动（过牌、不出、不叫、弃票、弃牌）；没有默认行动时，多人局由系统代打这一步，两人局判超时负 */
 const HUMAN_TIMEOUT_S = 600;
+const TIMEOUT_SAFE = ['check', '不出', '叫0', 'none', 'fold', 'pass'];
+const TIMEOUT_SPEECH = ['（超时，没有发言）', '过。'];
+const TIMEOUT_NOTE = '（超时，系统代为行动）';
+/** 自带 agent 一个回合里推送的思考合计上限（字） */
+const AGENT_THINK_MAX = 20000;
+
+/**
+ * 真人超时后的行动；返回 null 表示判超时负。
+ * 有不吃亏的默认行动就用它。没有的话（狼人杀发言、预言家查验、斗地主领出、卧底投票……）：
+ * 三人以上的对局里一个人挂机不该让整桌散场、队友跟着判负，由系统代打这一步——发言只说一句「超时」（不替他表态），其余用内置 AI 最低档；
+ * 两人对局照旧判超时负。
+ */
+export async function timeoutAction(game, state, seat, seatCount) {
+  let acts;
+  try { acts = game.actions(state, seat); } catch { acts = []; }
+  if (Array.isArray(acts)) {
+    const safe = TIMEOUT_SAFE.find((id) => acts.some((a) => a.id === id));
+    if (safe) return safe;
+  }
+  if (seatCount <= 2) return null;
+  const valid = (a) => { try { game.apply(state, seat, a); return true; } catch { return false; } };
+  if (acts === null) {
+    const say = TIMEOUT_SPEECH.find(valid);
+    if (say) return say;
+  }
+  const a = await game.builtinMove(state, seat, { level: 1 });
+  return a !== null && a !== undefined && valid(a) ? a : null;
+}

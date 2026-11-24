@@ -55,6 +55,8 @@ export class Matchmaker {
     const out = [];
     for (const c of this.db.all("SELECT * FROM characters WHERE auto_match = 1 AND archived = 0 AND kind != 'human'")) {
       if (!canRank(this.db, c)) continue;
+      // 主人的账号被停用后，他的蛐蛐不再自己约战（约战会花他存着的密钥）
+      if (!c.system && ['disabled', 'rejected', 'pending'].includes(this.db.get('SELECT status FROM users WHERE id = ?', c.owner_id)?.status)) continue;
       if (c.kind === 'agent' && !agentOnline(c)) continue; // 自带 agent 只在在线（最近来领过回合）时匹配
       const u = this.arena.todayUsage(c.id);
       if (u.games >= c.daily_limit) continue;
@@ -130,8 +132,8 @@ export class Matchmaker {
     const rotated = [ids[ids.length - 1], ...ids.slice(0, -1)];
     const seats = Object.fromEntries(seatIds.map((sid, i) => [sid, rotated[i]]));
     const next = { ...ser, leg: ser.leg + 1 };
-    // 有玩家本人时每盘换一副牌：上一盘结束后是上帝视角，同一副牌等于知道了所有人的牌
-    const human = Object.values(sum.players || {}).some((p) => p?.kind === 'human');
+    // 有玩家本人或自带 agent 时每盘换一副牌：上一盘结束后是上帝视角（agent 自己也记得上一盘摊开的牌），同一副牌等于知道了所有人的牌
+    const human = Object.values(sum.players || {}).some((p) => p?.kind === 'human' || p?.kind === 'agent');
     const sameDeck = game.rankedSeries?.sameSeed && !human;
     const options = {
       series: next,

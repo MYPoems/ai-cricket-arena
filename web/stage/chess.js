@@ -368,7 +368,9 @@ function createStage({ onAction }) {
     pending = null;
     if (pend && last && pend.from === last.from && pend.to === last.to) animate = false;
     const mv = animate && !reduceMotion() ? readMove(prevBoard, b, last) : null;
-    for (const a of el.getAnimations?.({ subtree: true }) || []) if (a.id === 'ch-move') a.cancel();
+    // 上一步没演完的动画自己记着、直接取消（不用 getAnimations 去找——那会逼浏览器当场重算样式）
+    for (const a of moveAnims) a.cancel();
+    moveAnims = [];
     ghosts.replaceChildren();
     fx.replaceChildren();
     pieces.replaceChildren();
@@ -387,7 +389,7 @@ function createStage({ onAction }) {
     const at = (x, y) => `translate(${x}px, ${y}px)`;
     const dist = Math.hypot(X(mv.to) - X(mv.from), Y(mv.to) - Y(mv.from)) / S;
     const dur = Math.round(300 + Math.min(dist, 7) * 18);
-    const run = (node, frames, o = {}) => { const a = node.animate(frames, { duration: dur, ...o }); a.id = 'ch-move'; return a; };
+    const run = (node, frames, o = {}) => { const a = node.animate(frames, { duration: dur, ...o }); a.id = 'ch-move'; moveAnims.push(a); return a; };
     const slide = (node, from, to, o) => {
       const main = run(node, [
         { transform: at(X(from), Y(from)) },
@@ -423,6 +425,7 @@ function createStage({ onAction }) {
       const fa = flash.animate([{ opacity: 0, transform: 'scale(.3)' }, { opacity: 0, transform: 'scale(.3)', offset: 0.45 }, { opacity: 1, transform: 'scale(.9)', offset: 0.6 }, { opacity: 0, transform: 'scale(1.5)' }],
         { duration: dur + 520, easing: 'ease-out', fill: 'forwards' });
       fa.id = 'ch-move';
+      moveAnims.push(fa);
       fa.onfinish = () => flash.remove();
     } else {
       slide(els.get(mv.to), mv.from, mv.to);
@@ -444,6 +447,7 @@ function createStage({ onAction }) {
         { transform: `${at(sx + ux * 30, sy + uy * 30 - 12)} rotate(${ux >= 0 ? 24 : -24}deg) scale(.7)`, opacity: 0 },
       ], { duration: dur + 260, fill: 'forwards' });
       a.id = 'ch-move';
+      moveAnims.push(a);
       a.onfinish = () => ghost.remove();
     }
     return true;
@@ -566,6 +570,7 @@ function createStage({ onAction }) {
 
   /** 提交一步。拖过去的（drop 有值）：记下来，棋盘变了就不再播滑动；服务端没认（出错）时过一会儿滑回原位 */
   let pending = null;
+  let moveAnims = [];
   function submit(mid, drop = null) {
     const p = drop ? { from: drop.from, to: drop.to } : null;
     if (p) pending = p;

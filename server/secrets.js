@@ -37,7 +37,8 @@ function decrypt(blob) {
 }
 
 export function setKey(db, ownerId, provider, key) {
-  if (!key) {
+  if (key !== null && key !== undefined && key !== '' && (typeof key !== 'string' || key.length > 500)) throw Object.assign(new Error('密钥格式不对'), { status: 400 });
+  if (!key || !key.trim()) {
     db.run('DELETE FROM api_keys WHERE owner_id = ? AND provider = ?', ownerId, provider);
     return;
   }
@@ -47,7 +48,12 @@ export function setKey(db, ownerId, provider, key) {
   );
 }
 
-/** 先查用户保存的密钥，再查环境变量 */
+/** 这个账号是不是庄家（服务器的主人）：环境变量里的密钥、本机和内网的接口地址只给他用 */
+export function isAdminOwner(db, ownerId) {
+  return ownerId === 'local' || db.get('SELECT role FROM users WHERE id = ?', ownerId)?.role === 'admin';
+}
+
+/** 先查用户保存的密钥，再查环境变量（环境变量里的是服务器主人的密钥，只给庄家名下的选手用，别的用户要自己填） */
 export function getKey(db, ownerId, provider) {
   const row = db.get('SELECT cipher FROM api_keys WHERE owner_id = ? AND provider = ?', ownerId, provider);
   if (row) {
@@ -58,15 +64,16 @@ export function getKey(db, ownerId, provider) {
     }
   }
   const env = presetOf(provider)?.keyEnv;
-  return env ? process.env[env] || null : null;
+  return env && isAdminOwner(db, ownerId) ? process.env[env] || null : null;
 }
 
 /** 每个平台的密钥状态：db（界面填写）/ env（环境变量）/ none */
 export function keyStatus(db, ownerId) {
   const saved = new Set(db.all('SELECT provider FROM api_keys WHERE owner_id = ?', ownerId).map((r) => r.provider));
+  const admin = isAdminOwner(db, ownerId);
   const out = {};
   for (const [id, p] of Object.entries(PRESETS)) {
-    out[id] = saved.has(id) ? 'db' : p.keyEnv && process.env[p.keyEnv] ? 'env' : p.keyEnv || p.custom ? 'none' : 'notNeeded';
+    out[id] = saved.has(id) ? 'db' : p.keyEnv && admin && process.env[p.keyEnv] ? 'env' : p.keyEnv || p.custom ? 'none' : 'notNeeded';
   }
   return out;
 }

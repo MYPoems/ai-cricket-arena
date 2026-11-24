@@ -27,7 +27,8 @@ function liveCard(db, arena, id) {
   const m = db.get('SELECT * FROM matches WHERE id = ?', id);
   if (!m) return null;
   const game = getGame(m.game);
-  const hiddenLive = !!game.features?.hidden && arena.humanSeats(m).length > 0;
+  const outside = arena.outsideSeats(m).length > 0; // 有真人或自带 agent
+  const hiddenLive = !!game.features?.hidden && outside;
   // 有真人的隐藏信息对局：大厅缩略图只给公共视角（谁的牌都看不到）
   const view = game.view(replay(game, recordOf(m)), game.features?.hidden ? PUBLIC_VIEWER : null);
   const last = db.get('SELECT eval FROM turns WHERE match_id = ? AND eval IS NOT NULL ORDER BY ply DESC LIMIT 1', id);
@@ -42,7 +43,8 @@ function liveCard(db, arena, id) {
     inCheck: view.inCheck,
     lastMove: lastMove?.iccs || null,
     lastLabel: lastMove?.cn || lastMove?.label || null,
-    redE: last?.eval?.e0 ?? last?.eval?.redE ?? m.options?.startEval?.e0 ?? m.options?.startEval?.redE ?? null,
+    // 有真人或 agent 在下的对局，进行中不给引擎评估
+    redE: outside ? null : last?.eval?.e0 ?? last?.eval?.redE ?? m.options?.startEval?.e0 ?? m.options?.startEval?.redE ?? null,
     thinking: Object.values(rt?.partials || {}).find((p) => !(hiddenLive && p.secret))?.seat || Object.keys(rt?.humans || {}).find((s) => !rt.partials[s]?.secret) || null,
     paused: !!rt?.paused,
     // 在等真人出手（大厅擂台不推荐这种局）；最近一步的时间（挂着没人动的局沉下去）

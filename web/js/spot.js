@@ -58,8 +58,32 @@ export function createSpot() {
     [...cyl.children].forEach((c, j) => c.classList.toggle('on', j === i));
   }
 
+  // 框高只增不减：每换一个人、内容多两行少两行，框就跟着变高变矮，下面的本手记录也被顶得上下跳。
+  // 记住这盘里出现过的最高高度当下限（窗口大小变了重新量）；高度从 getComputedStyle 读——和 min-height 同一套单位，外层缩放（zoom）时也对得上
+  let floor = 0;
+  let floorRaf = 0;
+  let seen = false;
+  function holdHeight() {
+    if (floorRaf || typeof requestAnimationFrame !== 'function') return;
+    floorRaf = requestAnimationFrame(() => {
+      floorRaf = 0;
+      if (!el.isConnected) return;
+      seen = true;
+      const hgt = Math.min(parseFloat(getComputedStyle(el).height) || 0, innerHeight * 0.5);
+      if (hgt > floor + 1) { floor = Math.ceil(hgt); el.style.minHeight = `${floor}px`; }
+    });
+  }
+  const onResize = () => {
+    if (!el.isConnected) { if (seen) removeEventListener('resize', onResize); return; }
+    floor = 0;
+    el.style.minHeight = '';
+    holdHeight();
+  };
+  if (typeof addEventListener === 'function') addEventListener('resize', onResize);
+
   function show({ key: k, index: i, chambers, head, body, tools: tl = [] }) {
     setChambers(chambers);
+    holdHeight();
     id.replaceChildren(...[].concat(head));
     tools.replaceChildren(...[].concat(tl).filter(Boolean));
     const same = k === key && face;

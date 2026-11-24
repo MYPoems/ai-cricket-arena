@@ -30,7 +30,10 @@ export function issueAgentToken(db, id) {
 /** 按令牌找 Agent 选手；找不到返回 null */
 export function agentByToken(db, token) {
   if (!token || !/^pka_[A-Za-z0-9_-]{20,}$/.test(token)) return null;
-  return db.get("SELECT * FROM characters WHERE agent_token = ? AND kind = 'agent' AND archived = 0", hashToken(token)) || null;
+  const c = db.get("SELECT * FROM characters WHERE agent_token = ? AND kind = 'agent' AND archived = 0", hashToken(token)) || null;
+  // 主人的账号被停用（或还没通过审批）时，他的 agent 令牌也不能用
+  if (c && ['disabled', 'rejected', 'pending'].includes(db.get('SELECT status FROM users WHERE id = ?', c.owner_id)?.status)) return null;
+  return c;
 }
 
 export const MAX_DAILY_LIMIT = 50; // 平台允许的每日对局上限

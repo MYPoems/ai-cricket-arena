@@ -5,7 +5,22 @@ import { streamOpenAI, listOpenAIModels } from './openai-compat.js';
 import { streamAnthropic } from './anthropic.js';
 import { streamClaudeCli, streamCodexCli } from './cli.js';
 import { cliAvailable } from './presets.js';
-import { getKey } from '../secrets.js';
+import { getKey, isAdminOwner } from '../secrets.js';
+import { assertPublicURL } from './netguard.js';
+
+/**
+ * 这次调用的地址是不是用户自己填的、需要过出站检查：自定义接口和 Ollama 的地址由用户决定，
+ * 普通用户不能让服务器去请求本机或内网（庄家不限）。
+ */
+export function needsGuard(db, ownerId, provider) {
+  const p = presetOf(provider);
+  return !!p && !p.cli && !!(p.custom || p.local) && !isAdminOwner(db, ownerId);
+}
+
+/** 创建选手、测试配置时提前检查（对局里每次调用前还会再查一次） */
+export async function checkBaseURL(db, ownerId, provider, baseURL) {
+  if (needsGuard(db, ownerId, provider)) await assertPublicURL(baseURLFor(provider, baseURL));
+}
 
 /** 选手配置 → 适配器参数 */
 export function confFor(db, ch) {
@@ -25,7 +40,13 @@ export function confFor(db, ch) {
 export async function callModel(db, ch, system, messages, onDelta = () => {}, signal, opts = {}) {
   if (ch.provider === 'mock') return mockCall(system, messages, onDelta, signal, opts);
   const conf = confFor(db, ch);
+  if (needsGuard(db, ch.owner_id, ch.provider)) {
+    await assertPublicURL(conf.baseURL);
+    conf.noRedirect = true;
+  }
   if (conf.preset.cli) {
+    // 本机订阅通道用的是服务器主人的订阅：只有庄家名下的选手能用（新建、派生时已经拦过，这里再守一道）
+    if (!isAdminOwner(db, ch.owner_id)) throw new Error(`${conf.preset.name} 只有庄家可以用`);
     if (!cliAvailable(conf.preset.api)) throw new Error(`${conf.preset.name} 不可用（只在服务只对本机开放、且装了对应命令行时可用）`);
     return conf.preset.api === 'claude-cli' ? streamClaudeCli(conf, system, messages, onDelta, signal) : streamCodexCli(conf, system, messages, onDelta, signal);
   }
@@ -40,7 +61,9 @@ export async function listModels(db, ownerId, provider, baseURL) {
   const apiKey = getKey(db, ownerId, provider);
   const url = baseURLFor(provider, baseURL);
   if (!url) throw new Error('请先填写接口地址');
-  return listOpenAIModels({ preset, apiKey, baseURL: url });
+  const guard = needsGuard(db, ownerId, provider);
+  if (guard) await assertPublicURL(url);
+  return listOpenAIModels({ preset, apiKey, baseURL: url, noRedirect: guard });
 }
 
 // ---------- 模拟模型（只在开发和自动测试时使用） ----------

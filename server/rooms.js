@@ -109,6 +109,7 @@ export function roomRoutes(router, { db, hub, arena }) {
     const missing = game.seats(r.players).filter((s) => !r.seats[s]);
     if (missing.length) throw new HttpError(400, `还有 ${missing.length} 个座位空着`);
     const seats = Object.fromEntries(game.seats(r.players).map((s) => [s, r.seats[s].characterId]));
+    arena.checkCapacity(db.get('SELECT id, role FROM users WHERE id = ?', r.host_id));
     const matchId = arena.createMatch({ game: r.game, seats, mode: 'casual', origin: 'room', createdBy: r.host_id, options: r.options });
     return save(r, { status: 'started', match_id: matchId });
   });

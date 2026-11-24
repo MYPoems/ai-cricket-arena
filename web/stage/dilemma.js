@@ -182,6 +182,18 @@ const STYLE = `
 .dlm-pick:active:not(:disabled) { translate: 0 2px; }
 .dlm-pick:disabled { filter: saturate(.4) brightness(.8); cursor: default; }
 .dlm-pick small { position: absolute; left: -2cqw; right: -2cqw; top: calc(100% + 1cqw); writing-mode: horizontal-tb; font: 500 max(9px, 1.15cqw)/1.35 var(--sans); letter-spacing: 0; color: rgb(242 227 194 / .62); white-space: nowrap; }
+/* 手机：喊话输入框横跨整张桌子，放到心电图的位置上（喊话时心电图让位），不再压着两张牌和桌沿铭牌；按键 44px、输入框 16px 字（iOS 聚焦时不放大页面） */
+@container (max-width: 520px) {
+  .dlm-ctl.talk { top: auto; bottom: 2.6cqw; left: 3cqw; right: 3cqw; translate: none; width: auto; gap: 8px; }
+  .dlm-ctl.talk input { font-size: 16px; padding: 6px 12px; min-height: 44px; }
+  .dlm-ctl.talk .btn { font-size: 14px; min-height: 44px; padding-left: 14px; padding-right: 14px; }
+  .dlm-box.talking .dlm-ecg { opacity: 0; pointer-events: none; }
+  /* 出牌：两张牌下面的得分提示拆成两行，桌沿铭牌先让开（转播条和牌下已经写着「轮到你出牌」） */
+  .dlm-ctl .dlm-pick small .s1 { display: none; } .dlm-ctl .dlm-pick small .s2 { display: inline; }
+  .dlm-box.choosing .dlm-plaque { visibility: hidden; }
+}
+.dlm-ecg { transition: opacity .25s; }
+.dlm-pick small .s2 { display: none; }
 `;
 
 let styled = false;
@@ -477,13 +489,16 @@ export default {
         if (movable) {
           input.placeholder = `对${NAMES[other(movable)]}说一句…`;
           input.title = '可以不说话；一共打几轮双方都不知道，到最后一轮也不会提前告诉你';
-          btnC.querySelector('small').textContent = `对方合 +${PAY.C.C} · 背 +${PAY.C.D}`;
-          btnD.querySelector('small').textContent = `对方合 +${PAY.D.C} · 背 +${PAY.D.D}`;
+          const payHint = (m) => `对方合 +${m.C}<span class="s1"> · 背 </span><span class="s2"><br>对方背 </span>+${m.D}`;
+          btnC.querySelector('small').innerHTML = payHint(PAY.C);
+          btnD.querySelector('small').innerHTML = payHint(PAY.D);
         }
         const wasTalk = talkBox.classList.contains('on');
         talkBox.classList.toggle('on', canTalk);
         chooseBox.classList.toggle('on', canChoose);
         box.classList.toggle('acting', canTalk || canChoose);
+        box.classList.toggle('talking', canTalk);
+        box.classList.toggle('choosing', canChoose);
         if (canTalk && !wasTalk) setTimeout(() => input.focus({ preventScroll: true }), 0);
       },
     };

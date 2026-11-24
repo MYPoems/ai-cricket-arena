@@ -1,16 +1,18 @@
 // 大厅：一进来就能看到最精彩的一盘（今日擂台）、场上在发生什么（对局墙）、一键开一盘（快速开始）。
 
-import { h, api, post, guard, toast, listen, fmtTime, MODE_NAMES, resultText, tierBadge, emptyState, linkRow, pressed, cleanName, summarizeSeats, coin } from './ui.js';
+import { h, api, post, guard, toast, listen, fmtTime, MODE_NAMES, resultText, emptyState, linkRow, pressed, cleanName, summarizeSeats, coin, pageHead } from './ui.js';
 import { loadRenderer } from '../stage/index.js';
 
+// 各游戏的画面模块：用到哪个取哪个，几个一起取；大厅先把文字画出来，缩略画面等模块到了再补上
 const renderers = {};
-async function preload(list) {
-  for (const m of list) if (!renderers[m.game]) renderers[m.game] = await loadRenderer(m.game).catch(() => null);
-}
+const loading = {};
+const loadGame = (game) => (loading[game] ||= loadRenderer(game).then((r) => { renderers[game] = r; return r; }).catch(() => null));
+const preload = (list) => Promise.all([...new Set(list.map((m) => m.game))].map(loadGame));
 
 const who = (p) => (p?.kind === 'model' ? p.model : p?.kind === 'agent' ? '自带 Agent' : p?.kind === 'human' ? '真人' : p?.kind === 'builtin' ? '内置 AI' : p?.kind === 'engine' ? ({ pikafish: 'Pikafish', rapfi: 'Rapfi', stockfish: 'Stockfish' }[p.provider || 'pikafish'] || '引擎') : '随机');
 const HOT_RE = /炸弹|王炸|全下|将军|将死|\+|绝杀|出局|死亡|背叛|春天/;
 const SORTS = [['hot', '最精彩'], ['new', '最新'], ['tier', '排位优先']];
+let hasCricket = false; // 这位用户养没养过蛐蛐（大厅「快速开始」第一项用）
 /** 隐藏信息游戏（斗地主、德州、狼人杀、卧底…）没有公开的着法，用当前阶段说明进度 */
 function phaseOf(v) {
   if (!v) return '';
@@ -37,11 +39,14 @@ function heat(m) {
   return s;
 }
 
-export async function lobbyView(root, { go, session, meta }) {
-  let [data, rooms] = await Promise.all([api('/lobby'), api('/rooms').catch(() => [])]);
-  await preload(data.live);
+export async function lobbyView(root, { go, session, meta, early }) {
+  // early：首屏时入口已经提前发出的大厅请求（和登录状态一起取，少等一个来回）
+  let [data, rooms] = await Promise.all([early ? early.then((d) => d || api('/lobby')) : api('/lobby'), api('/rooms').catch(() => [])]);
+  preload(data.live);
+  const guest = !session.user;
   const cards = new Map();
   let stopEvents = null;
+  let noCricket = false;
   let filter = pref('game') || 'all';
   let sort = pref('sort') || 'hot';
 
@@ -52,7 +57,13 @@ export async function lobbyView(root, { go, session, meta }) {
   const roomBox = h('div');
   const recent = h('div');
 
-  root.replaceChildren(h('div', { class: 'lobby' },
+  // 游客第一眼先知道这是什么地方、下一步做什么；登录后不占地方（标题只留给读屏）
+  const intro = guest
+    ? pageHead('看 AI 斗蛐蛐', '各家大模型在这里下棋、打牌、玩狼人杀。看它们怎么想，谁更会赢。', '斗',
+      h('a', { class: 'btn primary', href: '#/register' }, '申请入场'), h('a', { class: 'btn', href: '#/login' }, '登录'))
+    : h('h1', { class: 'sr-only' }, '大厅');
+  if (guest) intro.classList.add('lobby-intro');
+  root.replaceChildren(intro, h('div', { class: 'lobby' },
     h('div', { class: 'col', style: { minWidth: 0, gap: '0' } }, hero, roomBox, filters, grid,
       h('section', { class: 'section-gap' }, h('div', { class: 'section-title' }, h('h2', {}, '最近结束'), h('a', { href: '#/history', class: 'small' }, '全部对局 →')), recent)),
     side));
@@ -62,16 +73,19 @@ export async function lobbyView(root, { go, session, meta }) {
     // 擂台只推荐真在打的局：AI 对 AI、走了至少 10 步、没暂停、10 分钟内动过；都不满足才退而求其次
     const fresh = (x) => !x.humanWaiting && !x.paused && (x.plies || 0) >= 10 && Date.now() - new Date(x.lastAt || 0).getTime() < 10 * 60e3;
     const pool = data.live.filter(fresh);
-    const pick = [...(pool.length ? pool : data.live.filter((x) => !x.humanWaiting))].sort((a, b) => heat(b) - heat(a))[0];
+    const moving = data.live.filter((x) => !x.humanWaiting);
+    // 场上只剩等真人出手的局时也推一盘出来：下面的对局墙明明有对局，擂台不能写「没有对局」
+    const pick = [...(pool.length ? pool : moving.length ? moving : data.live)].sort((a, b) => heat(b) - heat(a))[0];
     if (!pick) {
       const last = data.recent[0];
       hero.replaceChildren(h('div', { class: 'lattice' }), h('span', { class: 'wm' }, '斗'),
         h('span', { class: 'hero-tag' }, '今日擂台 · 虚位以待'),
         h('div', { class: 'hero-mid', style: { justifySelf: 'center' } },
           h('div', { class: 'vs' }, '擂台空着'),
-          h('div', { class: 'state' }, '现在没有对局。开一盘、组个局，或者打开天梯自动匹配。'),
-          h('div', { class: 'row', style: { justifyContent: 'center' } }, quickAiMatch(true), h('a', { class: 'btn', href: '#/rooms' }, '去组局'),
-            last ? h('a', { class: 'btn ghost', href: `#/match/${last.id}` }, '看上一盘回放') : null)));
+          h('div', { class: 'state' }, guest ? '现在没有对局。' : '现在没有对局。开一盘、组个局，或者打开天梯自动匹配。'),
+          h('div', { class: 'row', style: { justifyContent: 'center' } },
+            guest ? null : [quickAiMatch(true), h('a', { class: 'btn', href: '#/rooms' }, '去组局')],
+            last ? h('a', { class: `btn ${guest ? 'primary' : 'ghost'}`, href: `#/match/${last.id}` }, '看上一盘回放') : null)));
       return;
     }
     const seats = Object.keys(pick.players);
@@ -79,13 +93,13 @@ export async function lobbyView(root, { go, session, meta }) {
     const P = (s) => h('div', { class: 'hero-p' }, coin(pick.players[s], 'moon'), h('b', { class: 'gold-text' }, nm(pick.players[s])), h('small', {}, `${pick.seatNames?.[s] || s} · ${who(pick.players[s])}`));
     const e = pick.redE ?? 0.5;
     const tug = pick.features?.winbar ? h('div', { class: 'tug' }, h('span', {}, `${Math.round(e * 100)}%`), h('div', { class: 'bar' }, h('i', { class: 'l', style: { width: `${e * 100}%` } }), h('i', { class: 'r' }), h('span', { class: 'knot', style: { left: `${e * 100}%` } })), h('span', {}, `${100 - Math.round(e * 100)}%`)) : null;
-    const reason = pick.hot ? '高光时刻' : pick.redE !== null && pick.redE !== undefined && Math.abs(pick.redE - 0.5) < 0.12 ? '胜率胶着' : pick.mode !== 'casual' ? '排位进行中' : '正在进行';
+    const reason = pick.humanWaiting ? '等真人出手' : pick.hot ? '高光时刻' : pick.redE !== null && pick.redE !== undefined && Math.abs(pick.redE - 0.5) < 0.12 ? '胜率胶着' : pick.mode !== 'casual' ? '排位进行中' : '正在进行';
     hero.replaceChildren(h('div', { class: 'lattice' }), h('span', { class: 'wm' }, '擂'),
       h('div', { class: 'row', style: { justifyContent: 'space-between' } }, h('span', { class: 'hero-tag' }, `今日擂台 · ${reason}`), h('span', { class: 'small muted' }, `${pick.gameName} · ${MODE_NAMES[pick.mode]}${pick.lastLabel || !phaseOf(pick.view) ? (pick.plies ? ` · 第 ${pick.plies} 手` : '') : ` · ${phaseOf(pick.view)}`}`)),
       two
         ? h('div', { class: 'hero-vs' }, P(seats[0]), h('div', { class: 'hero-mid' }, h('div', { class: 'vs' }, '对'), tug, h('div', { class: 'state' }, pick.lastLabel ? ['刚走 ', h('b', {}, pick.lastLabel)] : phaseOf(pick.view) || (pick.plies ? `第 ${pick.plies} 手` : '等待第一手'), pick.thinking ? ` · ${pick.seatNames?.[pick.thinking] || ''}思考中` : ''), h('a', { class: 'btn primary', href: `#/match/${pick.id}` }, '进入观战')), P(seats[1]))
         : h('div', { class: 'hero-mid', style: { justifySelf: 'stretch' } },
-          h('div', { class: 'row', style: { justifyContent: 'center', gap: '18px' } }, ...seats.map((s) => h('div', { class: 'hero-p' }, coin(pick.players[s], 'hero-sm'), h('small', {}, nm(pick.players[s]))))),
+          h('div', { class: 'hero-many' }, ...seats.map((s) => h('div', { class: 'hero-p', title: nm(pick.players[s]) }, coin(pick.players[s], 'hero-sm'), h('small', {}, nm(pick.players[s]))))),
           h('div', { class: 'state' }, pick.lastLabel ? ['最新：', h('b', {}, pick.lastLabel)] : phaseOf(pick.view) || (pick.plies ? `第 ${pick.plies} 手` : '等待第一手')),
           h('a', { class: 'btn primary', href: `#/match/${pick.id}` }, '进入观战')));
   }
@@ -116,8 +130,10 @@ export async function lobbyView(root, { go, session, meta }) {
     side.replaceChildren(
       h('div', { class: 'figs' },
         ...[[data.live.length, '进行中'], [data.today, '今日开局'], [data.rooms, '等人组局'], [data.total, '累计完赛']].map(([n, l]) => h('div', { class: 'card quiet fig' }, h('b', { class: 'gold-text' }, n), h('small', {}, l)))),
-      h('div', { class: 'card pad col', style: { gap: '12px' } }, h('div', { class: 'label' }, '快速开始'),
-        h('div', { class: 'quick' }, quickAiMatch(true),
+      // 快速开始里的事都要登录；游客的入口在页头（申请入场、登录）
+      guest ? null : h('div', { class: 'card pad col', style: { gap: '12px' } }, h('div', { class: 'label' }, '快速开始'),
+        // 还没养过蛐蛐的新人：第一件事是养一只
+        h('div', { class: 'quick' }, noCricket ? h('a', { class: 'btn primary', href: '#/characters' }, '养第一只蛐蛐') : null, quickAiMatch(!noCricket),
           h('a', { class: 'btn', href: '#/new' }, '我来挑战一只蛐蛐'),
           h('a', { class: 'btn', href: '#/rooms' }, '开一个组局'),
           h('a', { class: 'btn', href: '#/agent-guide' }, '让我的 Agent 上场'))),
@@ -152,21 +168,32 @@ export async function lobbyView(root, { go, session, meta }) {
   function setFilter(id) { filter = id; pref('game', id); drawFilters(); drawGrid(); }
 
   function card(m) {
-    const r = renderers[m.game];
-    const stage = r ? r.createStage({ onAction: () => {} }) : { el: h('div'), render() {} };
     const head = h('div', { class: 'g' });
     const hl = h('div', { class: 'hl' });
     const sub = h('div', { class: 'sub' });
     const whoRow = h('div', { class: 'who' });
+    const wrap = h('div', { class: 'board-wrap', style: { width: '100%', height: '100%' } }, h('i', { class: 'sk mthumb-sk' }));
+    // 缩略画面只是一张图：整块不接受点击和焦点（画面里的小按钮不该出现在一个链接里面），读屏也跳过
     const el = h('a', { class: 'card mcard', href: `#/match/${m.id}`, style: { gridTemplateColumns: '1fr' } },
-      head, h('div', { class: 'mthumb', style: { width: '100%', height: '200px' } }, h('div', { class: 'board-wrap', style: { width: '100%', height: '100%' } }, stage.el)), hl, whoRow, sub);
+      head, h('div', { class: 'mthumb', inert: true, 'aria-hidden': 'true', style: { width: '100%', height: '200px' } }, wrap), hl, whoRow, sub);
     // 闪一下金边（新的一步）：动画演完自己摘掉类名，不用「删类名 → 读 offsetWidth → 加类名」逼浏览器排版
     el.addEventListener('animationend', (e) => { if (e.animationName === 'flash') el.classList.remove('flash'); });
     // dirty：有没画上去的变化；thumb：缩略画面也要重画；shown：画过缩略画面；visible：在屏幕附近
-    const c = { el, stage, head, hl, sub, whoRow, m, dirty: false, thumb: true, anim: false, flash: false, shown: false, visible: false };
+    const c = { el, wrap, stage: null, head, hl, sub, whoRow, m, dirty: false, thumb: true, anim: false, flash: false, shown: false, visible: false };
     paintText(c);
+    // 画面模块还没到：先出文字，到了再把缩略画面补上
+    if (!mount(c)) loadGame(m.game).then(() => { if (cards.get(m.id) === c && mount(c)) queue(c); });
     queue(c);
     return c;
+  }
+  /** 给卡片装上缩略画面（模块已经加载时）；返回装没装上 */
+  function mount(c) {
+    if (c.stage) return true;
+    const r = renderers[c.m.game];
+    if (!r) return false;
+    try { c.stage = r.createStage({ onAction: () => {} }); } catch { return false; }
+    c.wrap.replaceChildren(c.stage.el);
+    return true;
   }
 
   /** 卡片上的文字（便宜）：标题、思考中、进度、选手 */
@@ -177,9 +204,13 @@ export async function lobbyView(root, { go, session, meta }) {
       m.paused ? h('span', { class: 'small muted' }, '已暂停') : m.thinking ? h('span', { class: 'thinking-dot' }, `${m.seatNames?.[m.thinking] || ''}思考中`) : null);
     c.hl.textContent = progress(m);
     const seats = Object.keys(m.players);
+    // 两人局写「甲 对 乙」；多人局头像已经排了一排，后面只写人数——名单放不下，截成「6 人 · 庄家 +…」反而像坏了，全名在悬停里
+    const names = seats.map((s) => m.players[s]?.name);
     c.whoRow.replaceChildren(...seats.slice(0, 6).map((s) => Object.assign(coin(m.players[s]), { title: nm(m.players[s]) })),
-      h('span', { title: seats.map((s) => nm(m.players[s])).join('、') }, seats.length === 2 ? summarizeSeats(seats.map((s) => m.players[s]?.name)) : `${seats.length} 人 · ${summarizeSeats(seats.map((s) => m.players[s]?.name))}`));
+      h('span', { title: names.map(cleanName).join('、') }, seats.length === 2 ? summarizeSeats(names) : `${seats.length} 人`));
     c.sub.textContent = `开局 ${fmtTime(m.started_at)}`;
+    // 读屏读到的是一句整话，不是卡片里各块文字拼在一起
+    c.el.setAttribute('aria-label', `${m.gameName} ${MODE_NAMES[m.mode] || ''}：${summarizeSeats(names, { max: 4 })}，${m.paused ? '已暂停' : progress(m)}`);
   }
 
   // 场上对局多时每个事件都重画缩略画面会把大厅卡死：变化先记下，攒到一起每秒画一次（所有卡合在同一帧里画，
@@ -224,10 +255,11 @@ export async function lobbyView(root, { go, session, meta }) {
       if (!c.dirty || !c.visible || !c.el.isConnected) continue;
       c.dirty = false;
       c.shown = true;
-      if (c.thumb) { try { c.stage.render(c.m.view, { movable: null, arrows: [], animate: c.anim }); } catch { /* 缩略画面画不出来时不影响卡片 */ } }
+      if (c.thumb && c.stage) { try { c.stage.render(c.m.view, { movable: null, arrows: [], animate: c.anim }); } catch { /* 缩略画面画不出来时不影响卡片 */ } }
       paintText(c);
       if (c.flash) c.el.classList.add('flash');
-      c.thumb = c.anim = c.flash = false;
+      c.thumb = !c.stage; // 画面模块还没到的，记着等它到了再画
+      c.anim = c.flash = false;
     }
   }
   const dropCard = (c) => { due.delete(c); io?.unobserve(c.el); byEl.delete(c.el); };
@@ -242,7 +274,7 @@ export async function lobbyView(root, { go, session, meta }) {
     if (!list.length) {
       const e = data.live.length
         ? emptyState('这个游戏现在没有对局。', { wm: '静', action: h('button', { class: 'btn primary', type: 'button', onclick: () => setFilter('all') }, '看全部') })
-        : emptyState('场上暂时没有对局。', { wm: '静', action: quickAiMatch(true) });
+        : emptyState('场上暂时没有对局。', { wm: '静', action: guest ? null : quickAiMatch(true) });
       e.style.gridColumn = '1 / -1';
       grid.replaceChildren(e);
       return;
@@ -255,7 +287,7 @@ export async function lobbyView(root, { go, session, meta }) {
   }
 
   function drawRecent() {
-    if (!data.recent.length) { recent.replaceChildren(emptyState('还没有结束的对局。', { wm: '局', action: h('a', { class: 'btn primary', href: '#/new' }, '开一局') })); return; }
+    if (!data.recent.length) { recent.replaceChildren(emptyState('还没有结束的对局。', { wm: '局', action: guest ? null : h('a', { class: 'btn primary', href: '#/new' }, '开一局') })); return; }
     recent.replaceChildren(h('div', { class: 'card table-wrap' }, h('table', { class: 'list recent-list' },
       ...data.recent.slice(0, 8).map((m) => {
         const names = Object.values(m.players).map((pl) => pl?.name);
@@ -301,7 +333,7 @@ export async function lobbyView(root, { go, session, meta }) {
     reloading = setTimeout(async () => {
       reloading = null;
       [data, rooms] = await Promise.all([api('/lobby'), api('/rooms').catch(() => [])]);
-      await preload(data.live);
+      preload(data.live);
       drawAll();
       subscribe();
     }, 400);
@@ -310,6 +342,8 @@ export async function lobbyView(root, { go, session, meta }) {
   function drawAll() { drawHero(); drawSide(); drawRooms(); drawFilters(); drawGrid(); drawRecent(); }
   drawAll();
   subscribe();
-  void tierBadge;
+  // 画完再问一句「我有没有蛐蛐」（不挡首屏）：没有的话，快速开始第一项换成「养第一只蛐蛐」
+  // 已经知道养过了就不再问（这个标签页里只问到「有」为止）
+  if (!guest && !hasCricket) api('/characters').then((list) => { hasCricket = list.some((c) => c.mine && !c.system && c.kind !== 'human'); noCricket = !hasCricket; if (noCricket && root.isConnected) drawSide(); }).catch(() => {});
   return () => { stopEvents?.(); clearTimeout(reloading); io?.disconnect(); cancelAnimationFrame(paintRaf); clearTimeout(tick); };
 }

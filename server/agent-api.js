@@ -83,8 +83,8 @@ export function agentRoutes(router, { db, arena }) {
     req.on('close', () => ac.abort());
     const t = await arena.agentWait(c.id, ms, ac.signal);
     if (t) t.fetched = true;
-    // 等待期间也算在线
-    db.update('characters', { id: c.id }, { last_seen: now() });
+    // 等待期间也算在线（不等待的连续请求不用每次都写库，鉴权时已经记过）
+    if (ms > 0) db.update('characters', { id: c.id }, { last_seen: now() });
     return t;
   }
 
@@ -107,8 +107,9 @@ export function agentRoutes(router, { db, arena }) {
     const reply = String(body.reply ?? '');
     if (!reply.trim() && action === null) throw new HttpError(400, '请提交 reply（文字回答）或 action（legal_actions 里的 id）');
     const verdict = t.submit(reply, { model: body.model, usage: body.usage, action });
-    const timeout = new Promise((r) => setTimeout(() => r({ ok: null, note: '已提交，判定结果稍后在下一个回合里给出' }), 10_000));
-    return Promise.race([verdict, timeout]);
+    let timer;
+    const timeout = new Promise((r) => { timer = setTimeout(() => r({ ok: null, note: '已提交，判定结果稍后在下一个回合里给出' }), 10_000); });
+    return Promise.race([verdict, timeout]).finally(() => clearTimeout(timer));
   }
 
   router.get('/api/agent/me', ({ req }) => me(auth(req)), ANY);
@@ -128,7 +129,7 @@ export function agentRoutes(router, { db, arena }) {
     },
     {
       name: 'think',
-      description: '把你的思考推送到对局页，观众实时看到（可多次调用）。',
+      description: '把你的思考推送到对局页（可多次调用，一个回合合计最多 2 万字）。隐藏信息游戏和排位赛里对局结束后才公开，其余对局观众实时看到。',
       inputSchema: { type: 'object', properties: { turn_id: { type: 'string' }, text: { type: 'string' } }, required: ['turn_id', 'text'] },
     },
     {

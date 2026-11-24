@@ -18,6 +18,9 @@ function reasoningText(delta, field) {
  * messages: [{ role, content, reasoning? }]（框架内部格式）
  * onDelta({ kind: 'reasoning' | 'text', text })
  */
+/** 普通用户填的自定义地址：不跟随跳转（公网地址不能把请求转去内网） */
+const NO_REDIRECT = (conf) => (conf.noRedirect ? { fetchOptions: { redirect: 'error' } } : {});
+
 export async function streamOpenAI(conf, system, messages, onDelta, signal) {
   const { preset } = conf;
   const client = new OpenAI({
@@ -25,6 +28,7 @@ export async function streamOpenAI(conf, system, messages, onDelta, signal) {
     baseURL: conf.baseURL || preset.baseURL,
     maxRetries: 2,
     timeout: conf.timeoutMs || 180000,
+    ...NO_REDIRECT(conf),
   });
   const msgs = [{ role: 'system', content: system }];
   for (const m of messages) {
@@ -79,7 +83,7 @@ export async function streamOpenAI(conf, system, messages, onDelta, signal) {
 
 /** 拉取接口上的模型列表 */
 export async function listOpenAIModels(conf) {
-  const client = new OpenAI({ apiKey: conf.apiKey || 'not-needed', baseURL: conf.baseURL || conf.preset.baseURL, timeout: 15000 });
+  const client = new OpenAI({ apiKey: conf.apiKey || 'not-needed', baseURL: conf.baseURL || conf.preset.baseURL, timeout: 15000, ...NO_REDIRECT(conf) });
   const out = [];
   for await (const m of client.models.list()) out.push(m.id);
   return out.sort();

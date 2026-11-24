@@ -17,6 +17,9 @@ const meta = {};
 const session = { user: null, pending: 0, publicView: true };
 let cleanup = null;
 let pageInTimer = null;
+let routed = false;
+const announcer = h('div', { class: 'sr-only', role: 'status', 'aria-live': 'polite' });
+document.body.append(announcer);
 let routeSeq = 0; // 换页很快时，前一页还在加载：加载完发现已经不是当前页，就把它的监听关掉、不画
 const reduced = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
 
@@ -124,7 +127,8 @@ async function route() {
   slowTimer = setTimeout(() => { if (seq === routeSeq) showSlow(); }, 8000);
   try {
     const characters = loggedIn && ['new', 'match', 'compare', 'room'].includes(page) ? await api('/characters') : [];
-    const ctx = { meta, characters, go, reloadMeta, session, reloadSession };
+    const ctx = { meta, characters, go, reloadMeta, session, reloadSession, early: page === 'lobby' ? earlyLobby : null };
+    earlyLobby = null;
     let r;
     if (page === 'match' && id) r = await matchView(app, id, ctx);
     else if (page === 'characters' && id) r = await profileView(app, id, ctx);
@@ -146,6 +150,9 @@ async function route() {
     if (seq !== routeSeq) { if (typeof r === 'function') r(); return; }
     cleanup = typeof r === 'function' ? r : null;
     restoreScroll(currentKey);
+    // 换页后告诉读屏到了哪一页（页面不整页刷新，读屏自己不知道）；第一页不报，标题本来就会读
+    if (routed) announcer.textContent = document.title.split(' — ')[0];
+    routed = true;
     // 换页：新页面的前几块依次浮上来；动画放完就摘掉，页面自己刷新内容时不再重播
     app.classList.remove('page-in');
     void app.offsetWidth;
@@ -258,6 +265,8 @@ async function refreshLive() {
 }
 addEventListener('dsqq:conn', (e) => { paintDot(); if (e.detail.ok) refreshLive(); });
 
+// 首屏就是大厅时，大厅的数据和登录状态一起取（少等一个来回）；没有权限看（要登录）时拿到 null，照常走登录
+let earlyLobby = /^#?\/?$/.test(location.hash) ? api('/lobby').catch(() => null) : null;
 try {
   await Promise.all([reloadSession(), reloadMeta()]);
 } catch (e) {

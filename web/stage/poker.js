@@ -800,11 +800,30 @@ export default {
     let ctlKey = '';
     let lastOwe = null; // 上一次画桌面时你要跟的数：轮到你时金额变了，跟注键先锁 1 秒
     let coolTimer = null;
+    // 手机竖屏上操作台比版式里留的位置高（按键至少 40px）：超出牌桌底边的那一截原来被下面的聚光框盖住，
+    // 「弃牌 / 跟注 / 加注」的下半截点不到。量出超出多少，给牌桌那一栏（.stage-board）留出同样的下边距；
+    // 只增不减——轮到我、不轮到我时页面不上下跳；换版式（横竖屏）时重量
+    let ctlReserve = 0;
+    let ctlReserveFor = '';
+    let ctlRaf = 0;
+    function reserveForControls() {
+      if (ctlRaf || typeof requestAnimationFrame !== 'function') return;
+      ctlRaf = requestAnimationFrame(() => {
+        ctlRaf = 0;
+        const wrap = root.closest('.stage-board') || root.parentElement;
+        if (!wrap || ctl.hidden) return;
+        if (ctlReserveFor !== layoutName) { ctlReserveFor = layoutName; ctlReserve = 0; wrap.style.marginBottom = ''; }
+        if (layoutName !== 'port') return; // 横版式里操作台在牌桌右下角，位置是留够的
+        const over = Math.ceil(ctl.getBoundingClientRect().bottom - root.getBoundingClientRect().bottom) + 8;
+        if (over > ctlReserve + 1 && over > 8) { ctlReserve = over; wrap.style.marginBottom = `${over}px`; }
+      });
+    }
     function renderControls(view, movable, actions, L) {
       const show = !!movable && view.toAct === movable && Array.isArray(actions) && actions.length > 0;
       ctl.hidden = !show;
       if (!show) { ctlKey = ''; disarm(); return; }
       ctl.style.cssText = `${pos(L.ctl.x, L.ctl.y)};width:${L.ctl.w}em;min-height:${L.ctl.h}em`;
+      reserveForControls();
       const key = `${view.handNo}|${view.log.length}|${actions.map((a) => a.id).join(',')}`;
       if (key === ctlKey) return; // 同一个决策点：不重置玩家拖到一半的金额
       ctlKey = key;

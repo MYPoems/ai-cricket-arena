@@ -22,11 +22,19 @@ const nextOf = () => decodeURIComponent(new URLSearchParams(location.hash.split(
 
 export async function loginView(root, { go, reloadSession, reloadMeta, session }) {
   if (session.user) { go('#/'); return; }
-  const user = h('input', { type: 'text', id: 'login-user', autocomplete: 'username', required: true });
-  const pass = h('input', { type: 'password', id: 'login-pass', autocomplete: 'current-password', required: true });
+  const user = h('input', { type: 'text', id: 'login-user', autocomplete: 'username', autocapitalize: 'none', spellcheck: 'false' });
+  const pass = h('input', { type: 'password', id: 'login-pass', autocomplete: 'current-password' });
   const submit = guard(async (e) => {
     e?.preventDefault();
-    await post('/auth/login', { username: user.value.trim(), password: pass.value });
+    if (!user.value.trim()) { markInvalid(user, '请填写用户名'); return; }
+    if (!pass.value) { markInvalid(pass, '请填写密码'); return; }
+    // 登录不上的原因写在密码框下面（用户名或密码不对、还在等审批、已停用），不弹一条会自己消失的提示
+    try {
+      await post('/auth/login', { username: user.value.trim(), password: pass.value });
+    } catch (err) {
+      if (err.status && err.status < 500) { markInvalid(pass, err.message); pass.select(); return; }
+      throw err;
+    }
     await reloadSession();
     await reloadMeta();
     // 整页重新加载：实时事件订阅要按新的登录状态重新建立
@@ -55,8 +63,18 @@ export async function registerView(root, { go, session }) {
   const card = h('form', { class: 'card framed auth-card' });
   card.addEventListener('submit', guard(async (e) => {
     e.preventDefault();
+    // 错在哪一栏，就在那一栏下面说
+    const name = user.value.trim();
+    if (!/^[A-Za-z0-9_一-龥]{2,20}$/.test(name)) { markInvalid(user, name ? '用户名要 2–20 个字：中文、字母、数字、下划线' : '请填写用户名'); return; }
+    if (pass.value.length < 8) { markInvalid(pass, '密码至少 8 位'); return; }
     if (pass.value !== pass2.value) { markInvalid(pass2, '两次输入的密码不一样'); return; }
-    await post('/auth/register', { username: user.value.trim(), password: pass.value, note: note.value.trim() });
+    try {
+      await post('/auth/register', { username: name, password: pass.value, note: note.value.trim() });
+    } catch (err) {
+      if (err.status && err.status < 500 && /用户名|已被|已存在|占用/.test(err.message)) { markInvalid(user, err.message); return; }
+      if (err.status && err.status < 500 && /密码/.test(err.message)) { markInvalid(pass, err.message); return; }
+      throw err;
+    }
     card.replaceChildren(h('span', { class: 'wm', 'aria-hidden': 'true' }, '候'), h('h1', {}, '已提交'),
       h('div', { class: 'ok' }, `申请已经交给庄家。审批通过后，用「${user.value.trim()}」和刚才的密码登录即可。`),
       h('a', { class: 'btn', href: '#/login' }, '去登录页'));
@@ -97,7 +115,7 @@ export async function accountView(root, { session }) {
         h('label', { class: 'field' }, h('span', {}, '确认新密码'), passField(pw2)),
         h('div', {}, h('button', { class: 'btn primary', type: 'submit' }, '保存新密码'))),
       h('div', { class: 'card pad row', style: { justifyContent: 'space-between', alignSelf: 'start' } },
-        h('div', {}, h('div', { class: 'label' }, '当前登录'), h('b', {}, `${u.name}（${u.username}）`)),
+        h('div', {}, h('div', { class: 'label' }, '当前登录'), h('b', {}, u.name && u.name !== u.username ? `${u.name}（${u.username}）` : u.username)),
         h('button', { class: 'btn', type: 'button', onclick: guard(async () => {
           await post('/auth/logout'); location.hash = '#/'; location.reload();
         }) }, icon('logout', 16), '退出登录'))));
@@ -107,28 +125,29 @@ const STATUS = { pending: ['待审批', 'warn'], active: ['已通过', 'good'], 
 
 export async function adminView(root, { reloadSession }) {
   let status = 'pending';
-  const body = h('div');
+  const TABS = [['pending', '待审批'], ['active', '已通过'], ['all', '全部']];
+  const body = h('div', { role: 'tabpanel' });
   const tabs = h('div', { class: 'tabs', role: 'tablist', 'aria-label': '用户分类' });
   async function draw() {
     const users = await api(`/admin/users${status === 'all' ? '' : `?status=${status}`}`);
-    tabs.replaceChildren(...[['pending', '待审批'], ['active', '已通过'], ['all', '全部']].map(([k, l]) => h('button', { type: 'button', role: 'tab', 'aria-selected': status === k ? 'true' : 'false', class: status === k ? 'on' : '', onclick: guard(async () => { status = k; await draw(); }) }, l)));
+    tabs.replaceChildren(...TABS.map(([k, l]) => h('button', { type: 'button', role: 'tab', 'aria-selected': status === k ? 'true' : 'false', tabindex: status === k ? '0' : '-1', class: status === k ? 'on' : '', onclick: guard(async () => { status = k; await draw(); }) }, l)));
     const act = (u, op, label, cls = 'btn sm') => h('button', { class: cls, type: 'button', onclick: guard(async () => {
       await post(`/admin/users/${u.id}/${op}`);
       toast(`${u.username}：${label}`);
       await reloadSession();
       draw();
     }) }, label);
-    body.replaceChildren(users.length ? h('div', { class: 'card table-wrap' }, h('table', { class: 'list' },
+    body.replaceChildren(users.length ? h('div', { class: 'card table-wrap' }, h('table', { class: 'list cardify users-table' },
       h('tr', {}, h('th', {}, '用户名'), h('th', {}, '申请时间'), h('th', {}, '给庄家的话'), h('th', {}, '状态'), h('th', { class: 'num' }, '蛐蛐'), h('th', {}, '')),
       ...users.map((u) => {
         const [sl, sc] = STATUS[u.status] || [u.status, ''];
         return h('tr', {},
-          h('td', {}, h('b', {}, u.username), u.role === 'admin' ? h('span', { class: 'chip gold', style: { marginLeft: '8px' } }, '庄家') : null),
-          h('td', { class: 'muted' }, fmtTime(u.created_at)),
-          h('td', { style: { whiteSpace: 'normal', maxWidth: '360px' } }, u.note || h('span', { class: 'muted' }, '—')),
-          h('td', {}, h('span', { class: `chip ${sc}` }, sl)),
-          h('td', { class: 'num' }, u.characters),
-          h('td', {}, u.role === 'admin' ? null : h('div', { class: 'row', style: { gap: '6px', flexWrap: 'nowrap' } },
+          h('td', { class: 'c-name' }, h('b', {}, u.username), u.role === 'admin' ? h('span', { class: 'chip gold', style: { marginLeft: '8px' } }, '庄家') : null),
+          h('td', { class: 'c-time muted' }, fmtTime(u.created_at)),
+          h('td', { class: 'c-note', style: { whiteSpace: 'normal', maxWidth: '360px' } }, u.note || h('span', { class: 'muted' }, '—')),
+          h('td', { class: 'c-state' }, h('span', { class: `chip ${sc}` }, sl)),
+          h('td', { class: 'c-chars num' }, u.characters),
+          h('td', { class: 'c-act' }, u.role === 'admin' ? null : h('div', { class: 'row', style: { gap: '6px', flexWrap: 'nowrap' } },
             u.status === 'pending' ? [act(u, 'approve', '通过', 'btn sm primary'), act(u, 'reject', '拒绝')] : null,
             u.status === 'active' ? act(u, 'disable', '停用') : null,
             u.status === 'disabled' || u.status === 'rejected' ? act(u, 'enable', '恢复') : null)));
@@ -136,6 +155,14 @@ export async function adminView(root, { reloadSession }) {
       ? emptyState('没有待审批的申请。', { wm: '批', action: h('button', { class: 'btn primary', type: 'button', onclick: guard(async () => { status = 'all'; await draw(); }) }, '看全部用户') })
       : emptyState('没有用户。', { wm: '批' }));
   }
+  // 方向键在分类之间移动（和对局记录的标签页一样）
+  tabs.addEventListener('keydown', async (e) => {
+    if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
+    const i = TABS.findIndex(([k]) => k === status);
+    status = TABS[(i + (e.key === 'ArrowRight' ? 1 : TABS.length - 1)) % TABS.length][0];
+    try { await draw(); } catch (err) { toast(err.message, true); }
+    tabs.querySelector('[aria-selected="true"]')?.focus();
+  });
   root.replaceChildren(pageHead('审批', '新用户注册后在这里等你通过；通过后自动有自己的真人角色。', '批'), tabs, body);
   await draw();
 }

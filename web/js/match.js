@@ -110,7 +110,9 @@ export async function matchView(root, id, { characters, session }) {
   const hasHuman = seats.some((s) => seatChar(s)?.kind === 'human');
   let flipped = humanSeat ? !!renderer.flipFor?.(humanSeat) : false;
   // 真人在下棋时不给看引擎评估（胜率条、走势、着法评价、评估刻度），结束后再显示
-  const evalHidden = () => hasHuman && d.status === 'running';
+  // 服务端给了 d.evalHidden 就以它为准（进行中、座位上有真人或自带 Agent 时为 true：这时服务端不再下发评估，
+  // 不藏起来的话胜率条会一直停在开局那个数）；旧服务端没有这个字段时按「有真人在下」判断
+  const evalHidden = () => (typeof d.evalHidden === 'boolean' ? d.evalHidden && d.status === 'running' : hasHuman && d.status === 'running');
   const qChip = (q) => (evalHidden() ? null : qualityChip(q));
   // 暂停、单步、中止：开局的人和庄家
   const canControl = !!session?.user && (session.user.role === 'admin' || d.created_by === session.user.id);
@@ -447,6 +449,8 @@ export async function matchView(root, id, { characters, session }) {
     sceneEl.replaceChildren(sc ? h('div', {}, h('b', { class: 't' }, sc.title), sc.sub ? h('span', { class: 's' }, sc.sub) : null) : null, seal);
   }
 
+  // 「此刻 正在想」前面的三个跳点：焦点区流式输出时每 160ms 整块重画，动画起点按本机时钟对齐，重画后接着跳、不会每次从头来
+  const spDots = () => h('span', { class: 'sp-dots', 'aria-hidden': 'true', style: { '--t0': `-${Date.now() % 1200}ms` } }, h('i'), h('i'), h('i'));
   /** 焦点区：大头像 +「说的」（公开发言、投票）+「想的」（AI 的推理，上帝视角或对局结束后才有） */
   let lastFocus = null;
   function renderFocus() {
@@ -466,13 +470,29 @@ export async function matchView(root, id, { characters, session }) {
     const said = info.said || [];
     const isSpeech = (label) => said.some((x) => label.includes(x.text) || x.text.includes(label));
     const recent = !live && t?.label && !isSpeech(t.label) ? t.label : null;
-    const lines = said.map((x, i) => h('div', { class: `sp${i === said.length - 1 && !recent && !live ? ' last' : ''}` }, h('span', { class: 'tg' }, x.tag), h('span', { class: 'tx' }, x.text)));
-    if (recent) lines.push(h('div', { class: 'sp act last' }, h('span', { class: 'tg' }, '刚才'), h('span', { class: 'tx' }, recent)));
-    if (live) lines.push(h('div', { class: 'sp live' }, h('span', { class: 'tg' }, '此刻'), h('span', { class: 'tx' }, '正在想…')));
+    // 轮到这个人发言、但还没开始想（两步之间服务端停顿的那一小段）：也算「此刻」，不显示成一张空纸
+    const liveNow = viewPly === null && d.status === 'running';
+    const upNext = liveNow && !live && !paused && d.view?.speaker === seat && waitingHuman !== seat;
+    // 最后一步不是发言（投票、夜里的行动）：整局最新的一步才叫「刚才」，更早的按内容标「投票」「行动」，免得白天还挂着一行「刚才 刀 6 号」
+    const lastPly = Math.max(0, ...[...turns.values()].filter((x) => x.label && x.ply <= limit).map((x) => x.ply));
+    const recentTag = recent ? (t.ply === lastPly && !upNext ? '刚才' : /^投|弃票|弃权/.test(recent) ? '投票' : '行动') : '';
+    const lines = said.map((x, i) => h('div', { class: `sp${i === said.length - 1 && !recent && !live && !upNext ? ' last' : ''}` }, h('span', { class: 'tg' }, x.tag), h('span', { class: 'tx' }, x.text)));
+    if (recent) lines.push(h('div', { class: `sp act${upNext ? '' : ' last'}` }, h('span', { class: 'tg' }, recentTag), h('span', { class: 'tx' }, recent)));
+    if (live) lines.push(h('div', { class: 'sp live' }, h('span', { class: 'tg' }, '此刻'), h('span', { class: 'tx' }, spDots(), '正在想')));
+    else if (upNext) lines.push(h('div', { class: 'sp live' }, h('span', { class: 'tg' }, '此刻'), h('span', { class: 'tx' }, spDots(), '准备发言')));
+    else if (liveNow && waitingHuman === seat && seat === humanSeat) lines.push(h('div', { class: 'sp live' }, h('span', { class: 'tg' }, '此刻'), h('span', { class: 'tx' }, '轮到你')));
     const saidBox = h('div', { class: 'said-list' }, ...(lines.length ? lines : [h('div', { class: 'none' }, '还没有开口')]));
-    // 没有想法可看（内置 AI 不写想法，或真人局里 AI 的想法要等终局）：「说的」占满整行，想法那栏收成一句说明
+    // 前情：跟着当前行动者看时，这个人还在想（或正要开口），纸上先放别人刚说的一两句——
+    // 上一位的发言在他说完的那一刻焦点就换走了，不放这一条，观众永远只看到「正在想」，看不到刚说了什么。点一下去看那个人
+    const ctx = liveNow && !focusSeat && (live || upNext) && duoInfo.scene?.kind !== 'night' ? recentSpeeches(2).filter((x) => x.seat !== seat) : [];
+    const ctxBox = ctx.length ? h('div', { class: 'said-ctx', role: 'group', 'aria-label': '前面的发言' },
+      ...ctx.map((x) => h('button', { type: 'button', class: 'cx', title: `看 ${x.no} 号的全部发言`, onclick: () => { focusSeat = x.seat; seats.forEach(renderSeat); renderFocus(); } },
+        h('b', {}, `${x.no}号 ${x.name}`), h('span', {}, x.text)))) : null;
+    // 没有想法可看（内置 AI 不写想法，或真人局里 AI 的想法要等终局）：「说的」占满整行
     // 有真人在局时 AI 的想法要等终局：不再摆一个空的「想的 · 对局结束后公开」框（头像行已有一枚说明）
-    const solo = hidden || (!live && !thoughtText);
+    // 会写想法的选手（模型、自带 Agent）在上帝视角下一直是「说的 | 想的」两栏：换人、两步之间不会一会儿一栏一会儿两栏地跳
+    const writes = c?.kind === 'model' || c?.kind === 'agent';
+    const solo = hidden || (!live && !thoughtText && !(writes && liveNow));
     // 换了人：焦点区内容依次浮上来，不是一下子替换
     const swapped = lastFocus !== null && lastFocus !== seat;
     lastFocus = seat;
@@ -486,8 +506,10 @@ export async function matchView(root, id, { characters, session }) {
         h('span', { class: 'hint' }, focusSeat ? '' : '点座位换人看'),
         focusSeat ? h('button', { class: 'btn sm ghost', onclick: () => { focusSeat = null; seats.forEach(renderSeat); renderFocus(); } }, '跟随当前') : null),
       // 宣纸右下角淡淡的座号水印：大屏上宣纸撑高时留白有个落点（宣纸矮时不显示，见 app.css）
-      h('div', { class: `paper said${saidTall ? ' tall' : ''}` }, h('span', { class: 'wm-no', 'aria-hidden': 'true' }, `${seats.indexOf(seat) + 1}号`), h('span', { class: 'lab' }, said.length ? `说的 · ${said.length} 句` : '说的'), saidBox),
-      solo ? null : h('div', { class: `well thought2${live ? ' typing' : ''}` }, h('span', { class: 'lab' }, d.viewer ? '想的' : '想的 · 上帝视角'), h('div', { class: 'tt' }, thoughtText || '思考中…')));
+      h('div', { class: `paper said${saidTall ? ' tall' : ''}` }, h('span', { class: 'wm-no', 'aria-hidden': 'true' }, `${seats.indexOf(seat) + 1}号`), h('span', { class: 'lab' }, said.length ? `说的 · ${said.length} 句` : '说的'), ctxBox, saidBox),
+      // 光标挂在文字（.tt）末尾，不挂在整个框上（框是竖排的弹性盒，光标会掉到框底）
+      solo ? null : h('div', { class: 'well thought2' }, h('span', { class: 'lab' }, d.viewer ? '想的' : '想的 · 上帝视角'),
+        h('div', { class: `tt${live ? ' typing' : ''}${!live && !thoughtText ? ' idle' : ''}` }, thoughtText || (live ? '思考中…' : upNext ? '马上开始想…' : '这一步还没有想法'))));
     // 宣纸高不高（≥ 240 才露水印）、滚到最新一句：交给 ResizeObserver 在浏览器排完版之后做（新节点第一次被观察时就会回调），
     // 这里不读布局——在一串 DOM 改动中间读 scrollHeight 会逼浏览器多排一次版
     fadeTop(saidBox);
@@ -636,7 +658,9 @@ export async function matchView(root, id, { characters, session }) {
     const lastQ = s.last?.eval?.quality;
     const cv = atEnd ? d.view : viewAt(viewPly); // 身份、出局都按当前回放到的那一步
     const role = cv?.roles?.[seat];
-    camps[seat].el.classList.toggle('active', thinking);
+    // 轮到这一方就亮（不只是「正在想」）：两步之间服务端停顿的那一小段，光圈直接从上一方移到下一方，不会两边都暗着
+    const toMove = d.status === 'running' && viewPly === null && !paused && pendingSeats().includes(seat);
+    camps[seat].el.classList.toggle('active', thinking || toMove);
     camps[seat].el.classList.toggle('out', !!cv?.out?.includes?.(seat));
     camps[seat].head.replaceChildren(
       h('div', { class: 'camp-id' },
@@ -658,20 +682,24 @@ export async function matchView(root, id, { characters, session }) {
           s.acc !== null && !evalHidden() ? stat('准确率', `${s.acc}%`, '按 lichess 的算法：每步按胜率损失折算 0–100 分，整局取算术平均和调和平均的平均（一次大漏着会明显拉低）') : stat('步数', s.n),
           stat('平均用时', s.n ? fmtMs(Math.round(s.avg)) : '—'),
           isHuman ? null : stat('tokens', fmtTokens(s.tok)),
-          evalHidden() ? null : stat('失误', s.tags.失误 + s.tags.大漏着, s.tags.大漏着 ? `其中大漏着 ${s.tags.大漏着}` : ''),
+          // 没有引擎评估的游戏（囚徒困境）不摆「失误 0」
+          evalHidden() || !winbarOn ? null : stat('失误', s.tags.失误 + s.tags.大漏着, s.tags.大漏着 ? `其中大漏着 ${s.tags.大漏着}` : ''),
           isHuman ? null : stat('无效', s.illegal)].filter(Boolean);
         return h('div', { class: `camp-stats n${cells.length}` }, ...cells);
       })() : h('div', { class: 'camp-mini' }, c?.kind === 'human' ? `${s.n} 步 · ${s.n ? fmtMs(Math.round(s.avg)) : '—'}${change ? ` · ${change.delta >= 0 ? '+' : ''}${change.delta}` : ''}` : `${s.n} 步 · ${s.n ? fmtMs(Math.round(s.avg)) : '—'} · ${fmtTokens(s.tok)} tokens${s.illegal ? ` · 无效 ${s.illegal}` : ''}${change ? ` · ${change.delta >= 0 ? '+' : ''}${change.delta}` : ''}`),
       two && !evalHidden() && s.last?.self_winrate !== null && s.last?.self_winrate !== undefined
-        ? h('div', { class: 'camp-gauge', title: '最近一步：模型自评胜率 / 引擎评估（走棋前）' },
+        ? h('div', { class: 'camp-gauge', title: winbarOn ? '最近一步：模型自评胜率 / 引擎评估（走棋前）' : '最近一步：模型自评胜率' },
           h('span', {}, '自评'), bar(s.last.self_winrate / 100, 'self'), h('b', {}, `${s.last.self_winrate}%`),
-          h('span', {}, '引擎'), bar(lastQ ? lastQ.before : null, 'engine'), h('b', {}, lastQ ? pct(lastQ.before) : '—'))
+          // 没有引擎评估的游戏只留自评一行，不摆一条永远是「—」的引擎条
+          ...(winbarOn ? [h('span', {}, '引擎'), bar(lastQ ? lastQ.before : null, 'engine'), h('b', {}, lastQ ? pct(lastQ.before) : '—')] : []))
         : null,
       d.challenge?.by === d.seats[seat] && d.challenge.text ? h('div', { class: 'camp-quote' }, `「${d.challenge.text}」`) : null,
     );
   }
 
   let lastStatus = null;
+  // 狼人杀、谁是卧底终局：场景匾上已经写着完整的结果和原因，转播条只留「狼人胜」这半句，不把同一长串写两遍
+  const shortRes = (t) => (duo ? String(t || '').replace(/（[\s\S]*$/, '') : t);
   /** 局面里轮到谁：多人局看 view.pending；两人轮流走的棋，上一步不是谁走的就轮到谁（开局是第一个座位） */
   function pendingSeats() {
     const v = d.view || {};
@@ -708,6 +736,16 @@ export async function matchView(root, id, { characters, session }) {
     }
     if (thinking.length > 1) return `${thinking.length} 人同时思考中`;
     if (thinking.length) return `${nm(thinking[0])}思考中`;
+    // 牌桌（德扑、斗地主）两步之间的停顿：写明轮到谁、或者这一手正在结算，不只是「进行中」
+    if (hud) {
+      if (v.result && !v.over) return d.game === 'poker' && v.handNo ? `第 ${v.handNo} 手结算` : '结算中';
+      // 这一手还没人行动：牌桌上还在演上一手收场、这一手发牌，先不报「轮到谁」
+      let L = null;
+      try { L = renderer.handLog?.(v); } catch { /* 画面模块自己会报错，这里不重复 */ }
+      if (L && !L.count) return d.game === 'poker' && v.handNo ? `第 ${v.handNo} 手 · 发牌` : '发牌';
+      const act = v.toAct || v.turn;
+      if (act && seats.includes(act)) return `轮到 ${seatName(act)}`;
+    }
     const pend = pendingSeats().filter((s) => seats.includes(s));
     if (pend.length === 1) return humanSeat && pend[0] !== humanSeat && two ? '对手思考中' : `轮到${nm(pend[0])}`;
     if (pend.length > 1) return `${pend.length} 人同时行动`;
@@ -796,7 +834,7 @@ export async function matchView(root, id, { characters, session }) {
     const reviewing = viewPly !== null;
     // 复盘、回放时不显示「思考中」：看的是过去的局面
     const status = reviewing && viewPly < n ? (replaying ? '回放中' : '复盘中')
-      : running ? liveStatus() : myResult() || resultText(d, d.seatNames);
+      : running ? liveStatus() : shortRes(myResult() || resultText(d, d.seatNames));
     const po = pendingOffer();
     const prevStatus = lastStatus;
     lastStatus = status;
@@ -811,7 +849,8 @@ export async function matchView(root, id, { characters, session }) {
     vis(sb.latest, rk && reviewing && running);
     const keys = [
       [sb.pause, running && !hasHuman && canControl],
-      [sb.pov, running && !hasHuman && d.features?.hidden],
+      // hiddenLive：座位上有真人或自带 Agent，服务端已经只给公共视角，这个键按了也没有变化，不显示
+      [sb.pov, running && !hasHuman && !d.hiddenLive && d.features?.hidden],
       [sb.step, running && paused && canControl],
       [sb.accept, running && waitingHuman && po && po.seat !== waitingHuman],
       [sb.offer, running && waitingHuman && d.features?.draw && !po],
@@ -852,13 +891,18 @@ export async function matchView(root, id, { characters, session }) {
     if (reviewing && canReview() && n) {
       if (sb.scrub.max !== String(n)) sb.scrub.max = String(n);
       if (sb.scrub.value !== String(viewPly)) sb.scrub.value = String(viewPly);
+      // 进度条自己画：走过的一段填金（--p），棋类的关键时刻在轨道上各立一道朱红小刻度（--ticks），拖到哪儿心里有数
+      sb.scrub.style.setProperty('--p', `${(viewPly / n) * 100}%`);
+      const ks = winbarOn && !evalHidden() ? keyMoments() : [];
+      const tk = ks.map((p) => `linear-gradient(#e2523d, #e2523d) calc(6px + (100% - 12px) * ${(p / n).toFixed(4)} - 1px) 50% / 2px 9px no-repeat`).join(', ');
+      if (sb.scrub.dataset.tk !== tk) { sb.scrub.dataset.tk = tk; if (tk) sb.scrub.style.setProperty('--ticks', tk); else sb.scrub.style.removeProperty('--ticks'); }
       if (sb.scrub.parentNode !== statusBar) statusBar.append(sb.scrub);
     } else sb.scrub.remove();
   }
 
   // ---------- 票型弧线（狼人杀、谁是卧底） ----------
   // 投票人座位 → 被投的人座位画一道弧（往场地中间拱），箭头指向被投的人；新的票一道一道画出来。
-  // 投完后的票型只在刚揭晓时画（停 6 秒淡去），打开页面时不补画旧的
+  // 投完后的票型只在刚揭晓时画（停不到 4 秒淡去：和出局公告差不多同时收场，不压着下一位的发言），打开页面时不补画旧的
   let voteRaf = 0;
   function drawVotes(view, relayout = false, deferred = false) {
     if (!renderer.voteLinks) return;
@@ -869,8 +913,8 @@ export async function matchView(root, id, { characters, session }) {
       const fresh = v && v.key !== voteState.key;
       if (fresh) {
         const first = voteState.key === null;
-        voteState = { key: v.key, shown: v.live ? voteState.shown : new Set(), links: v.links, live: !!v.live, out: v.out || null, until: v.live ? Infinity : first ? 0 : Date.now() + 6000 };
-        if (!v.live) setTimeout(() => drawVotes(null, true), 6100);
+        voteState = { key: v.key, shown: v.live ? voteState.shown : new Set(), links: v.links, live: !!v.live, out: v.out || null, until: v.live ? Infinity : first ? 0 : Date.now() + 3900 };
+        if (!v.live) setTimeout(() => drawVotes(null, true), 4000);
       } else if (!v) voteState = { key: null, shown: new Set(), until: 0, links: [] };
     }
     const show = viewPly === null && Date.now() < voteState.until;
@@ -935,7 +979,7 @@ export async function matchView(root, id, { characters, session }) {
     for (const t of [...turns.values()].filter((x) => x.seat && x.label).sort((a, b) => b.ply - a.ply)) {
       const said = duoInfo.seats?.[t.seat]?.said || [];
       if (!said.some((x) => x.text && (x.text === t.label || t.label.includes(x.text) || x.text.includes(t.label)))) continue;
-      out.push({ no: seats.indexOf(t.seat) + 1, name: seatLabel(t.seat), text: t.label });
+      out.push({ seat: t.seat, no: seats.indexOf(t.seat) + 1, name: seatLabel(t.seat), text: t.label });
       if (out.length >= k) break;
     }
     return out.reverse();
@@ -968,6 +1012,7 @@ export async function matchView(root, id, { characters, session }) {
     });
   }
 
+  let speedRaf = 0;
   function renderStage(animate = true) {
     const latest = viewPly === null;
     const ply = latest ? totalPlies() : viewPly;
@@ -981,7 +1026,8 @@ export async function matchView(root, id, { characters, session }) {
     // live：正在看实时局面（不是复盘、回放）；牌桌画面复盘时据此不显示「轮到谁」
     stage.render(view, { movable, actions: movable ? d.humanActions : null, arrows, animate, replay: !!replaying, live: latest && d.status === 'running', viewer: d.viewer, players: playerInfo, clock: latest && d.status === 'running' ? Object.fromEntries(clock) : {} });
     // 棋类快速回放：走子动画跟着倍速加快，不会一步还没走完下一步就来了（牌桌游戏的动画和停顿是对齐好的，不动）
-    if (!hud && !duo && replaying && speed > 1) for (const a of stage.el.getAnimations?.({ subtree: true }) || []) a.playbackRate = Math.min(8, speed);
+    // 放到下一帧开头去找动画：在这里当场找会逼浏览器把刚改了一半的页面先重算一遍样式（后面还要改选手卡、着法表、思考栏）
+    if (!hud && !duo && replaying && speed > 1 && !speedRaf) speedRaf = requestAnimationFrame(() => { speedRaf = 0; if (replaying) for (const a of stage.el.getAnimations?.({ subtree: true }) || []) a.playbackRate = Math.min(8, speed); });
     // 场上公告（天亮死讯、有人出局）：画面往前走了一步才弹，复盘往回翻、第一次打开时不弹
     if (renderer.announce && animate && lastAnnView && view !== lastAnnView && (latest || replaying)) {
       let a = null;
@@ -1268,6 +1314,20 @@ export async function matchView(root, id, { characters, session }) {
   }
 
   const seenCards = {};
+  const THOUGHT_WIN = 8;
+  const thoughtsAll = new Set();
+  // 已经走完的那几步的思考卡：内容没变就接着用原来那张（不重建、不重新排字；读者点开的「原生推理」也不会每走一步就自己合上）
+  const cardCache = new Map();
+  function cachedCard(t) {
+    const q = evalHidden() ? null : t.eval?.quality;
+    const o = offers().find((x) => x.ply === t.ply || x.answerPly === t.ply);
+    const sig = [t.seat, t.label, t.analysis?.length, t.reasoning?.length, q?.tag, q?.loss, q?.before, t.self_winrate, t.latency_ms, t.attempts?.length, o?.status, o?.ply].join('|');
+    const hit = cardCache.get(t.ply);
+    if (hit && hit.sig === sig) { hit.el.classList.remove('fresh', 'focus', 'reveal'); return hit.el; }
+    const el = thoughtCard(t);
+    cardCache.set(t.ply, { sig, el });
+    return el;
+  }
   function renderThoughts() {
     if (duo) { renderFocus(); return; }
     if (hud) { renderSpot(); renderHandLog(); return; }
@@ -1277,7 +1337,11 @@ export async function matchView(root, id, { characters, session }) {
       if (p && d.status === 'running' && viewPly === null) cards.push(thoughtCard(p, true));
       const limit = viewPly ?? Infinity;
       const plies = [...turns.keys()].filter((k) => turns.get(k).seat === seat && k <= limit).sort((a, b) => b - a);
-      for (const k of plies) cards.push(thoughtCard(turns.get(k)));
+      // 长对局每走一步都把这一方几十上百张思考卡全部重建（回放到 150 步时一步要建几千个节点，4 倍降速下每步 350ms）：
+      // 默认只画最近的 THOUGHT_WIN 张，更早的收在一个「显示全部」键后面
+      const shown = thoughtsAll.has(seat) ? plies : plies.slice(0, THOUGHT_WIN);
+      for (const k of shown) cards.push(cachedCard(turns.get(k)));
+      if (plies.length > shown.length) cards.push(h('button', { type: 'button', class: 'th-more', onclick: () => { thoughtsAll.add(seat); renderThoughts(); } }, `更早的 ${plies.length - shown.length} 步 · 显示全部`));
       // 我自己的那一栏：轮到我时顶上写「轮到你」，不是「等待出手」
       const myTurnNow = seat === humanSeat && waitingHuman === seat && d.status === 'running' && viewPly === null;
       if (myTurnNow) cards.unshift(h('div', { class: 'camp-empty camp-turn' }, '轮到你'));
@@ -1297,7 +1361,7 @@ export async function matchView(root, id, { characters, session }) {
           if (replaying) { el.classList.add('reveal'); el.style.setProperty('--reveal', `${Math.max(0.4, 1.6 / speed)}s`); }
         }
         list.scrollTo({ top: 0, behavior: replaying ? 'auto' : 'smooth' });
-      } else list.scrollTop = 0;
+      } else list.scrollTop = 0; // 每次都回顶：列表有滚动吸附，顶上插进新卡时浏览器会跟着原来吸住的那张卡往下滚，新卡反而被挤出视野
     }
   }
 
@@ -1527,7 +1591,7 @@ export async function matchView(root, id, { characters, session }) {
         if (t?.seat) {
           renderCamp(t.seat);
           const card = camps[t.seat].list.querySelector(`.thought[data-ply="${e.ply}"]`);
-          if (card) card.replaceWith(thoughtCard(t));
+          if (card) { cardCache.delete(t.ply); card.replaceWith(cachedCard(t)); }
         }
         break;
       }
@@ -1538,6 +1602,7 @@ export async function matchView(root, id, { characters, session }) {
         break;
       case 'control':
         paused = e.paused;
+        if (!duo) seats.forEach(renderCamp);
         renderStatus();
         renderStage(false);
         break;

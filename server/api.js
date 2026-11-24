@@ -3,7 +3,7 @@
 import { gameList, getGame, replay } from '../games/index.js';
 import { PUZZLES } from '../games/xiangqi/puzzles.js';
 import { presetList, presetOf, EFFORTS } from './providers/presets.js';
-import { listModels, callModel } from './providers/index.js';
+import { listModels, callModel, checkBaseURL } from './providers/index.js';
 import { keyStatus, setKey } from './secrets.js';
 import { createCharacter, updateCharacter, getCharacter, publicCharacter, issueAgentToken, LOCKED, MAX_DAILY_LIMIT } from './characters.js';
 import { leaderboard, tierFor, poolKey } from './ladder/rating.js';
@@ -18,6 +18,18 @@ export function routes(router, { db, hub, arena, matchmaker, compare, evaluator 
   /** 这只蛐蛐能不能由这个用户放进对局：自己的，或者系统选手 */
   const usable = (user, c) => !!c && !c.archived && (c.system || canManage(user, c));
   const mustManage = (user, c) => { if (!canManage(user, c)) throw new HttpError(403, '这不是你的蛐蛐'); return c; };
+  /** 普通用户填的接口地址不能指向服务器本机或内网（见 providers/netguard.js） */
+  const guardBaseURL = async (user, provider, baseURL) => {
+    try { await checkBaseURL(db, user.id, provider, baseURL); } catch (e) { throw new HttpError(400, e.message); }
+  };
+  /** 一个用户最多留这么多只没归档的蛐蛐（庄家不限） */
+  const MAX_CHARACTERS = 60;
+  const roomFor = (user) => {
+    if (isAdmin(user)) return;
+    if (db.get("SELECT COUNT(*) AS n FROM characters WHERE owner_id = ? AND archived = 0 AND kind != 'human'", user.id).n >= MAX_CHARACTERS) throw new HttpError(400, `你已经有 ${MAX_CHARACTERS} 只蛐蛐了，先归档一些再建`);
+  };
+  // 事件流频道：大厅、庄家、某盘对局 / 组局 / 同题对比；别的名字不收（频道表不随便长）
+  const CHANNEL_RE = /^(lobby|admin|(match|room|compare):[A-Za-z0-9_]{1,40})$/;
 
   // ---------- 基本信息 ----------
   router.get('/api/meta', ({ user }) => ({
@@ -36,7 +48,7 @@ export function routes(router, { db, hub, arena, matchmaker, compare, evaluator 
 
   router.get('/api/events', ({ req, res, query, user }) => {
     // admin 频道（注册申请）只给庄家
-    const chans = String(query.ch || 'lobby').split(',').filter(Boolean).filter((c) => c !== 'admin' || isAdmin(user)).slice(0, 40); // 一个标签页的所有订阅合成一条连接（浏览器对同一站点只开 6 条长连接）
+    const chans = [...new Set(String(query.ch || 'lobby').slice(0, 4000).split(','))].filter((c) => CHANNEL_RE.test(c)).filter((c) => c !== 'admin' || isAdmin(user)).slice(0, 40); // 一个标签页的所有订阅合成一条连接（浏览器对同一站点只开 6 条长连接）
     hub.subscribe(req, res, chans);
   });
 
@@ -92,9 +104,11 @@ export function routes(router, { db, hub, arena, matchmaker, compare, evaluator 
     return rows.map((c) => ({ ...publicCharacter(db, c), ...(user && (c.owner_id === user.id || isAdmin(user)) ? {} : { base_url: undefined }), mine: !!user && c.owner_id === user.id, tier: tierFor(db, c.id, poolKey(game, c.kind)), today: arena.todayUsage(c.id) }));
   });
 
-  router.post('/api/characters', ({ body, user }) => {
+  router.post('/api/characters', async ({ body, user }) => {
     if (body.kind === 'human') throw new HttpError(400, '真人玩家角色由系统为每个账号自动创建');
     if (['claude-cli', 'codex-cli'].includes(body.provider) && !isAdmin(user)) throw new HttpError(403, '本机订阅通道只有庄家可以用');
+    roomFor(user);
+    if ((body.kind || 'model') === 'model') await guardBaseURL(user, body.provider, body.base_url);
     const c = createCharacter(db, user.id, body);
     // 自带 agent：创建时生成接入令牌，明文只在这次响应里出现
     const token = c.kind === 'agent' ? issueAgentToken(db, c.id) : undefined;
@@ -122,9 +136,15 @@ export function routes(router, { db, hub, arena, matchmaker, compare, evaluator 
   });
 
   /** 派生：复制配置，可修改锁定字段，积分从头算（只能派生自己的蛐蛐） */
-  router.post('/api/characters/:id/derive', ({ params, body, user }) => {
+  router.post('/api/characters/:id/derive', async ({ params, body, user }) => {
     const c = mustManage(user, getCharacter(db, params.id));
     const base = Object.fromEntries(LOCKED.map((k) => [k, c[k]]));
+    // 派生可以改锁定字段：真人角色、本机订阅通道、内网地址这几条和新建时一样要查
+    const merged = { ...base, ...body };
+    if (merged.kind === 'human') throw new HttpError(400, '真人玩家角色由系统为每个账号自动创建');
+    if (['claude-cli', 'codex-cli'].includes(merged.provider) && !isAdmin(user)) throw new HttpError(403, '本机订阅通道只有庄家可以用');
+    roomFor(user);
+    if (merged.kind === 'model') await guardBaseURL(user, merged.provider, merged.base_url);
     const n = createCharacter(db, user.id, { ...base, daily_limit: c.daily_limit, ...body, parent_id: c.id, name: body.name || `${c.name}·新` });
     return publicCharacter(db, n);
   });
@@ -204,7 +224,9 @@ export function routes(router, { db, hub, arena, matchmaker, compare, evaluator 
       delete options.series;
       try { if (getGame(String(body.game || 'xiangqi')).features?.hidden) delete options.setup; } catch { /* 游戏不存在由 createMatch 报错 */ }
     }
-    return { id: arena.createMatch({ ...body, options, origin: 'manual', createdBy: user.id }) };
+    arena.checkCapacity(user);
+    // 只收开局用得到的字段（挑战宣言之类由自动匹配写，不让请求体带进来）
+    return { id: arena.createMatch({ game: body.game, seats: body.seats, mode: body.mode, options, origin: 'manual', createdBy: user.id }) };
   });
 
   router.get('/api/matches/:id', ({ params, query, user }) => arena.detail(params.id, query.viewer || null, user?.id || null));

@@ -32,7 +32,7 @@ export async function charactersView(root, { meta, go, reloadMeta, session }) {
       h('div', { class: 'foot-tags' },
         !c.ranked ? h('span', { class: 'chip' }, '仅娱乐赛') : null,
         c.kind === 'agent' ? h('span', { class: `chip ${c.online ? 'good' : ''}` }, c.online ? 'Agent 在线' : 'Agent 离线') : null,
-        c.auto_match ? h('span', { class: 'chip', title: '今天主动参加的对局 / 每日上限（组局不计）' }, `今日 ${c.today.games}/${c.daily_limit}`) : null)),
+        c.auto_match && c.mine ? h('span', { class: 'chip', title: '今天主动参加的对局 / 每日上限（组局不计）' }, `今日 ${c.today.games}/${c.daily_limit}`) : null)),
   );
 
   root.replaceChildren(
@@ -40,7 +40,7 @@ export async function charactersView(root, { meta, go, reloadMeta, session }) {
     session.user ? h('div', { class: 'section-title' }, h('h2', {}, '我的蛐蛐')) : null,
     session.user ? h('div', { class: 'cards' }, ...mine.map(card), h('button', { class: 'card char new', type: 'button', onclick: () => createDialog({ meta, reloadMeta, onDone: (c) => go(`#/characters/${c.id}`) }) }, icon('plus', 22), '养一只新蛐蛐'))
       : emptyState('登录后可以养自己的蛐蛐。', { wm: null, action: h('a', { class: 'btn primary', href: '#/login?next=%23%2Fcharacters' }, '登录') }),
-    h('div', { class: 'section-title section-gap' }, h('h2', {}, '系统选手与我')),
+    h('div', { class: 'section-title section-gap' }, h('h2', {}, sys.some((c) => c.kind === 'human') ? '系统选手与我' : '系统选手')),
     h('div', { class: 'cards' }, ...sys.map(card)),
   );
 }
@@ -239,7 +239,7 @@ export async function profileView(root, id, { meta, go, reloadMeta }) {
           const t = await post(`/characters/${c.id}/test`);
           toast(t.ok ? `连接成功：${t.text}` : t.error, !t.ok);
         }) }, '测试连接') : null,
-        h('button', { class: 'btn sm', type: 'button', onclick: () => createDialog({ meta, reloadMeta, base: c, onDone: (n) => go(`#/characters/${n.id}`) }) }, '派生新选手'),
+        h('button', { class: 'btn sm', type: 'button', onclick: () => createDialog({ meta, reloadMeta, base: c, onDone: (n) => go(`#/characters/${n.id}`) }) }, '派生新蛐蛐'),
         h('button', { class: 'btn sm', type: 'button', onclick: guardConfirm(async () => {
           newName = await promptDialog({ title: '改名', label: '新名字', value: cleanName(c.name), maxlength: 24, okText: '改名' });
           return !!newName && newName !== c.name;
@@ -295,7 +295,7 @@ export async function profileView(root, id, { meta, go, reloadMeta }) {
   root.replaceChildren(h('div', { class: 'profile' },
     h('div', { class: 'col' },
       h('div', { class: 'card pad col' },
-        h('div', { class: 'row' }, avatar(c, 'lg'), h('div', { class: 'grow' }, h('h2', {}, cleanName(c.name)), h('div', { class: 'small muted' }, modelLine(c)), c.effortName && c.kind === 'model' ? h('div', { class: 'small muted' }, `推理强度：${c.effortName}${c.memory ? ' · 跨局记忆' : ''}${c.show_legal ? '' : ' · 不提供合法着法'}`) : null)),
+        h('div', { class: 'row' }, avatar(c, 'lg'), h('div', { class: 'grow' }, h('h1', { class: 'h2' }, cleanName(c.name)), h('div', { class: 'small muted' }, modelLine(c)), c.effortName && c.kind === 'model' ? h('div', { class: 'small muted' }, `推理强度：${c.effortName}${c.memory ? ' · 跨局记忆' : ''}${c.show_legal ? '' : ' · 不提供合法着法'}`) : null)),
         c.style ? h('div', { class: 'note' }, c.style) : null,
         h('div', { class: 'row' }, tierBadge(r.tier), h('b', { style: { fontSize: '20px' } }, `${r.points}`), h('span', { class: 'small muted' }, `最高 ${Math.round(r.peak)}`)),
         h('div', { class: 'label' }, `排位战绩 · ${g.name}`),

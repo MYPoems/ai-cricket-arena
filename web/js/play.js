@@ -1,6 +1,6 @@
 // 开局：选游戏、人数和各座位的选手。
 
-import { h, api, post, guard, avatar, modelLine, MODE_NAMES, listen, pageHead, pressed, icon, cleanName, summarizeSeats } from './ui.js';
+import { h, api, post, guard, avatar, modelLine, MODE_NAMES, listen, pageHead, pressed, icon, cleanName, summarizeSeats, dialog } from './ui.js';
 
 export async function playView(root, { meta, characters, go, session }) {
   // 排位赛由天梯自动匹配产生；只有庄家能手动开排位（测试用）
@@ -59,7 +59,26 @@ export async function playView(root, { meta, characters, go, session }) {
     h('label', { class: 'field' }, h('span', {}, h('span', {}, '两步之间的间隔 '), delayLabel), delay));
   const advBox = h('div', { class: 'adv-box' }, advOpts);
 
-  function seatBox(seat) {
+  const lineOf = (c) => (c.kind === 'model' ? c.model : modelLine(c));
+  /** 座位多的游戏（斗地主 3 人、德州 6 人、狼人杀 8–9 人）：每个座位只占一行，写着现在坐的是谁，点开再换。
+   *  每个座位都把十几名选手摊开的话，狼人杀要铺上百颗胶囊、手机上滚四五屏 */
+  function seatRow(seat) {
+    const name = game().seatNames[seat] || seat;
+    const c = pickable.find((x) => x.id === sel.seats[seat]);
+    return h('button', { type: 'button', class: `seat-row${c ? '' : ' none'}`, 'data-seat': seat, 'aria-haspopup': 'dialog', 'aria-label': `${name}：${c ? cleanName(c.name) : '未选'}，更换`, onclick: () => {
+      const dlg = dialog(`${name}的选手`, seatBox(seat, () => dlg.close()));
+      // 焦点落在现在坐着的那一位上（不是右上角的关闭键）：方向明确，Tab 一下就是相邻的选手
+      dlg.querySelector('.pick.on, .pick')?.focus({ preventScroll: true });
+      // 选完后这一行重画过了，焦点还给新的这一行
+      dlg.addEventListener('close', () => seatsBox.querySelector(`[data-seat="${seat}"]`)?.focus({ preventScroll: true }));
+    } },
+    h('span', { class: 'side-tag seat-lab' }, name),
+    c ? avatar(c, 'sm') : null,
+    h('span', { class: 't' }, h('span', {}, c ? cleanName(c.name) : '选一名选手'), c ? h('small', {}, lineOf(c)) : null),
+    icon('chevron-down', 16));
+  }
+
+  function seatBox(seat, after) {
     const box = h('div', { class: 'seat-pick', role: 'group', 'aria-label': `${game().seatNames[seat] || seat}的选手` });
     const others = Object.entries(sel.seats).filter(([s]) => s !== seat).map(([, id]) => id);
     box.replaceChildren(...pickable.filter(fits).map((c) => {
@@ -71,8 +90,8 @@ export async function playView(root, { meta, characters, go, session }) {
         ...pressed(on),
         'aria-disabled': dis ? 'true' : null,
         title: dis ? (others.includes(c.id) ? '排位赛里同一名选手不能占多个座位' : '本机订阅和自定义接口只能下娱乐赛') : modelLine(c),
-        onclick: () => { if (dis) return; sel.seats[seat] = c.id; redraw(); },
-      }, on ? h('span', { class: 'pick-check' }, icon('check', 16)) : avatar(c, 'sm'), h('span', { class: 't' }, h('span', {}, cleanName(c.name)), h('small', {}, c.kind === 'model' ? c.model : modelLine(c))));
+        onclick: () => { if (dis) return; sel.seats[seat] = c.id; redraw(); after?.(); },
+      }, on ? h('span', { class: 'pick-check' }, icon('check', 16)) : avatar(c, 'sm'), h('span', { class: 't' }, h('span', {}, cleanName(c.name)), h('small', {}, lineOf(c))));
     }));
     return box;
   }
@@ -87,9 +106,12 @@ export async function playView(root, { meta, characters, go, session }) {
           ...Array.from({ length: g.players.max - g.players.min + 1 }, (_, i) => g.players.min + i).map((n) => h('option', { value: n, selected: n === (sel.players || g.players.default) }, `${n} 人`))))
       : null);
     modeSeg.replaceChildren(...[['casual', '娱乐赛'], ...(canRanked ? [['ranked', '排位赛']] : [])].map(([v, l]) => h('button', { type: 'button', class: sel.mode === v ? 'on' : '', ...pressed(sel.mode === v), onclick: () => { sel.mode = v; redraw(); } }, l)));
-    seatsBox.replaceChildren(...seatIds().map((seat, i) => h('div', { class: 'col', style: { gap: '8px' } },
-      h('div', { class: 'row', style: { gap: '8px' } }, h('span', { class: 'side-tag seat-lab' }, g.seatNames[seat] || seat)),
-      seatBox(seat))));
+    const ids = seatIds();
+    seatsBox.replaceChildren(...(ids.length > 2
+      ? [h('div', { class: 'seat-rows', role: 'group', 'aria-label': '各座位的选手' }, ...ids.map(seatRow))]
+      : ids.map((seat) => h('div', { class: 'col', style: { gap: '8px' } },
+        h('div', { class: 'row', style: { gap: '8px' } }, h('span', { class: 'side-tag seat-lab' }, g.seatNames[seat] || seat)),
+        seatBox(seat)))));
     const byId = new Map(pickable.map((c) => [c.id, c]));
     summary.replaceChildren(...(() => {
       const names = seatIds().map((s) => byId.get(sel.seats[s])?.name);

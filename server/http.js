@@ -79,9 +79,12 @@ async function readJson(req) {
   return body;
 }
 
+/** 请求来自哪个地址：经 Cloudflare 隧道时用它带来的真实地址，否则用连接的对端地址 */
+export const ipOf = (req) => String(req.headers['cf-connecting-ip'] || req.headers['x-forwarded-for'] || req.socket?.remoteAddress || '').split(',')[0].trim().slice(0, 64);
+
 export function sendJson(res, status, data) {
   const body = JSON.stringify(data);
-  res.writeHead(status, { 'Content-Type': MIME['.json'], 'Cache-Control': 'no-store' });
+  res.writeHead(status, { 'Content-Type': MIME['.json'], 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
   res.end(body);
 }
 
@@ -95,7 +98,7 @@ function serveStatic(req, res, path, mounts) {
     const file = normalize(join(root, rel));
     if (!file.startsWith(root)) return false;
     if (!existsSync(file) || !statSync(file).isFile()) continue;
-    res.writeHead(200, { 'Content-Type': MIME[extname(file)] || 'application/octet-stream', 'Cache-Control': 'no-cache' });
+    res.writeHead(200, { 'Content-Type': MIME[extname(file)] || 'application/octet-stream', 'Cache-Control': 'no-cache', 'X-Content-Type-Options': 'nosniff' });
     createReadStream(file).pipe(res);
     return true;
   }
@@ -137,27 +140,50 @@ export function handler(router, mounts, { resolveUser = () => null, publicView =
       if (res.headersSent) { res.end(); return; }
       const status = err.status || 500;
       if (status >= 500) console.error(err);
-      sendJson(res, status, { error: err.message || '服务器错误' });
+      // 没有标明状态码的意外错误（代码异常、数据库报错）不把内部细节回给浏览器
+      sendJson(res, status, { error: (err.status ? err.message : '') || '服务器错误' });
     }
   };
 }
 
 /** SSE 推送中心：按频道广播事件 */
+/** 事件流连接的上限：总数，和同一个地址的（一个标签页只开一条，够用；防止有人开一堆长连接把服务拖住） */
+export const SSE_MAX = 800;
+export const SSE_MAX_PER_IP = 40;
+const SSE_BACKLOG = 2e6; // 一条连接最多积压这么多字节没发出去
+
 export class Hub {
   constructor() {
     this.channels = new Map();
+    this.total = 0;
+    this.perIp = new Map();
     setInterval(() => this.#ping(), 25000).unref();
   }
 
   subscribe(req, res, channels) {
+    const ip = ipOf(req);
+    if (this.total >= SSE_MAX || (this.perIp.get(ip) || 0) >= SSE_MAX_PER_IP) throw new HttpError(429, '实时连接太多，稍后再试');
+    this.total++;
+    this.perIp.set(ip, (this.perIp.get(ip) || 0) + 1);
     res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
     res.write('retry: 3000\n\n');
     for (const ch of channels) {
       if (!this.channels.has(ch)) this.channels.set(ch, new Set());
       this.channels.get(ch).add(res);
     }
+    let closed = false;
     req.on('close', () => {
-      for (const ch of channels) this.channels.get(ch)?.delete(res);
+      if (closed) return;
+      closed = true;
+      this.total--;
+      const n = (this.perIp.get(ip) || 1) - 1;
+      if (n > 0) this.perIp.set(ip, n); else this.perIp.delete(ip);
+      for (const ch of channels) {
+        const subs = this.channels.get(ch);
+        if (!subs) continue;
+        subs.delete(res);
+        if (!subs.size) this.channels.delete(ch); // 没人听的频道不留着
+      }
     });
   }
 
@@ -165,14 +191,20 @@ export class Hub {
     const subs = this.channels.get(channel);
     if (!subs?.size) return;
     const data = `data: ${JSON.stringify({ ch: channel, ...event })}\n\n`;
-    for (const res of subs) res.write(data);
+    for (const res of subs) this.#send(res, data);
   }
 
   watchers(channel) {
     return this.channels.get(channel)?.size || 0;
   }
 
+  /** 写给一个连接；对方一直不收、积压超过 SSE_BACKLOG 就断开（它重连后刷新详情即可），免得挂着不读的连接把内存撑大 */
+  #send(res, data) {
+    if (res.writableLength > SSE_BACKLOG) { res.destroy?.(); return; }
+    res.write(data);
+  }
+
   #ping() {
-    for (const subs of this.channels.values()) for (const res of subs) res.write(': ping\n\n');
+    for (const subs of this.channels.values()) for (const res of subs) this.#send(res, ': ping\n\n');
   }
 }

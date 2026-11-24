@@ -40,7 +40,7 @@ export async function compareNewView(root, { characters, go }) {
   root.replaceChildren(crumbs('新建'), h('div', { class: 'cmp' },
     h('div', { class: 'col' }, h('div', { class: 'card pad' }, board.el)),
     h('div', { class: 'col' },
-      h('div', { class: 'card pad col' }, h('h2', {}, '同题对比'), pz, fenInput),
+      h('div', { class: 'card pad col' }, h('h1', { class: 'h2' }, '同题对比'), pz, fenInput),
       h('div', { class: 'card pad col' }, h('h3', {}, '参加对比的选手'), picks,
         h('div', {}, h('button', { class: 'btn primary', type: 'button', onclick: guard(async () => {
           const fen = sel.fen || sel.puzzle.fen;
@@ -113,7 +113,7 @@ export async function compareView(root, id, { characters }) {
   }
 
   root.replaceChildren(crumbs(d.title), h('div', { class: 'cmp' },
-    h('div', { class: 'col' }, h('div', { class: 'card pad col' }, h('h2', {}, d.title), board.el, legend, summary)),
+    h('div', { class: 'col' }, h('div', { class: 'card pad col' }, h('h1', { class: 'h2' }, d.title), board.el, legend, summary)),
     grid,
   ));
   draw();

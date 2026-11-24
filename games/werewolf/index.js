@@ -6,6 +6,8 @@
 // 白天：公布昨夜死亡（不公布死因）；首夜死者留遗言；猎人被狼杀或被放逐时可以开枪；
 // 存活者按座位顺序发言 → 同时投票放逐（可以弃票）→ 出局者留遗言；平票者再各说一句后重投，再平票无人出局。
 // 胜负：狼人全部出局好人胜；狼人数不少于好人数狼人胜；最多 10 天，到时狼人还在算狼人胜。
+// 规则版本（setup.rules，新开的对局是 2，旧记录没有它、按 1 重放）：2 起，刚出局的人里有能开枪的猎人时，等他开完枪再判胜负
+//（猎人带走最后一只狼好人胜；以前是人一出局就判，猎人来不及开枪）。
 
 export const MAX_DAYS = 10;
 export const MAX_LEN = 60;
@@ -144,6 +146,15 @@ function nextNightStep(s, from) {
   dawn(s);
 }
 
+/**
+ * 有人出局后判胜负；分出胜负返回 true。
+ * 规则版本 2 起：刚出局的人里有能开枪的猎人时先不判——遗言、开枪都处理完再判（见 advance），他这一枪可能改变结果
+ */
+function winAfterDeaths(s, seats) {
+  if (s.rules >= 2 && seats.some((x) => canShoot(s, x))) return false;
+  return checkWin(s);
+}
+
 /** 猎人能不能开枪：被狼杀或被放逐的猎人 */
 function canShoot(s, seat) {
   if (s.roles[seat] !== 'hunter') return false;
@@ -249,7 +260,7 @@ function dawn(s) {
   s.wolfVotes = {};
   s.wolfSkip = [];
   s.night = emptyNight();
-  if (dead.length && checkWin(s)) return;
+  if (dead.length && winAfterDeaths(s, dead.map((d) => d.seat))) return;
   s.lastQueue = s.day === 1 ? dead.map((d) => d.seat) : [];
   // 每名死者都有一步「猎人检查」：真猎人（被刀）决定开不开枪，其他人代答跳过——旁人分不出谁是猎人
   s.hunterQueue = hasHunter(s) ? dead.map((d) => d.seat) : [];
@@ -264,6 +275,8 @@ function advance(s) {
   if (s.lastQueue.length) { s.phase = 'lastword'; return; }
   if (!s.shooter && s.hunterQueue?.length) s.shooter = s.hunterQueue.shift();
   if (s.shooter) { s.phase = 'hunter'; return; }
+  // 规则版本 2：等猎人开枪而推迟的胜负，到这里（遗言、开枪都处理完）再判；没有推迟过时这里一定判不出胜负
+  if (s.rules >= 2 && checkWin(s)) return;
   if (s.after === 'day') {
     s.phase = 'speak';
     s.queue = s.seats.filter((x) => s.alive.includes(x));
@@ -329,7 +342,7 @@ function resolveVotes(s) {
     entry.out = out;
     entry.next = 'out';
     die(s, out, 'day', 'vote');
-    if (checkWin(s)) return;
+    if (winAfterDeaths(s, [out])) return;
     s.lastQueue = [out];
     s.hunterQueue = hasHunter(s) ? [out] : [];
     advance(s);
@@ -565,7 +578,10 @@ const game = {
   seats: (n = 8) => ALL_SEATS.slice(0, n),
   seatName,
 
-  create({ players = 8, seed = 0 } = {}) {
+  /** 新开的对局用的规则版本（框架开局时写进开局参数；旧记录没有，按版本 1 重放） */
+  newSetup: { rules: 2 },
+
+  create({ players = 8, seed = 0, setup = {} } = {}) {
     const n = Number(players);
     if (!Number.isInteger(n) || n < 6 || n > 9) throw new Error('狼人杀需要 6–9 人');
     const rng = mulberry32(Number(seed) || 0);
@@ -577,7 +593,7 @@ const game = {
     }
     const roles = Object.fromEntries(seats.map((s, i) => [s, deck[i]]));
     const state = {
-      n, seats, roles,
+      n, seats, roles, rules: Number(setup?.rules) >= 2 ? 2 : 1,
       alive: seats.slice(), deaths: [],
       day: 1, phase: 'wolf',
       wolfVotes: {}, wolfSkip: [], night: emptyNight(), nights: [], checks: [],
@@ -727,7 +743,7 @@ const game = {
       wolf: '每晚和队友各自提名一个要杀的非狼人玩家，按多数决定，平票取座位号小的；也可以空刀。',
       seer: '每晚查验一名存活玩家，得知他是好人还是狼人。可以在白天公开查验结果带领好人。',
       witch: '你有一瓶解药和一瓶毒药，各只能用一次。每晚会知道谁被狼人杀了，可以用解药救他（不能救自己），或用毒药毒死一名玩家；同一晚只能用一瓶，也可以都不用。',
-      hunter: '你被狼人杀死或被投票放逐时可以开枪带走一名存活玩家（也可以不开枪）；被女巫毒死不能开枪。',
+      hunter: '你被狼人杀死或被投票放逐时可以开枪带走一名存活玩家（也可以不开枪）；被女巫毒死不能开枪。你出局时先开枪、再判胜负。',
       villager: '你没有夜间技能，靠白天的发言和投票找出狼人。',
     }[role];
     return [

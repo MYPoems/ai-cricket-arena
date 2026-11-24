@@ -487,6 +487,7 @@ export class Board {
   }
 
   /** 重建棋子；能认出「上一步」时做落子动画。返回是否在播动画 */
+  #anims = [];
   #buildPieces(prevBoard, last, animate) {
     const board = this.state.board;
     let mover = null, captured = null;
@@ -498,7 +499,9 @@ export class Board {
         captured = prevBoard[last.to] || null;
       }
     }
-    for (const a of this.el.getAnimations?.({ subtree: true }) || []) if (a.id === 'xq-move') a.cancel();
+    // 上一步还没演完的动画：自己记着、直接取消（原来用 getAnimations 去找，那会逼浏览器当场重算一遍样式，快速回放时每步多 5ms）
+    for (const a of this.#anims) a.cancel();
+    this.#anims = [];
     this.ghosts.replaceChildren();
     this.pieces.replaceChildren();
     this.els.clear();
@@ -519,7 +522,7 @@ export class Board {
     const dist = Math.hypot(tx - fx, ty - fy) / S;
     const dur = Math.round(330 + Math.min(dist, 9) * 12);
     const at = (x, y) => `translate(${x}px, ${y}px)`;
-    const run = (el, frames, opts) => { const a = el.animate(frames, { duration: dur, ...opts }); a.id = 'xq-move'; return a; };
+    const run = (el, frames, opts) => { const a = el.animate(frames, { duration: dur, ...opts }); a.id = 'xq-move'; this.#anims.push(a); return a; };
     run(moverEl, [
       { transform: at(fx, fy) },
       { transform: at(fx, fy), offset: 0.2, easing: 'cubic-bezier(.45,0,.2,1)' },
@@ -554,6 +557,7 @@ export class Board {
         { transform: `${at(tx + ux * 34, ty + uy * 34 - 14)} rotate(${ux >= 0 ? 28 : -28}deg) scale(.72)`, opacity: 0 },
       ], { duration: dur + 260, fill: 'forwards' });
       a.id = 'xq-move';
+      this.#anims.push(a);
       a.onfinish = () => ghost.remove();
     }
     return true;
