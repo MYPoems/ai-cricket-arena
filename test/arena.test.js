@@ -40,6 +40,15 @@ function waitEnd(id, ms = 120000) {
   });
 }
 
+/** 直接结束一盘（排位赛不能用「中止」） */
+function stopNow(id) {
+  const rt = arena.live.get(id);
+  if (!rt) return;
+  rt.abortReason = '测试结束';
+  rt.abort.abort();
+  rt.wake?.();
+}
+
 const mock = (name, extra = {}) => createCharacter(db, 'local', { kind: 'model', provider: 'mock', model: 'mock', name, auto_match: 1, ...extra });
 const builtin = db.get("SELECT * FROM characters WHERE name = '内置 AI · 初级'");
 
@@ -180,18 +189,47 @@ test('一盘里可以有多位真人：各看各的身份，只能走自己的�
   assert.throws(() => arena.createMatch({ game: 'werewolf', seats: { ...seats, p3: a.id }, mode: 'casual' }), /两个座位/);
 });
 
-test('自动匹配：模型自己挑对手并写宣言', async () => {
+test('自动匹配：模型自己挑对手并写宣言；系统选手不参加', async () => {
   const mm = new Matchmaker(arena);
-  // 只留一个挑战者和内置 AI，让对局快速结束
-  db.run("UPDATE characters SET auto_match = 0 WHERE name != '内置 AI · 初级' AND name != '内置 AI · 中级'");
+  // 只留两只模拟模型（系统选手开着 auto_match 也不参加）
+  db.run('UPDATE characters SET auto_match = 0 WHERE system = 0');
   mock('挑战者');
   db.setSetting('ladder', { enabled: true, concurrency: 1 });
+  assert.equal(await mm.tick(), null, '只有一只蛐蛐：不拿随机走子、内置 AI 凑对');
+  mock('应战者');
   const id = await mm.tick();
   assert.ok(id, JSON.stringify(mm.lastLog));
   const m = db.get('SELECT * FROM matches WHERE id = ?', id);
   assert.equal(m.challenge.text, '来一盘，看看谁算得更深。');
+  assert.ok(Object.values(m.seats).every((cid) => !db.get('SELECT system FROM characters WHERE id = ?', cid).system), '座位上没有系统选手');
+  stopNow(id); // 两只模拟模型下排位可能很长（选的是挑战者下得最少的游戏），断言完就收
   await waitEnd(id);
   db.setSetting('ladder', { enabled: false });
+  db.run("UPDATE characters SET auto_match = 0 WHERE name IN ('挑战者', '应战者')");
+});
+
+test('自动匹配：真人开着网站、手上没有对局时才参加；匹配到了发私人通知', async () => {
+  const mm = new Matchmaker(arena);
+  db.run('UPDATE characters SET auto_match = 0 WHERE system = 0');
+  db.setSetting('ladder', { enabled: false, concurrency: 50 });
+  const me = createCharacter(db, 'local', { kind: 'human', name: '我（测试）', auto_match: 1 });
+  const ai = mock('陪真人的蛐蛐');
+  assert.ok(!mm.eligible().some((x) => x.id === me.id), '没开网站：不匹配');
+  // 模拟这个账号有一个标签页开着（订阅了自己的私人频道）
+  hub.channels.set('user:local', new Set([{ write() {}, writableLength: 0 }]));
+  assert.ok(mm.eligible().some((x) => x.id === me.id), '开着网站：参加');
+  events.length = 0;
+  const id = await mm.tick({ force: true });
+  assert.ok(id, JSON.stringify(mm.lastLog));
+  const seats = Object.values(db.get('SELECT seats FROM matches WHERE id = ?', id).seats);
+  assert.ok(seats.includes(me.id) && seats.includes(ai.id));
+  assert.ok(events.some((e) => e.ch === 'user:local' && e.type === 'invite' && e.matchId === id), '发了私人通知');
+  assert.ok(!mm.eligible().some((x) => x.id === me.id), '正在下这一盘：不再匹配别的');
+  stopNow(id);
+  await waitEnd(id).catch(() => {});
+  hub.channels.delete('user:local');
+  db.setSetting('ladder', { enabled: false });
+  db.run('UPDATE characters SET auto_match = 0 WHERE id IN (?, ?)', me.id, ai.id);
 });
 
 test('每日对局上限生效', () => {

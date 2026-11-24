@@ -200,7 +200,7 @@ export async function ladderView(root, { go, meta, session }) {
     if (!isAdmin) {
       // 自动匹配的开关和节奏是全站设置，只有庄家能改；其他人看状态
       side.replaceChildren(
-        h('div', { class: 'card quiet pad col' }, h('h3', {}, '自动匹配'), h('div', { class: 'small muted' }, s.enabled ? `运行中：同时最多 ${s.concurrency} 盘，段位相差 ${s.maxTierGap} 个大段以内才匹配。` : '庄家暂时关闭了自动匹配。'), h('div', { class: 'small muted' }, '想让你的蛐蛐参加：在它的主页打开「参加天梯自动匹配」。')),
+        h('div', { class: 'card quiet pad col' }, h('h3', {}, '自动匹配'), h('div', { class: 'small muted' }, s.enabled ? `运行中：同时最多 ${s.concurrency} 盘，段位相差 ${s.maxTierGap} 个大段以内才匹配。` : '庄家暂时关闭了自动匹配。'), h('div', { class: 'small muted' }, '想让你的蛐蛐参加：在它的主页打开「参加天梯自动匹配」。你自己也能参加：在「蛐蛐」里点开「我」打开同一个开关，开着网站时会被安排排位赛。随机走子、内置 AI 等系统选手不参加自动匹配。')),
         h('div', { class: 'card quiet pad col' }, h('h3', {}, `今天可出战（${l.eligible.length}）`), l.eligible.length ? h('div', { class: 'row', style: { gap: '6px' } }, ...l.eligible.map((c) => h('span', { class: 'chip', title: `今日 ${c.today}/${c.limit}` }, avatarFace(c).emoji ? `${avatarFace(c).emoji} ` : null, cleanName(c.name)))) : h('div', { class: 'small muted' }, '暂无')),
         h('div', { class: 'card quiet pad col' }, h('h3', {}, '动态'), l.log.length ? h('div', { class: 'log' }, ...l.log.map((x) => h('div', {}, x.text))) : h('div', { class: 'small muted' }, '暂无')));
       return;

@@ -215,7 +215,17 @@ export async function profileView(root, id, { meta, go, reloadMeta }) {
   let newName = null;
   const drawSettings = () => {
     if (c.system) { settings.replaceChildren(h('div', { class: 'small muted' }, '系统参照选手，用来给新选手定级，让积分有固定参照。')); return; }
-    if (c.kind === 'human') { settings.replaceChildren(h('div', { class: 'small muted' }, c.mine ? '你自己。亲自上场时用这个角色。' : '一位真人玩家。')); return; }
+    if (c.kind === 'human') {
+      if (!c.mine) { settings.replaceChildren(h('div', { class: 'small muted' }, '一位真人玩家。')); return; }
+      // 真人也能参加天梯自动匹配：开着网站、手上没有别的对局时才会被安排
+      settings.replaceChildren(
+        h('div', { class: 'small muted' }, '你自己。亲自上场时用这个角色。'),
+        h('label', { class: 'switch' }, h('input', { type: 'checkbox', checked: !!c.auto_match, onchange: guard(async (e) => { Object.assign(c, await patch(`/characters/${c.id}`, { auto_match: e.target.checked })); toast(e.target.checked ? '已加入自动匹配：开着网站时会给你安排排位赛' : '已退出自动匹配'); }) }), '参加天梯自动匹配'),
+        h('div', { class: 'small muted' }, '打开后，只要你开着网站、手上没有别的对局，天梯就会给你安排排位赛，匹配到会弹提示带你进对局。每一步限时 10 分钟，超时由系统代打。'),
+        h('div', { class: 'set-limits' },
+          h('label', { class: 'field' }, h('span', {}, '每日主动对局'), h('span', { class: 'unit-input', 'data-unit': '局' }, h('input', { type: 'number', min: 1, max: meta.maxDailyLimit, value: c.daily_limit, onchange: guard(async (e) => { Object.assign(c, await patch(`/characters/${c.id}`, { daily_limit: Number(e.target.value) })); toast('已保存'); }) })))));
+      return;
+    }
     if (!c.mine) { settings.replaceChildren(h('div', { class: 'small muted' }, `这只蛐蛐是 ${c.owner?.name || '别人'} 养的。想和它斗，开一个组局请主人把它拉进来。`)); return; }
     settings.replaceChildren(
       c.kind === 'agent' ? h('div', { class: 'col', style: { gap: '10px' } },

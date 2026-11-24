@@ -238,6 +238,8 @@ export class Arena {
     };
     this.db.insert('matches', m);
     this.hub.emit('lobby', { type: 'match_created', match: this.summary(m.id) });
+    // 天梯给真人玩家匹配到了对局：发到他的私人频道，页面弹提示带他进对局
+    if (m.origin === 'auto') for (const c of humans) this.hub.emit(`user:${c.owner_id}`, { type: 'invite', matchId: m.id, game: game.name, mode: m.mode });
     this.run(m.id);
     return m.id;
   }

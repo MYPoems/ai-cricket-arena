@@ -1,6 +1,7 @@
 // 前端入口：登录状态、按地址栏 hash 切换页面。
 
-import { h, api, listen, icon, dialog, setTitle, connectionOk, emptyState, coin } from './ui.js';
+import { h, api, listen, icon, dialog, setTitle, connectionOk, emptyState, coin, toast } from './ui.js';
+import { nudgeTurn } from './sound.js';
 import { playView } from './play.js';
 import { lobbyView } from './lobby.js';
 import { matchView } from './match.js';
@@ -275,6 +276,15 @@ try {
 }
 refreshLive();
 if (session.user || session.publicView) listen(['lobby'], (e) => { if (e.type === 'match_created' || e.type === 'match_finished') refreshLive(); });
+// 天梯给我匹配到了对局（我开了「参加天梯自动匹配」）：提醒一下、带我进去；不在任何页面上操作到一半时直接跳过去
+if (session.user) listen([`user:${session.user.id}`], (e) => {
+  if (e.type !== 'invite' || !e.matchId) return;
+  nudgeTurn();
+  const href = `#/match/${e.matchId}`;
+  const busy = /^#\/(match|new|rooms?)(\/|$)/.test(location.hash) && !location.hash.startsWith(href);
+  if (!busy) { location.hash = href; return; }
+  toast(h('span', {}, `天梯为你匹配到一盘${e.game || ''}排位赛 `, h('a', { href }, '进入对局')));
+});
 // 庄家：有新的注册申请时角标 +1
 if (session.user?.role === 'admin') listen(['admin'], (e) => { if (e.type === 'registration' || e.type === 'user_updated') reloadSession(); });
 // 离开前记下旧地址的滚动位置（页面里用 replaceState 改过的查询参数也算在旧地址上）

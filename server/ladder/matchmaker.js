@@ -1,4 +1,6 @@
 // 天梯自动匹配：选出今天还有余量的选手，列出段位相近的候选对手，由模型自己挑对手并写挑战宣言。
+// 只匹配真正的参赛者：用户的 AI 蛐蛐、自带 agent（在线时）、真人玩家（开着网站时，且没在下别的对局）。
+// 随机走子、内置 AI、引擎这些系统选手不参加自动匹配（它们只在开局、组局里当陪练）；人多的游戏凑不满默认人数时按能凑齐的人数开。
 
 import { gameList, getGame } from '../../games/index.js';
 import { seatOutcome } from '../stats.js';
@@ -49,12 +51,19 @@ export class Matchmaker {
     return this.db.all("SELECT id FROM matches WHERE status = 'running' AND mode != 'casual'").length;
   }
 
-  /** 今天还能出战的选手 */
+  /** 真人玩家在线：这个账号至少有一个标签页开着网站（实时连接里订阅了自己的私人频道） */
+  humanOnline(c) {
+    return this.arena.hub.watchers(`user:${c.owner_id}`) > 0;
+  }
+
+  /** 今天还能出战的选手（系统选手不参加） */
   eligible() {
     const s = this.settings();
     const out = [];
-    for (const c of this.db.all("SELECT * FROM characters WHERE auto_match = 1 AND archived = 0 AND kind != 'human'")) {
+    for (const c of this.db.all('SELECT * FROM characters WHERE auto_match = 1 AND archived = 0 AND system = 0')) {
       if (!canRank(this.db, c)) continue;
+      // 真人：开着网站、而且没在下别的对局时才匹配（一个人同时只下一盘）
+      if (c.kind === 'human' && (!this.humanOnline(c) || this.arena.busy(c.id))) continue;
       // 主人的账号被停用后，他的蛐蛐不再自己约战（约战会花他存着的密钥）
       if (!c.system && ['disabled', 'rejected', 'pending'].includes(this.db.get('SELECT status FROM users WHERE id = ?', c.owner_id)?.status)) continue;
       if (c.kind === 'agent' && !agentOnline(c)) continue; // 自带 agent 只在在线（最近来领过回合）时匹配
@@ -65,7 +74,7 @@ export class Matchmaker {
       out.push({ ...c, usage: u });
     }
     if (s.globalDailyTokens) {
-      const total = out.filter((c) => !c.system).reduce((n, c) => n + c.usage.tokens, 0);
+      const total = out.reduce((n, c) => n + c.usage.tokens, 0);
       if (total >= s.globalDailyTokens) return [];
     }
     return out;
@@ -79,29 +88,25 @@ export class Matchmaker {
     this.ticking = true;
     try {
       const pool = this.eligible();
-      const challengers = pool.filter((c) => !c.system).sort((a, b) => a.usage.games - b.usage.games || Math.random() - 0.5);
+      const challengers = pool.slice().sort((a, b) => a.usage.games - b.usage.games || Math.random() - 0.5);
       for (const ch of challengers) {
         // 选游戏：挑战者在哪个游戏里下得最少就先下哪个，保证各游戏都有积分
         const games = gameList().map((g) => ({ g, played: this.arena.played(ch.id, g.id) })).sort((a, b) => a.played - b.played || Math.random() - 0.5);
         for (const { g } of games) {
           const game = getGame(g.id);
-          const n = game.players.default;
-          // 自带 agent 和 API 模型分在两个天梯：agent 只和 agent、系统选手匹配；模型不和 agent 匹配
-          const usable = pool.filter((o) => (o.kind !== 'engine' || (o.provider || 'pikafish') === game.features?.evalEngine)
-            && (ch.kind === 'agent' ? o.kind === 'agent' || o.system : o.kind !== 'agent'));
-          const limit = Math.max(5, n - 1);
+          // 自带 agent 和 API 模型分在两个天梯：agent 只和 agent 匹配；模型、真人不和 agent 匹配
+          const usable = pool.filter((o) => (ch.kind === 'agent' ? o.kind === 'agent' : o.kind !== 'agent'));
+          const limit = Math.max(5, game.players.default - 1);
           const cands = this.candidates(ch, usable, g.id, s.maxTierGap, limit);
-          const wide = cands.length >= n - 1 ? cands : this.candidates(ch, usable, g.id, s.maxTierGap + 1, limit);
-          // 人多的游戏（狼人杀 8 人）选手不够时，用内置 AI 补座位（系统选手可以占多个座位）
-          const filler = usable.filter((o) => o.system && o.kind === 'builtin');
-          if (!wide.length || (wide.length < n - 1 && !filler.length)) continue;
-          // 真实选手（含挑战者）至少过半才开，否则积分意义不大
-          const real = 1 + wide.slice(0, n - 1).filter((o) => !o.system).length;
-          if (real * 2 < n) continue;
+          const wide = cands.length >= game.players.default - 1 ? cands : this.candidates(ch, usable, g.id, s.maxTierGap + 1, limit);
+          // 人数：尽量按游戏默认人数，凑不满就按能凑齐的人数开（不少于游戏的最少人数）；不再用系统选手补座位
+          const n = Math.min(game.players.default, wide.length + 1);
+          if (n < game.players.min || !wide.length) continue;
           const pick = await this.choose(ch, wide.slice(0, 5), g.id);
           // 多人游戏：主对手由模型挑，其余座位按分差就近补齐
           const others = [pick.opponent, ...wide.filter((o) => o.id !== pick.opponent.id)].slice(0, n - 1);
-          for (let i = 0; others.length < n - 1; i++) others.push(filler[i % filler.length]);
+          // 挑对手要等模型回话：这段时间里真人可能关了网页或开了别的对局，再看一眼
+          if ([ch, ...others].some((o) => o.kind === 'human' && (!this.humanOnline(o) || this.arena.busy(o.id)))) continue;
           const players = shuffle([ch, ...others]);
           const seatIds = game.seats(n);
           const seats = Object.fromEntries(seatIds.map((sid, i) => [sid, players[i].id]));

@@ -218,7 +218,9 @@ const CSS = `
 
 /* 操作台：一块漆板，上排预设和滑杆，下排四个键 */
 .pk-ctl { display: grid; grid-template-rows: auto auto; gap: .6em; padding: .7em .9em .8em; border-radius: 1em; border: .14em solid transparent; color: var(--text);
-  background: var(--glint), var(--surface), var(--edge-hi) border-box; box-shadow: var(--hi), 0 .18em 0 #3e2a0a, 0 .26em 0 .04em #040100, 0 .6em 1em rgb(0 0 0 / .6); animation: pk-rise .35s ${EASE} both; }
+  background: var(--glint), var(--surface), var(--edge-hi) border-box; box-shadow: var(--hi), 0 .18em 0 #3e2a0a, 0 .26em 0 .04em #040100, 0 .6em 1em rgb(0 0 0 / .6); animation: pk-ctlin .28s ${EASE} both; transform-origin: 50% 100%; }
+/* 出手区原地淡入、略放大：不往下位移（位移那一下会伸出页面底部，Windows 上闪出滚动条，整张牌桌跟着缩放抖动） */
+@keyframes pk-ctlin { from { opacity: 0; transform: scale(.96); } }
 .pk-ctl[hidden] { display: none; }
 .pk-ctl .r1 { display: grid; grid-template-columns: minmax(0, 1fr) 5.6em; gap: .6em; align-items: center; }
 .pk-ctl .r1.off { opacity: .45; pointer-events: none; }
@@ -244,15 +246,14 @@ const CSS = `
 .pk.port .pk-ctl .pre button { font-size: 1.25em; }
 .pk.port .pk-ctl input[type=number] { font-size: 1.5em; }
 
-/* 轮到谁：桌心打一道光到他的座位，名牌外圈呼吸发亮，头上挂「思考中」「轮到你」 */
-.pk-beam { height: 9em; translate: 0 -50%; transform-origin: 0 50%; pointer-events: none; mix-blend-mode: screen;
-  background: linear-gradient(90deg, rgb(255 226 150 / 0) 6%, rgb(255 226 150 / .18) 45%, rgb(255 226 150 / .46) 100%);
-  clip-path: polygon(0 47%, 100% 0, 100% 100%, 0 53%); filter: blur(.25em); }
-/* 呼吸光不逐帧动画 box-shadow（每帧重绘），改成伪元素上的光圈只动 opacity（合成层完成） */
+/* 轮到谁：名牌外一圈细金边（静止，不闪不呼吸），桌布上靠近他的地方亮起一片很淡的台灯光晕；头上挂「思考中」「轮到你」 */
+.pk-pool { width: 24em; height: 12em; translate: -50% -50%; pointer-events: none; border-radius: 50%;
+  background: radial-gradient(closest-side, rgb(255 230 170 / .17), rgb(255 230 170 / .07) 55%, rgb(255 230 170 / 0)); }
+@keyframes pk-poolin { from { opacity: 0; transform: scale(.8); } }
 .pk-seat.on { z-index: 2; }
-.pk-seat.on::after { content: ''; position: absolute; inset: -.14em; z-index: -1; border-radius: inherit; pointer-events: none; opacity: 0; will-change: opacity;
-  box-shadow: 0 0 0 .1em #040100, 0 0 0 .36em rgb(42 11 8 / .9), 0 0 0 .5em #f6dc94, 0 0 3.4em .8em rgb(255 214 120 / .55); animation: pk-turn 1.6s ease-in-out infinite; }
-@keyframes pk-turn { 50% { opacity: 1; } }
+.pk-seat.on::after { content: ''; position: absolute; inset: -.12em; z-index: -1; border-radius: inherit; pointer-events: none;
+  box-shadow: 0 0 0 .09em #140703, 0 0 0 .22em #e8c46a, 0 .5em 1.5em -.25em rgb(255 205 120 / .4); animation: pk-onin .3s ease-out both; }
+@keyframes pk-onin { from { opacity: 0; transform: scale(1.05); } }
 .pk-seat .who span.turn { color: #f6dc94; } .pk-seat .who span.turn::after { content: '…'; display: inline-block; animation: pk-dot 1.2s ease-in-out infinite; }
 .pk-seat .who span.me { color: #ff8a6a; font-weight: 800; }
 /* 浅色主题的名牌是宣纸色：金字、朱字换深一档（对比度 ≥ 4.5:1） */
@@ -283,7 +284,6 @@ const CSS = `
 .pk-act.raise .tx, .pk-act.allin .tx { background: linear-gradient(180deg, #ffd2b8, #ff7a5a 50%, #e2523d); -webkit-background-clip: text; background-clip: text; }
 .pk-act.allin { box-shadow: inset 0 .08em .25em rgb(0 0 0 / .7), 0 0 0 .1em #e2523d, 0 0 1.6em rgb(255 110 70 / .5); }
 @keyframes pk-actin { 0% { transform: scale(.6) translateY(.6em); opacity: 0; } 55% { transform: scale(1.08); opacity: 1; } 100% { transform: none; } }
-@keyframes pk-beamin { from { opacity: 0; transform: rotate(var(--ang)) scaleX(.2); } }
 
 /* 开局提示、结算卡：桌面压暗，中间浮起一块纸牌匾 */
 .pk-veil { inset: 0; pointer-events: none; border-radius: 1.2em; background: radial-gradient(62% 60% at 50% 47%, rgb(4 2 1 / .38), rgb(4 2 1 / .7)); }
@@ -906,7 +906,7 @@ export default {
     const onEsc = (e) => {
       if (!root.isConnected) { document.removeEventListener('keydown', onEsc); return; }
       if (e.key !== 'Escape' || e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return;
-      const x = layer.querySelector('.pk-x');
+      const x = layer.querySelector('.pk-x') || last?.opts?.dock?.querySelector('.pk-x');
       if (!x || !root.getClientRects().length || document.querySelector('dialog[open], [aria-modal="true"]')) return;
       e.preventDefault();
       x.click();
@@ -1350,7 +1350,13 @@ export default {
       const g = geometry(view, viewer, L);
       const t = now();
       let E = fx.end;
-      if (E && !E.final && t - E.t0 >= E.dur) fx.end = E = null;
+      // 在局的真人：一手结算演完、下一手开始后，结算卡留在桌上，等他自己点 ✕（或 Esc）关；观众照旧自动收起
+      const seated = !!viewer && viewer !== '*' && view.players.some((q) => q.seat === viewer);
+      if (E && !E.final && t - E.t0 >= E.dur) {
+        if (seated) fx.keep = { key: `${E.no}|`, S: summaryOf(E) };
+        fx.end = E = null;
+      }
+      if (E || !seated) fx.keep = E ? fx.keep : null;
       const at = (ms) => !!E && t - E.t0 >= ms;
       const bbv = view.blinds?.bb || 1;
       money = (v) => (bbMode ? fmtBB(v, bbv) : String(v));
@@ -1367,12 +1373,11 @@ export default {
         el('div', { class: 'pk-wm', style: pos(T.cx, T.cy + T.ry * 0.55) }, el('span', {}, '德州'))];
       const liveNow = isLive(opts);
       if (liveNow && !E && !view.result && view.toAct && g[view.toAct]) {
+        // 光晕落在桌心到他座位连线的 2/3 处：桌布靠近他的那一块
         const s = g[view.toAct];
-        const dx = s.x - T.cx, dy = s.y - T.cy;
-        const ang = (Math.atan2(dy, dx) * 180) / Math.PI;
-        const beam = el('div', { class: 'pk-beam', style: `${pos(T.cx, T.cy)};width:${Math.hypot(dx, dy).toFixed(2)}em;transform:rotate(${ang.toFixed(1)}deg);--ang:${ang.toFixed(1)}deg` });
-        play(beam, 'pk-beamin', 520, fx.beam.t0, 0, 'cubic-bezier(.2,.9,.3,1)');
-        kids.push(beam);
+        const pool = el('div', { class: 'pk-pool', style: pos(T.cx + (s.x - T.cx) * 0.62, T.cy + (s.y - T.cy) * 0.62) });
+        play(pool, 'pk-poolin', 420, fx.beam.t0, 0, 'ease-out');
+        kids.push(pool);
       }
 
       // 全下：压暗
@@ -1578,8 +1583,28 @@ export default {
         play(veil, 'pk-veil', 380, E.t0, E.sched.cardAt);
         play(card, 'pk-popin', 520, E.t0, E.sched.cardAt, 'cubic-bezier(.2,1.2,.4,1)');
         if (tab === 'stats' && !sumTab) play(card, 'pk-in', 360, E.t0, E.sched.end);
-        if (!E.final) { play(veil, 'pk-popout', 320, E.t0, E.dur - 320, 'ease-in'); play(card, 'pk-popout', 320, E.t0, E.dur - 320, 'ease-in'); }
+        // 观众：一手结束前卡片淡出；在局的真人：只撤掉压暗，卡片留着
+        if (!E.final) { play(veil, 'pk-popout', 320, E.t0, E.dur - 320, 'ease-in'); if (!seated) play(card, 'pk-popout', 320, E.t0, E.dur - 320, 'ease-in'); }
         kids.push(veil, card);
+      }
+      // 上一手的结算卡（下一手已经开始，在局的真人才有）：挪到牌桌右侧那一栏（opts.dock，聚光框和本手记录之间），
+      // 不挡公共牌、底牌和出手区；点 ✕（或 Esc）关掉，桌角留一枚小签，点了再放回右栏
+      const keepKey = !E && fx.keep && sumHidden !== fx.keep.key ? fx.keep.key : null;
+      if (!E && fx.keep && sumHidden === fx.keep.key) {
+        kids.push(el('button', { class: 'pk-pill', type: 'button', title: '展开上一手结算', style: pos(L.pill[0], L.pill[1]), onclick: (e) => { e.stopPropagation(); sumHidden = null; redraw(); } },
+          el('span', {}, `第 ${fx.keep.S.no} 手结算 ▸`)));
+      }
+      const dock = opts.dock;
+      if (dock && dock.dataset.key !== (keepKey || '')) {
+        dock.dataset.key = keepKey || '';
+        if (!keepKey) dock.replaceChildren();
+        else {
+          const card = summaryCard(fx.keep.S, L, null);
+          card.classList.add('kept');
+          card.removeAttribute('style');
+          card.append(el('button', { class: 'pk-x', type: 'button', title: '关闭（Esc）', 'aria-label': '关闭上一手结算卡', onclick: (e) => { e.stopPropagation(); sumHidden = keepKey; redraw(); } }, '✕'));
+          dock.replaceChildren(card);
+        }
       }
       // 新一手：开局提示（第几手、盲注、庄位），停留时间和服务端的开局停顿一样
       if (!E && fx.intro && fx.intro.hand === view.handNo && t >= fx.intro.t0 - 40 && t - fx.intro.t0 < TM.DEAL) {

@@ -1379,6 +1379,14 @@ html.fold-lock, html.fold-lock body { overflow: hidden; }
 .arena.hud .stage { min-height: 0; }
 .arena.hud .stage-board { flex: 1 1 auto; min-height: 0; align-items: center; }
 .hud-col { display: grid; grid-template-rows: minmax(0, 1.2fr) minmax(0, 1fr); gap: 14px; min-height: 0; min-width: 0; }
+/* 右栏中间的停靠位：上一手的结算卡（德州在局的真人）。空着时不占位 */
+.hud-col > .pk-dock { display: none; }
+.hud-col:has(> .pk-dock:not(:empty)) { grid-template-rows: minmax(0, 1fr) auto minmax(0, 1fr); }
+.hud-col > .pk-dock:not(:empty) { display: block; container-type: inline-size; min-width: 0; }
+.pk-dock .pk-sum { position: relative; left: auto; top: auto; translate: none; width: auto; font-size: 2.7cqw; box-sizing: border-box; animation: dock-in .4s var(--out, ease-out) both; }
+.pk-dock .pk-sum .hd .ttl { font-size: 2.2em; }
+@keyframes dock-in { from { opacity: 0; transform: translateX(-1.5em) scale(.94); } }
+@media (prefers-reduced-motion: reduce) { .pk-dock .pk-sum { animation: none; } }
 .spot, .hand-log { --edge-now: var(--edge); --rad: var(--r-lg); position: relative; min-height: 0; border-radius: var(--rad); border: var(--bz) solid transparent;
   background: var(--glint), var(--surface), var(--edge-now) border-box; box-shadow: var(--hi), var(--e2); display: flex; flex-direction: column; transition: box-shadow 400ms var(--ease); }
 .spot.thinking { --edge-now: var(--edge-hi); box-shadow: var(--hi), 0 0 0 1px rgb(5 1 0 / .88), 0 0 0 4px var(--lac-2), 0 0 0 5px rgb(240 205 120 / .5), 0 0 28px 2px rgb(240 205 120 / .2), var(--e2); }

@@ -144,23 +144,28 @@ test('单独的 Agent 天梯：agent 排位记在 agent:游戏；不能和模型
   assert.ok(!leaderboard(db, 'connect4').some((r) => r.character_id === c.id), '不进模型天梯');
 });
 
-test('自动匹配：只匹配在线的 agent，且只和 agent、系统选手配对', async () => {
+test('自动匹配：只匹配在线的 agent，只和 agent 配对，系统选手不参加', async () => {
   const mm = new Matchmaker(arena);
   db.run("UPDATE characters SET auto_match = 0 WHERE kind != 'agent' AND system = 0");
   db.run("UPDATE characters SET auto_match = 0 WHERE kind = 'agent'");
   const { c } = agent('在线 agent');
+  const { c: c2 } = agent('另一个在线 agent');
   db.update('characters', { id: c.id }, { last_seen: null });
+  db.update('characters', { id: c2.id }, { last_seen: new Date().toISOString(), agent_timeout: 1 });
   assert.ok(!mm.eligible().some((x) => x.id === c.id), '离线不参加匹配');
+  assert.ok(!mm.eligible().some((x) => x.system), '系统选手不参加自动匹配');
+  assert.equal(await mm.tick({ force: true }), null, '只有一个在线 agent、系统选手又不补位：配不成');
   db.update('characters', { id: c.id }, { last_seen: new Date().toISOString(), agent_timeout: 1 }); // 1 秒不来领就判负，让排位赛自己结束
   assert.ok(mm.eligible().some((x) => x.id === c.id));
   const id = await mm.tick({ force: true });
   assert.ok(id);
   const seats = db.get('SELECT seats FROM matches WHERE id = ?', id).seats;
   const kinds = Object.values(seats).map((cid) => db.get('SELECT kind, system FROM characters WHERE id = ?', cid));
-  assert.ok(kinds.every((k) => k.kind === 'agent' || k.system), JSON.stringify(kinds));
+  assert.ok(kinds.every((k) => k.kind === 'agent' && !k.system), JSON.stringify(kinds));
   const m = await waitEnd(id, 20000);
   assert.match(m.result.reason, /没有来领回合/);
   db.update('characters', { id: c.id }, { auto_match: 0 });
+  db.update('characters', { id: c2.id }, { auto_match: 0 });
 });
 
 test('MCP：initialize、tools/list、wait_for_turn、submit_move', async () => {

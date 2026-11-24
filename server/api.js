@@ -29,7 +29,7 @@ export function routes(router, { db, hub, arena, matchmaker, compare, evaluator 
     if (db.get("SELECT COUNT(*) AS n FROM characters WHERE owner_id = ? AND archived = 0 AND kind != 'human'", user.id).n >= MAX_CHARACTERS) throw new HttpError(400, `你已经有 ${MAX_CHARACTERS} 只蛐蛐了，先归档一些再建`);
   };
   // 事件流频道：大厅、庄家、某盘对局 / 组局 / 同题对比；别的名字不收（频道表不随便长）
-  const CHANNEL_RE = /^(lobby|admin|(match|room|compare):[A-Za-z0-9_]{1,40})$/;
+  const CHANNEL_RE = /^(lobby|admin|(match|room|compare|user):[A-Za-z0-9_-]{1,40})$/;
 
   // ---------- 基本信息 ----------
   router.get('/api/meta', ({ user }) => ({
@@ -48,7 +48,9 @@ export function routes(router, { db, hub, arena, matchmaker, compare, evaluator 
 
   router.get('/api/events', ({ req, res, query, user }) => {
     // admin 频道（注册申请）只给庄家
-    const chans = [...new Set(String(query.ch || 'lobby').slice(0, 4000).split(','))].filter((c) => CHANNEL_RE.test(c)).filter((c) => c !== 'admin' || isAdmin(user)).slice(0, 40); // 一个标签页的所有订阅合成一条连接（浏览器对同一站点只开 6 条长连接）
+    // user:<id> 是私人频道（天梯匹配到对局的通知），只能订阅自己的；订阅着它也就是「这个人开着网站」（自动匹配据此判断真人在线）
+    const chans = [...new Set(String(query.ch || 'lobby').slice(0, 4000).split(','))].filter((c) => CHANNEL_RE.test(c)).filter((c) => c !== 'admin' || isAdmin(user))
+      .filter((c) => !c.startsWith('user:') || (user && c === `user:${user.id}`)).slice(0, 40); // 一个标签页的所有订阅合成一条连接（浏览器对同一站点只开 6 条长连接）
     hub.subscribe(req, res, chans);
   });
 

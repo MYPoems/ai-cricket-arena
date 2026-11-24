@@ -139,6 +139,8 @@ export async function matchView(root, id, { characters, session }) {
   const hud = !duo && !!renderer.hud;
   const spot = hud ? createSpot() : null;
   const handBox = h('section', { class: 'hand-log' });
+  // 右栏中间的停靠位：德州在局的真人，上一手的结算卡在下一手开始后挪到这里，手动关（见 web/stage/poker.js）
+  const dockEl = hud ? h('div', { class: 'pk-dock', role: 'region', 'aria-label': '上一手结算' }) : null;
   let pinPly = null; // 在本手记录里点过的一步；null 表示聚光框跟随当前行动者
   let spotPly = null;
   stage.setFlipped?.(flipped);
@@ -223,7 +225,7 @@ export async function matchView(root, id, { characters, session }) {
   } else if (hud) {
     root.replaceChildren(h('div', { class: `arena hud g-${d.game}${recordMode ? ' recording' : ''}`, style: { '--aw': aw, '--ah': ah } },
       h('section', { class: 'stage' }, statusBar, h('div', { class: 'stage-board' }, h('div', { class: 'board-wrap' }, stage.el))),
-      h('aside', { class: 'hud-col' }, spot.el, handBox)));
+      h('aside', { class: 'hud-col' }, spot.el, dockEl, handBox)));
   } else {
     // 棋类（.plain）：桌面上棋盘是主角，按屏幕高度定大小；走势图和着法放到两侧栏的底部（见 app.css 的 .arena.plain）
     root.replaceChildren(h('div', { class: `arena plain g-${d.game}${winbarOn ? '' : ' no-winbar'}${recordMode ? ' recording' : ''}`, style: { '--aw': aw, '--ah': ah } },
@@ -910,7 +912,8 @@ export async function matchView(root, id, { characters, session }) {
       [sb.step, running && paused && canControl],
       [sb.accept, running && waitingHuman && po && po.seat !== waitingHuman],
       [sb.offer, running && waitingHuman && d.features?.draw && !po],
-      [sb.resign, running && waitingHuman],
+      // 认输键：在局的真人整盘都显示（轮到自己才可点），不在轮到时才冒出来——冒出来那一下会把旁边的键挤动
+      [sb.resign, running && (!!humanSeat || !!waitingHuman)],
       [sb.abort, running && d.mode === 'casual' && canControl],
       [sb.flip, true],
       [sb.report, !running && winbarOn && n],
@@ -918,6 +921,11 @@ export async function matchView(root, id, { characters, session }) {
       [sb.swap, canRematch() && two],
     ].filter(([el]) => el);
     for (const [el, on] of keys) vis(el, on);
+    if (sb.resign) {
+      const can = running && !!waitingHuman;
+      sb.resign.disabled = !can;
+      sb.resign.title = can ? '认输：这盘直接判负' : '轮到你行动时才能认输';
+    }
     const anyMatch = keys.some(([, on]) => on);
     vis(sb.sep1, rk && anyMatch);
     vis(sb.sep2, rk || anyMatch);
@@ -1084,7 +1092,7 @@ export async function matchView(root, id, { characters, session }) {
     }
     const movable = latest && d.status === 'running' && waitingHuman && !paused ? waitingHuman : null;
     // live：正在看实时局面（不是复盘、回放）；牌桌画面复盘时据此不显示「轮到谁」
-    stage.render(view, { movable, actions: movable ? d.humanActions : null, arrows, animate, replay: !!replaying, live: latest && d.status === 'running', viewer: d.viewer, players: playerInfo, clock: latest && d.status === 'running' ? Object.fromEntries(clock) : {} });
+    stage.render(view, { movable, actions: movable ? d.humanActions : null, arrows, animate, replay: !!replaying, live: latest && d.status === 'running', viewer: d.viewer, players: playerInfo, clock: latest && d.status === 'running' ? Object.fromEntries(clock) : {}, dock: dockEl });
     // 棋类快速回放：走子动画跟着倍速加快，不会一步还没走完下一步就来了（牌桌游戏的动画和停顿是对齐好的，不动）
     // 放到下一帧开头去找动画：在这里当场找会逼浏览器把刚改了一半的页面先重算一遍样式（后面还要改选手卡、着法表、思考栏）
     if (!hud && !duo && replaying && speed > 1 && !speedRaf) speedRaf = requestAnimationFrame(() => { speedRaf = 0; if (replaying) for (const a of stage.el.getAnimations?.({ subtree: true }) || []) a.playbackRate = Math.min(8, speed); });
