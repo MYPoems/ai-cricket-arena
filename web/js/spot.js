@@ -31,21 +31,28 @@ export function createSpot() {
     cyl.replaceChildren(...list.map((c, i) => h('span', { class: `ch${c.out ? ' out' : ''}`, style: { '--a': `${(i * 360) / n}deg`, '--c': c.color } }, h('b', {}, c.label))));
   }
 
-  /** 弹巢顺时针转到第 i 格（只往前转，不倒转；同一格不转） */
+  /** 弹巢顺时针转到第 i 格（只往前转，不倒转；同一格不转）。
+   *  不用「改 transition → 读 offsetWidth → 改回来」那套（每次逼浏览器同步排版，4 倍降速下要 1 秒）：
+   *  第一次定位时弹巢还没有 .ready（CSS 里没有过渡），隔两帧再加上；锤子的一下用 Web Animations 播 */
   function turnTo(i) {
     if (i < 0 || !n) return;
     const step = 360 / n;
     if (index < 0) {
       angle = -i * step;
-      cyl.style.transition = 'none';
       cyl.style.setProperty('--rot', `${angle}deg`);
-      void cyl.offsetWidth;
-      cyl.style.transition = '';
+      requestAnimationFrame(() => requestAnimationFrame(() => cyl.classList.add('ready')));
     } else if (i !== index) {
       const k = (i - index + n) % n;
       angle -= k * step;
       cyl.style.setProperty('--rot', `${angle}deg`);
-      if (!reduced()) { hammer.classList.remove('tick'); void hammer.offsetWidth; hammer.classList.add('tick'); }
+      if (!reduced() && hammer.animate) {
+        hammer.animate([
+          { transform: 'translateY(0)' },
+          { transform: 'translateY(-3px) scaleY(.8)', offset: 0.18 },
+          { transform: 'translateY(1px)', offset: 0.55 },
+          { transform: 'none' },
+        ], { duration: 680, easing: 'cubic-bezier(.3, 1.45, .5, 1)' });
+      }
     }
     index = i;
     [...cyl.children].forEach((c, j) => c.classList.toggle('on', j === i));

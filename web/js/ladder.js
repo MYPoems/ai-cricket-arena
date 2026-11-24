@@ -1,6 +1,6 @@
 // 天梯：角色榜 / 模型榜 / Agent 榜（积分的不确定性、不对称游戏的阵营战绩、出手统计）、对位热力图，自动匹配设置和动态。
 
-import { h, api, post, guard, toast, tierBadge, avatar, listen, pageHead, dialog, fmtMs, fmtTokens, fmtTime, pct, setTitle, emptyState, linkRow, pressed, cleanName } from './ui.js';
+import { h, api, post, guard, toast, tierBadge, avatar, avatarFace, listen, pageHead, dialog, fmtMs, fmtTokens, fmtTime, pct, setTitle, emptyState, linkRow, pressed, cleanName } from './ui.js';
 
 const SIGMA0 = 25 / 3; // 新选手的 σ
 const VIEWS = [['characters', '角色榜'], ['models', '模型榜'], ['agents', 'Agent 榜']];
@@ -201,7 +201,7 @@ export async function ladderView(root, { go, meta, session }) {
       // 自动匹配的开关和节奏是全站设置，只有庄家能改；其他人看状态
       side.replaceChildren(
         h('div', { class: 'card quiet pad col' }, h('h3', {}, '自动匹配'), h('div', { class: 'small muted' }, s.enabled ? `运行中：同时最多 ${s.concurrency} 盘，段位相差 ${s.maxTierGap} 个大段以内才匹配。` : '庄家暂时关闭了自动匹配。'), h('div', { class: 'small muted' }, '想让你的蛐蛐参加：在它的主页打开「参加天梯自动匹配」。')),
-        h('div', { class: 'card quiet pad col' }, h('h3', {}, `今天可出战（${l.eligible.length}）`), l.eligible.length ? h('div', { class: 'row', style: { gap: '6px' } }, ...l.eligible.map((c) => h('span', { class: 'chip', title: `今日 ${c.today}/${c.limit}` }, c.avatar, ' ', cleanName(c.name)))) : h('div', { class: 'small muted' }, '暂无')),
+        h('div', { class: 'card quiet pad col' }, h('h3', {}, `今天可出战（${l.eligible.length}）`), l.eligible.length ? h('div', { class: 'row', style: { gap: '6px' } }, ...l.eligible.map((c) => h('span', { class: 'chip', title: `今日 ${c.today}/${c.limit}` }, avatarFace(c).emoji ? `${avatarFace(c).emoji} ` : null, cleanName(c.name)))) : h('div', { class: 'small muted' }, '暂无')),
         h('div', { class: 'card quiet pad col' }, h('h3', {}, '动态'), l.log.length ? h('div', { class: 'log' }, ...l.log.map((x) => h('div', {}, x.text))) : h('div', { class: 'small muted' }, '暂无')));
       return;
     }
@@ -232,7 +232,7 @@ export async function ladderView(root, { go, meta, session }) {
           h('span', { class: 'small muted' }, `进行中 ${l.running} 盘`)),
       ),
       h('div', { class: 'card quiet pad col' }, h('h3', {}, `今天可出战（${l.eligible.length}）`),
-        l.eligible.length ? h('div', { class: 'row', style: { gap: '6px' } }, ...l.eligible.map((c) => h('span', { class: 'chip', title: `今日 ${c.today}/${c.limit}` }, c.avatar, ' ', cleanName(c.name)))) : h('div', { class: 'small muted' }, '没有选手开启自动匹配，或今天的额度已用完')),
+        l.eligible.length ? h('div', { class: 'row', style: { gap: '6px' } }, ...l.eligible.map((c) => h('span', { class: 'chip', title: `今日 ${c.today}/${c.limit}` }, avatarFace(c).emoji ? `${avatarFace(c).emoji} ` : null, cleanName(c.name)))) : h('div', { class: 'small muted' }, '没有选手开启自动匹配，或今天的额度已用完')),
       h('div', { class: 'card quiet pad col' }, h('h3', {}, '动态'),
         l.log.length ? h('div', { class: 'log' }, ...l.log.map((x) => h('div', {}, x.text))) : h('div', { class: 'small muted' }, '暂无')),
     );

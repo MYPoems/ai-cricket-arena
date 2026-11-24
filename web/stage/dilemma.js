@@ -237,7 +237,7 @@ export default {
         <div class="dlm-plaque"><span class="r"></span><span class="p"></span></div>
         <div class="dlm-ecg"><svg viewBox="0 0 ${VBW} ${VBH}" preserveAspectRatio="none" role="img" aria-label="信任心电图"></svg>
           <span class="lab" style="top:${(YB.a / VBH) * 100}%">甲</span><span class="lab" style="top:${(YB.b / VBH) * 100}%">乙</span><span class="cap">信任心电图</span></div>
-        <div class="dlm-ctl talk"><input type="text" maxlength="30" autocomplete="off"><button type="button" class="btn primary">说</button></div>
+        <div class="dlm-ctl talk"><input type="text" maxlength="30" autocomplete="off"><button type="button" class="btn primary">说</button><button type="button" class="btn ghost mute">不说话</button></div>
         <div class="dlm-ctl choose"><button type="button" class="dlm-pick c">合作<small></small></button><button type="button" class="dlm-pick d">背叛<small></small></button></div>
       </div>`;
     const box = el.querySelector('.dlm-box');
@@ -250,11 +250,11 @@ export default {
     const plaqueR = $('.dlm-plaque .r'), plaqueP = $('.dlm-plaque .p');
     const ecg = $('.dlm-ecg svg');
     const talkBox = $('.dlm-ctl.talk'), chooseBox = $('.dlm-ctl.choose');
-    const input = talkBox.querySelector('input'), sayBtn = talkBox.querySelector('button');
+    const input = talkBox.querySelector('input'), sayBtn = talkBox.querySelector('button.primary'), muteBtn = talkBox.querySelector('button.mute');
     const btnC = $('.dlm-pick.c'), btnD = $('.dlm-pick.d');
 
     // ---------- 交互 ----------
-    const buttons = [sayBtn, btnC, btnD];
+    const buttons = [sayBtn, muteBtn, btnC, btnD];
     const submit = (action, after) => {
       if (buttons.some((b) => b.disabled)) return;
       buttons.forEach((b) => { b.disabled = true; });
@@ -265,6 +265,8 @@ export default {
     };
     const sayNow = () => submit(input.value.replace(/[\r\n]+/g, ' ').trim(), () => { input.value = ''; });
     sayBtn.addEventListener('click', sayNow);
+    // 这一轮不喊话：直接交一句空话（和输入框空着点「说」一样，但不用猜）
+    muteBtn.addEventListener('click', () => submit('', () => { input.value = ''; }));
     input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); sayNow(); } });
     btnC.addEventListener('click', () => submit('C'));
     btnD.addEventListener('click', () => submit('D'));
@@ -455,7 +457,8 @@ export default {
           plaqueP.className = 'p hot';
         } else {
           plaqueR.textContent = `第 ${view.round} 轮`;
-          plaqueP.textContent = view.phase === 'talk' ? '喊话' : '出牌';
+          // 真人在局：牌匾上写明总轮数保密（到最后一轮也不会提前告诉你）
+          plaqueP.textContent = `${view.phase === 'talk' ? '喊话' : '出牌'}${movable || (viewer && viewer !== '*') ? ' · 共几轮保密' : ''}`;
           plaqueP.className = `p${choosing ? ' hot' : ''}`;
         }
         box.querySelector('.dlm-seal')?.remove();
@@ -472,7 +475,8 @@ export default {
         const canTalk = !!movable && !view.over && view.phase === 'talk';
         const canChoose = !!movable && !view.over && view.phase === 'choose';
         if (movable) {
-          input.placeholder = `对${NAMES[other(movable)]}说…（可以不说）`;
+          input.placeholder = `对${NAMES[other(movable)]}说一句…`;
+          input.title = '可以不说话；一共打几轮双方都不知道，到最后一轮也不会提前告诉你';
           btnC.querySelector('small').textContent = `对方合 +${PAY.C.C} · 背 +${PAY.C.D}`;
           btnD.querySelector('small').textContent = `对方合 +${PAY.D.C} · 背 +${PAY.D.D}`;
         }

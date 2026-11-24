@@ -1,6 +1,6 @@
 // 前端入口：登录状态、按地址栏 hash 切换页面。
 
-import { h, api, listen, icon, dialog, setTitle, connectionOk, emptyState } from './ui.js';
+import { h, api, listen, icon, dialog, setTitle, connectionOk, emptyState, coin } from './ui.js';
 import { playView } from './play.js';
 import { lobbyView } from './lobby.js';
 import { matchView } from './match.js';
@@ -165,6 +165,9 @@ async function route() {
   }
 }
 
+// 「跳到正文」：页面用 hash 路由，链接不能真的改 hash，直接把焦点交给正文
+document.getElementById('skipLink')?.addEventListener('click', (e) => { e.preventDefault(); app.focus(); app.scrollIntoView({ block: 'start' }); });
+
 // ---------- 加载较慢：超过 8 秒给一个重试 ----------
 let slowTimer = null;
 let slowBox = null;
@@ -184,7 +187,7 @@ const moreBadge = document.getElementById('moreBadge');
 function paintUser() {
   const u = session.user;
   userBox.replaceChildren(u
-    ? h('a', { class: 'user-chip', href: '#/account', title: '我的账号', 'aria-label': `我的账号：${u.name || u.username}` }, h('span', { class: 'coin' }, (u.name || u.username).slice(0, 1)), h('span', { class: 'user-name' }, u.name || u.username))
+    ? h('a', { class: 'user-chip', href: '#/account', title: '我的账号', 'aria-label': `我的账号：${u.name || u.username}` }, coin({ name: u.name || u.username, kind: 'human' }), h('span', { class: 'user-name' }, u.name || u.username))
     : h('a', { class: 'btn sm primary', href: '#/login' }, '登录'));
   // 用 style.display 控制显示：.nav a 的 display:flex 会盖过 hidden 属性
   navAdmin.hidden = u?.role !== 'admin';

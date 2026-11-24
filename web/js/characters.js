@@ -2,6 +2,8 @@
 
 import { h, api, post, patch, guard, toast, tierBadge, avatar, modelLine, fmtTime, fmtMs, fmtTokens, MODE_NAMES, resultText, dialog, seatOutcome, pageHead, confirmDialog, promptDialog, setTitle, emptyState, linkRow, pressed, icon, guardConfirm, cleanName, summarizeSeats, markInvalid } from './ui.js';
 
+// 头像格只摆前 16 个；新建时随机给的头像也从这 16 个里挑，打开弹窗就能看到选中的那一个
+const PICKABLE_EMOJIS = 16;
 const EMOJIS = ['🦊', '🐯', '🐼', '🦁', '🐉', '🦅', '🐺', '🦉', '🐬', '🦄', '🐢', '🐲', '🦈', '🐙', '🦚', '🐝', '🐧', '🦝', '🐸', '🦋', '🐳', '🦜', '🐻', '🐨'];
 /** Agent 接入令牌：只在生成时显示一次 */
 export function tokenDialog(name, token) {
@@ -47,7 +49,7 @@ export async function charactersView(root, { meta, go, reloadMeta, session }) {
 export function createDialog({ meta, reloadMeta, base = null, onDone }) {
   const f = base
     ? { ...base, name: `${base.name}·新`, kind: base.kind }
-    : { kind: 'model', name: '', avatar: EMOJIS[Math.floor(Math.random() * EMOJIS.length)], provider: 'deepseek', model: meta.presets[0].models[0] || '', base_url: '', effort: 'low', style: '', memory: false, show_legal: true, auto_match: true, daily_limit: 10, daily_tokens: '', level: 3 };
+    : { kind: 'model', name: '', avatar: EMOJIS[Math.floor(Math.random() * PICKABLE_EMOJIS)], provider: 'deepseek', model: meta.presets[0].models[0] || '', base_url: '', effort: 'low', style: '', memory: false, show_legal: true, auto_match: true, daily_limit: 10, daily_tokens: '', level: 3 };
   f.memory = !!f.memory; f.show_legal = f.show_legal !== 0 && f.show_legal !== false; f.auto_match = !!f.auto_match;
   if (meta.dev) meta.presets = meta.presets.some((p) => p.id === 'mock') ? meta.presets : [...meta.presets, { id: 'mock', name: '模拟模型（开发用）', models: ['mock'], baseURL: null, needsKey: false, ranked: true, showsReasoning: true, canDisableThinking: true }];
 
@@ -68,7 +70,7 @@ export function createDialog({ meta, reloadMeta, base = null, onDone }) {
       base ? h('div', { class: 'small muted' }, `从「${base.name}」派生：可以修改配置，积分从头算。`) : kindSeg,
       h('div', { class: 'grid2' },
         h('label', { class: 'field' }, h('span', {}, '名字'), refs.name = h('input', { type: 'text', value: f.name, maxlength: 24, required: true, placeholder: '例如：深思小鹿', oninput: (e) => { f.name = e.target.value; } })),
-        h('div', { class: 'field' }, h('span', {}, '头像'), h('div', { class: 'emoji-pick', role: 'group', 'aria-label': '头像' }, ...EMOJIS.slice(0, 16).map((e) => h('button', { type: 'button', class: f.avatar === e ? 'on' : '', ...pressed(f.avatar === e), onclick: () => { f.avatar = e; draw(); } }, e)))),
+        h('div', { class: 'field' }, h('span', {}, '头像'), h('div', { class: 'emoji-pick', role: 'group', 'aria-label': '头像' }, ...[...(f.avatar && /\p{Extended_Pictographic}/u.test(f.avatar) && !EMOJIS.slice(0, PICKABLE_EMOJIS).includes(f.avatar) ? [f.avatar] : []), ...EMOJIS.slice(0, PICKABLE_EMOJIS)].map((e) => h('button', { type: 'button', class: f.avatar === e ? 'on' : '', ...pressed(f.avatar === e), onclick: () => { f.avatar = e; draw(); } }, e)))),
       ),
       f.kind === 'model' ? [
         h('div', { class: 'grid2' },

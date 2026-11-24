@@ -5,7 +5,9 @@ import { h, api, post, guard, avatar, modelLine, MODE_NAMES, listen, pageHead, p
 export async function playView(root, { meta, characters, go, session }) {
   // 排位赛由天梯自动匹配产生；只有庄家能手动开排位（测试用）
   const canRanked = session.user?.role === 'admin';
-  const [liveMatches, puzzles] = await Promise.all([api('/matches?status=running&limit=30'), api('/puzzles')]);
+  // 右栏「正在进行」用大厅的数据：带着轮到谁、最后一步什么时候走的
+  const liveOf = () => api('/lobby').then((x) => x.live || []);
+  const [liveMatches, puzzles] = await Promise.all([liveOf(), api('/puzzles')]);
   const games = meta.games;
   const pickable = characters.filter((c) => !c.archived);
   const q = new URLSearchParams(location.hash.split('?')[1] || '');
@@ -26,10 +28,14 @@ export async function playView(root, { meta, characters, go, session }) {
   /** 这名选手能不能下当前游戏：引擎只下自己的游戏 */
   const fits = (c) => c.kind !== 'engine' || (c.provider || 'pikafish') === game().features?.evalEngine;
 
+  // 默认对手：自己的蛐蛐（模型、Agent）在前，然后内置 AI（初级在前）、引擎，「随机走子」排最后——
+  // 从大厅点「我来挑战一只蛐蛐」进来，对面坐的是一只像样的对手，而不是随机走子
+  const RANK = { model: 0, agent: 1, builtin: 2, engine: 3, random: 9 };
+  const rankOf = (c) => (RANK[c.kind] ?? 5) * 100 + (c.kind === 'builtin' ? Number(c.level) || 0 : 0) + (/[?�]|（旧）/.test(c.name || '') ? 50 : 0);
   function defaults() {
     const ids = seatIds();
     const me = pickable.find((c) => c.kind === 'human');
-    const ai = pickable.filter((c) => fits(c) && c.kind !== 'human');
+    const ai = pickable.filter((c) => fits(c) && c.kind !== 'human').sort((a, b) => rankOf(a) - rankOf(b));
     sel.seats = {};
     ids.forEach((s, i) => { sel.seats[s] = i === 0 && me ? me.id : (ai[(i - (me ? 1 : 0)) % Math.max(1, ai.length)] || ai[0])?.id; });
   }
@@ -48,6 +54,10 @@ export async function playView(root, { meta, characters, go, session }) {
   const delay = h('input', { type: 'range', min: 0, max: 3000, step: 200, value: sel.delayMs, oninput: (e) => { sel.delayMs = Number(e.target.value); delayLabel.textContent = `${(sel.delayMs / 1000).toFixed(1)} 秒`; } });
   const startExtra = h('div', { class: 'col', style: { gap: '8px' } });
   const summary = h('div', { class: 'start-sum' });
+  const advOpts = h('div', { class: 'col', style: { gap: '10px' } },
+    h('label', { class: 'switch' }, legalSw, '给模型提供合法行动列表'),
+    h('label', { class: 'field' }, h('span', {}, h('span', {}, '两步之间的间隔 '), delayLabel), delay));
+  const advBox = h('div', { class: 'adv-box' }, advOpts);
 
   function seatBox(seat) {
     const box = h('div', { class: 'seat-pick', role: 'group', 'aria-label': `${game().seatNames[seat] || seat}的选手` });
@@ -70,6 +80,7 @@ export async function playView(root, { meta, characters, go, session }) {
   function redraw() {
     const g = game();
     gameSeg.replaceChildren(...games.map((x) => h('button', { type: 'button', class: sel.game === x.id ? 'on' : '', ...pressed(sel.game === x.id), onclick: () => { sel.game = x.id; sel.players = null; defaults(); redraw(); syncUrl(); } }, x.name)));
+    playersSel.hidden = g.players.min === g.players.max; // 空着时不占一行（原来游戏条下面平白多出一截空）
     playersSel.replaceChildren(g.players.min !== g.players.max
       ? h('label', { class: 'row', style: { gap: '8px' } }, h('span', { class: 'label' }, '人数'),
         h('select', { style: { width: 'auto' }, onchange: (e) => { sel.players = Number(e.target.value); defaults(); redraw(); } },
@@ -85,6 +96,12 @@ export async function playView(root, { meta, characters, go, session }) {
       if (names.some((n) => !n)) return [h('span', { class: 'muted' }, '还有座位没选选手')];
       return [h('span', { class: 'small muted' }, `${g.name} · ${sel.mode === 'ranked' ? '排位赛' : '娱乐赛'}`), h('b', {}, summarizeSeats(names).replace(' 对 ', ' vs '))];
     })());
+    // 真人上场时，「合法行动列表」「间隔」这些术语收进「高级」；纯 AI 对局照常摊开
+    const hasHuman = seatIds().some((s) => byId.get(sel.seats[s])?.kind === 'human');
+    if (hasHuman !== advBox.classList.contains('adv-on')) {
+      advBox.classList.toggle('adv-on', hasHuman);
+      advBox.replaceChildren(hasHuman ? h('details', { class: 'adv' }, h('summary', {}, '高级'), advOpts) : advOpts);
+    }
     startExtra.replaceChildren(
       sel.game === 'xiangqi' && sel.mode === 'casual' ? h('label', { class: 'field' }, h('span', {}, '起始局面'), startSel) : null,
       sel.game === 'xiangqi' && sel.mode === 'casual' && sel.start === 'fen' ? fenInput : null,
@@ -103,29 +120,49 @@ export async function playView(root, { meta, characters, go, session }) {
 
   const liveList = h('div', { class: 'live-list' });
   const LIVE_MAX = 8;
+  const meId = session.user?.id;
+  /** 这一盘里有没有我本人坐着 */
+  const iSit = (m) => Object.values(m.players || {}).some((p) => p?.kind === 'human' && meId && p.owner_id === meId);
+  const ago = (iso) => {
+    const s = Math.max(0, (Date.now() - new Date(iso || 0).getTime()) / 1000);
+    return s < 60 ? '刚刚' : s < 3600 ? `${Math.floor(s / 60)} 分钟前` : s < 86400 ? `${Math.floor(s / 3600)} 小时前` : `${Math.floor(s / 86400)} 天前`;
+  };
+  /** 一盘现在什么状态：「等你出手 · 3 小时前」 */
+  const stateOf = (m) => {
+    const st = m.humanWaiting ? (iSit(m) ? '等你出手' : '等真人出手') : m.paused ? '已暂停' : m.thinking ? `${m.seatNames?.[m.thinking] || ''}思考中` : m.plies ? `第 ${m.plies} 步` : '等待第一手';
+    return `${st} · ${ago(m.lastAt || m.started_at || m.created_at)}`;
+  };
+  const item = (m) => {
+    const names = Object.values(m.players).map((p) => p?.name);
+    const mine = m.humanWaiting && iSit(m);
+    return h('a', { class: `live-item${mine ? ' mine' : ''}`, href: `#/match/${m.id}`, title: names.map(cleanName).join('、') },
+      h('div', { class: 'who' }, h('span', { class: 'chip' }, m.gameName), h('span', { class: 'names' }, summarizeSeats(names))),
+      h('span', { class: 'chip' }, MODE_NAMES[m.mode]), h('span', { class: `small ${mine ? 'live-turn' : 'muted'}` }, stateOf(m)));
+  };
   const drawLive = (list) => {
-    liveList.replaceChildren(...(list.length ? list.slice(0, LIVE_MAX).map((m) => {
-      const names = Object.values(m.players).map((p) => p?.name);
-      return h('a', { class: 'live-item', href: `#/match/${m.id}`, title: names.map(cleanName).join('、') },
-        h('div', { class: 'who' }, h('span', { class: 'chip' }, m.gameName), h('span', { class: 'names' }, summarizeSeats(names))),
-        h('span', { class: 'chip' }, MODE_NAMES[m.mode]), h('span', { class: 'small muted' }, m.plies ? `${m.plies} 步` : '等待第一手'));
-    }) : [h('div', { class: 'muted small' }, '暂时没有进行中的对局')]),
-    list.length > LIVE_MAX ? h('a', { class: 'small live-all', href: '#/' }, `全部 ${list.length} 盘 →`) : null);
+    // 「待你行动」排在最前面单独一组，其余按最近动过的在前
+    const mine = list.filter((m) => m.humanWaiting && iSit(m));
+    const rest = list.filter((m) => !mine.includes(m)).sort((a, b) => String(b.lastAt || '').localeCompare(String(a.lastAt || '')));
+    const shown = rest.slice(0, Math.max(0, LIVE_MAX - mine.length));
+    liveList.replaceChildren(
+      mine.length ? h('div', { class: 'live-group' }, h('div', { class: 'label' }, `待你行动 · ${mine.length}`), ...mine.map(item)) : null,
+      mine.length && shown.length ? h('div', { class: 'label live-sep' }, '其他对局') : null,
+      ...(list.length ? shown.map(item) : [h('div', { class: 'muted small' }, '暂时没有进行中的对局')]),
+      list.length > mine.length + shown.length ? h('a', { class: 'small live-all', href: '#/' }, `全部 ${list.length} 盘 →`) : null);
   };
   drawLive(liveMatches);
 
   defaults();
   root.replaceChildren(
-    pageHead('开一局', '座位上可以放你自己的蛐蛐、你本人和系统选手。想和别人的蛐蛐斗，去「组局」。', '开', modeSeg),
+    // 只有娱乐赛一个选项时（非庄家）不摆一个孤零零的模式开关
+    pageHead('开一局', '座位上可以放你自己的蛐蛐、你本人和系统选手。想和别人的蛐蛐斗，去「组局」。', '开', canRanked ? modeSeg : null),
     h('div', { class: 'setup' },
     h('div', { class: 'card framed col setup-main', style: { gap: '22px' } },
       h('div', { class: 'row' }, gameSeg, playersSel),
       seatsBox,
       h('div', { class: 'grid2' },
         startExtra,
-        h('div', { class: 'col', style: { gap: '10px' } },
-          h('label', { class: 'switch' }, legalSw, '给模型提供合法行动列表'),
-          h('label', { class: 'field' }, h('span', {}, h('span', {}, '两步之间的间隔 '), delayLabel), delay)),
+        advBox,
       ),
       h('div', { class: 'start-bar' }, summary, h('a', { href: '#/characters', class: 'small start-new' }, '养一只新蛐蛐'), h('button', { class: 'btn primary lg', type: 'button', onclick: start }, '开始对局')),
     ),
@@ -135,6 +172,6 @@ export async function playView(root, { meta, characters, go, session }) {
   redraw();
 
   return listen(['lobby'], async (e) => {
-    if (e.type === 'match_created' || e.type === 'match_finished') drawLive(await api('/matches?status=running&limit=30').catch(() => liveMatches));
+    if (e.type === 'match_created' || e.type === 'match_finished') drawLive(await liveOf().catch(() => liveMatches));
   });
 }

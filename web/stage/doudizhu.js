@@ -352,6 +352,8 @@ const CSS = `
 @keyframes ddz-ban { 0% { transform: scaleX(.08); opacity: 0; } 14% { transform: scaleX(1.03); opacity: 1; } 22% { transform: none; } 82% { transform: none; opacity: 1; } 100% { transform: translateY(-1.4em) scale(1.03); opacity: 0; } }
 @keyframes ddz-cd { from { stroke-dashoffset: 0; } to { stroke-dashoffset: var(--len); } }
 
+/* 触屏：结算卡的 ✕ 命中区扩到 44px 以上（外观不变） */
+@media (pointer: coarse) { .ddz-x::before { content: ''; position: absolute; inset: -12px; } }
 /* 少动效：特效本来就不画；倒计时圈按秒跳 */
 @media (prefers-reduced-motion: reduce) {
   .ddz-cd .fg { animation: none !important; }
@@ -407,9 +409,10 @@ function play(node, name, dur, t0, delay = 0, ease = EASE) {
 /** 牌按大到小；同点数的第 k 张给第 k 个花色 */
 const desc = (names) => names.slice().sort((a, b) => rankOf(b) - rankOf(a));
 const ascId = (names) => names.slice().sort((a, b) => rankOf(a) - rankOf(b)).join(' ');
+// 花色按点数错开（点数 × 3 再加上同点数的第几张，模 4）：一手顺子不会全是 ♠，同一张牌每次画都是同一个花色
 function withSuits(names) {
   const seen = {};
-  return names.map((n) => { const k = seen[n] || 0; seen[n] = k + 1; return { n, s: SUITS[k % 4] }; });
+  return names.map((n) => { const k = seen[n] || 0; seen[n] = k + 1; return { n, s: SUITS[(Math.max(0, rankOf(n)) * 3 + k) % 4] }; });
 }
 
 /** 一张牌；fs 是牌的 font-size（牌宽 = 5 × fs） */
@@ -579,9 +582,9 @@ export default {
     }
     const r = view.result;
     return {
-      label: '本局记录', title: '本局', sub: view.landlord ? `底分 ${view.bid} · ${view.multiplier} 倍` : '叫地主',
+      label: '本局记录', title: '本局', sub: view.landlord ? `底分 ${view.bid} · ×${view.multiplier}` : '叫地主',
       groups, count: (view.bids?.length || 0) + (view.plays?.length || 0), last: null,
-      result: r ? `${r.landlordWins ? '地主' : '农民'}胜 · ${r.multiplier} 倍${r.spring ? ' · 春天' : r.anti ? ' · 反春' : ''} · 每家 ${r.score} 分` : null,
+      result: r ? `${r.landlordWins ? '地主' : '农民'}胜 · ×${r.multiplier}${r.spring ? ' · 春天' : r.anti ? ' · 反春' : ''} · 每家 ${r.score} 分` : null,
     };
   },
 
@@ -891,7 +894,8 @@ export default {
         if (nm && !flipDone(fx.flip, delay) && !reduced()) bot.append(el('span', { class: 'ddz-fw', style: `font-size:${fs}em` }, ...flipPair(withSuits(view.bottom)[i], fx.flip, delay)));
         else bot.append(cardEl(nm ? withSuits(view.bottom)[i] : { n: null }, 0, 0, fs));
       }
-      const mult = el('span', { class: `mult${(view.multiplier || 1) > 1 ? ' hot' : ''}` }, `${cnNum(view.multiplier || 1)}倍`);
+      // 倍数在牌匾、本局记录、结算卡上一律写「×4」
+      const mult = el('span', { class: `mult${(view.multiplier || 1) > 1 ? ' hot' : ''}` }, `×${view.multiplier || 1}`);
       play(mult, 'ddz-roll', 700, fx.mult, 0, 'cubic-bezier(.2,1.4,.4,1)');
       return el('div', { class: 'ddz-plq', style: `left:${L.plaque.cx}em;top:${L.plaque.y}em` },
         el('div', { class: 'kv' }, el('small', {}, view.deals ? `重发 ${view.deals}` : '底分'), el('b', {}, view.bid ? String(view.bid) : '—')),

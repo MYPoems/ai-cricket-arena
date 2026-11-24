@@ -2,7 +2,7 @@
 // 回放：从对局记录在浏览器里重建每一步，可以播放、调速、拖动进度。
 // 录制版式：地址带 ?record=1 时隐藏导航、自动从头播放，播完设置 window.__replayDone = true（供服务端录成视频）。
 
-import { h, api, post, listen, toast, guard, tierBadge, fmtMs, fmtTokens, pct, MODE_NAMES, resultText, seatOutcome, modelLine, dialog, confirmDialog, icon, cleanName } from './ui.js';
+import { h, api, post, listen, toast, guard, tierBadge, fmtMs, fmtTokens, pct, MODE_NAMES, resultText, seatOutcome, modelLine, dialog, confirmDialog, icon, cleanName, coin, avatarFace, summarizeSeats } from './ui.js';
 import { loadRenderer, PALETTE } from '../stage/index.js';
 import { createFold } from './fold.js';
 import { createSpot } from './spot.js';
@@ -92,7 +92,19 @@ export async function matchView(root, id, { characters, session }) {
 
   const seatChar = (seat) => chars.get(d.seats[seat]) || d.players[seat];
   const seatName = (seat) => d.seatNames?.[seat] || seat;
+  // 座位卡上的名字：好几位选手同一个前缀（「内置 AI · 初级」×5）时只写后半截「初级」，前缀在说明行里写一次；
+  // 窄屏省略号落在名字末尾，不会切在「·」后面
+  const fullName = (s) => seatChar(s)?.name || seatName(s);
+  const sharedPrefix = (() => {
+    const cnt = new Map();
+    for (const s of seats) { const n = fullName(s); const i = n.lastIndexOf('·'); if (i > 0) { const p = n.slice(0, i).trim(); cnt.set(p, (cnt.get(p) || 0) + 1); } }
+    return new Set([...cnt].filter(([, k]) => k >= 2).map(([p]) => p));
+  })();
+  const seatLabel = (s) => { const n = fullName(s); const i = n.lastIndexOf('·'); return i > 0 && sharedPrefix.has(n.slice(0, i).trim()) ? n.slice(i + 1).trim() : n; };
   const color = (seat) => renderer.seatColor?.(seat, seats.indexOf(seat)) || PALETTE[seats.indexOf(seat) % PALETTE.length];
+  // 着法表里的阵营小棋子：用棋子本来的颜色（白子白、黑子黑、红子红），不用为文字对比度调过的阵营色
+  const SIDE_DOT = { xiangqi: { r: '#c42d1e', b: '#1c1612' }, chess: { w: '#f6f0e2', b: '#1c1612' }, gomoku: { b: '#1c1612', w: '#f6f0e2' }, othello: { b: '#1c1612', w: '#f6f0e2' } };
+  const sideDot = (seat) => SIDE_DOT[d.game]?.[seat] || color(seat);
   // 我自己坐的座位（一盘里可以有多位真人，各看各的）；有真人在局时不给暂停
   const humanSeat = d.mySeat || null;
   const hasHuman = seats.some((s) => seatChar(s)?.kind === 'human');
@@ -150,7 +162,27 @@ export async function matchView(root, id, { characters, session }) {
   const tugL = h('span'), tugR = h('span'), tugFill = h('i', { class: 'l' }), tugKnot = h('span', { class: 'knot' });
   const tug = h('div', { class: 'tug' }, tugL, h('div', { class: 'bar' }, tugFill, h('i', { class: 'r' }), tugKnot), tugR);
   const curve = h('div', { class: 'stage-curve' });
-  const moves = h('div', { class: 'stage-moves' });
+  // 着法表是一个 listbox：Tab 进来落在当前这一步，方向键逐步走（选中即跳到那一步），Home / End 到头尾
+  const moves = h('div', { class: 'stage-moves', role: 'listbox', 'aria-label': '着法记录', tabindex: -1 });
+  moves.addEventListener('keydown', (e) => {
+    const t = e.target.closest?.('.mv');
+    if (!t || e.ctrlKey || e.metaKey || e.altKey) return;
+    const all = [...moves.querySelectorAll('.mv')];
+    const i = all.indexOf(t);
+    let to = null;
+    if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') to = all[i - 1];
+    else if (e.key === 'ArrowRight' || e.key === 'ArrowDown') to = all[i + 1];
+    else if (e.key === 'Home') to = all[0];
+    else if (e.key === 'End') to = all.at(-1);
+    else if (e.key === 'Enter' || e.key === ' ') to = t;
+    else return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (!to) return;
+    for (const x of all) x.tabIndex = x === to ? 0 : -1;
+    to.focus({ preventScroll: false });
+    if (canReview()) { stopReplay(); goto(Number(to.dataset.ply)); }
+  });
   const [aw, ah] = renderer.aspect || [1, 1];
   const cleanups = [];
   const boardWrap = h('div', { class: 'board-wrap' }, stage.el);
@@ -168,7 +200,9 @@ export async function matchView(root, id, { characters, session }) {
     // --cols：窄屏时座位排成头像格，一行几个（5 人以内一行排完，再多分两行）
     root.replaceChildren(h('div', { class: `arena duo no-winbar g-${d.game}${recordMode ? ' recording' : ''}`, 'data-n': Math.ceil(seats.length / 2), style: { '--cols': seats.length <= 5 ? seats.length : Math.ceil(seats.length / 2) } },
       h('div', { class: 'seats' }, ...leftSeats.map((s) => seatEls[s])),
-      h('section', { class: 'stage' }, statusBar, sceneEl, focusEl, h('div', { class: 'duo-stage' }, stage.el), logBox),
+      h('section', { class: 'stage' }, statusBar,
+        sharedPrefix.size ? h('div', { class: 'seat-cap' }, h('span', { class: 'label' }, '选手'), summarizeSeats(seats.map(fullName), { max: 4 })) : null,
+        sceneEl, focusEl, h('div', { class: 'duo-stage' }, stage.el), logBox),
       // 单数人局右列少一个座位：补一个看不见的占位，两列的顶边对齐（窄屏头像格里不显示）
       h('div', { class: 'seats' }, ...rightSeats.map((s) => seatEls[s]), rightSeats.length < leftSeats.length ? h('div', { class: 'seat seat-ghost', 'aria-hidden': 'true' }) : null),
     ));
@@ -215,6 +249,19 @@ export async function matchView(root, id, { characters, session }) {
     cleanups.push(() => removeEventListener('resize', measure));
   }
   if (recordMode) document.body.classList.add('record-mode');
+  // 手机顶栏的「‹ 大厅 · 游戏名」
+  const backG = document.getElementById('topBackGame');
+  if (backG) backG.textContent = d.gameName ? ` · ${d.gameName}` : '';
+  // 读屏：页面一级标题（视觉上转播条已经写着游戏名）；新的一步用 polite 播报，最快 1.5 秒一句，攒着的只报最新的
+  const liveRegion = h('div', { class: 'sr-only', 'aria-live': 'polite', 'aria-atomic': 'true' });
+  root.append(h('h1', { class: 'sr-only' }, `${d.gameName || '对局'} · ${summarizeSeats(seats.map((s) => seatChar(s)?.name || seatName(s)), { max: 4 })}`), liveRegion);
+  let annTimer = 0, annText = '', annAt = 0;
+  function announceMove(text) {
+    annText = text;
+    if (annTimer) return;
+    annTimer = setTimeout(() => { annTimer = 0; annAt = Date.now(); liveRegion.textContent = annText; }, Math.max(0, 1500 - (Date.now() - annAt)));
+  }
+  cleanups.push(() => clearTimeout(annTimer));
 
   // 座位上的选手名和头像，画面模块可以用来画名牌
   const playerInfo = Object.fromEntries(seats.map((s) => [s, { name: seatChar(s)?.name || seatName(s), avatar: seatChar(s)?.avatar || '？', seatName: seatName(s) }]));
@@ -236,8 +283,10 @@ export async function matchView(root, id, { characters, session }) {
     if (!two || duo || hud || !r || r.aborted) return;
     const o0 = seatOutcome(r, seats[0]);
     const draw = o0 === 'd';
-    const main = draw ? '和棋' : d.game === 'chess' ? (o0 === 'w' ? '1-0' : '0-1') : `${seatName(o0 === 'w' ? seats[0] : seats[1])}胜`;
-    const el = h('div', { class: `stage-banner${draw ? ' draw' : ''}`, role: 'status' }, h('b', { class: latin(main).trim() || null }, main), r.reason ? h('span', {}, r.reason) : null);
+    const mine = humanSeat ? seatOutcome(r, humanSeat) : null;
+    const main = draw ? '和棋' : mine ? (mine === 'w' ? '你赢了' : '你输了') : d.game === 'chess' ? (o0 === 'w' ? '1-0' : '0-1') : `${seatName(o0 === 'w' ? seats[0] : seats[1])}胜`;
+    const el = h('div', { class: `stage-banner${draw ? ' draw' : ''}`, role: 'status' }, h('span', { class: 'seal', 'aria-hidden': 'true' }, draw ? '和' : mine === 'l' ? '负' : '胜'),
+      h('div', { class: 'bn-t' }, h('b', { class: latin(main).trim() || null }, main), r.reason ? h('span', {}, r.reason) : null));
     boardWrap.querySelector('.stage-banner')?.remove();
     boardWrap.append(el);
     setTimeout(() => el.remove(), 3300);
@@ -350,6 +399,9 @@ export async function matchView(root, id, { characters, session }) {
     };
     const el = h('div', {
       class: cls, role: 'button', tabindex: 0, 'aria-pressed': info.pick ? String(picked) : null,
+      // 读屏一句话读完这张卡：「1号 初级 猎人 1票」
+      'aria-label': [`${seats.indexOf(seat) + 1}号`, seatLabel(seat), info.role?.text, info.word && !info.word.back ? `词 ${info.word.text}` : null, info.votes ? `${info.votes}票` : null,
+        st.includes('dead') ? '已出局' : null, speaking ? '正在发言' : null, info.pick ? (picked ? `已选中，再按确认：${pickText}` : `可选：${pickText}`) : null].filter(Boolean).join(' '),
       title: info.pick ? (picked ? `再点「确认」：${pickText}` : `${info.pickTitle || pickText}（先选中，再点确认）`) : `看 ${seats.indexOf(seat) + 1} 号的发言和想法`,
       onclick: () => {
         if (info.pick) {
@@ -367,9 +419,9 @@ export async function matchView(root, id, { characters, session }) {
     info.pick ? h('span', { class: 'pick-bar' }, h('span', { class: 'pick-tag' }, pickText),
       picked ? h('button', { type: 'button', class: 'btn sm primary pick-ok', onclick: guard(confirm) }, '确认') : null) : null,
     h('span', { class: 'no' }, seats.indexOf(seat) + 1),
-    h('span', { class: 'coin' }, c?.avatar || '？', st.includes('dead') ? h('span', { class: 'dead-mark' }, '亡') : null),
+    coin(c, '', st.includes('dead') ? h('span', { class: 'dead-mark' }, '亡') : null),
     // 发言不再铺在座位卡上，点座位在中间焦点区看；这里只标说过几句
-    h('div', { class: 'info' }, h('b', { class: 'nm' }, c?.name || '？'), h('div', { class: 'md' }, modelLine(c)),
+    h('div', { class: 'info' }, h('b', { class: 'nm', title: c?.name || null }, seatLabel(seat)), h('div', { class: 'md' }, modelLine(c)),
       info.said?.length ? h('div', { class: 'cnt' }, `发言 ${info.said.length}`) : null),
     h('div', { class: 'side' },
       info.role ? h('span', { class: 'role', style: { '--rc': info.role.color || 'var(--jade)' } }, info.role.text) : null,
@@ -390,7 +442,9 @@ export async function matchView(root, id, { characters, session }) {
     lastScene = { kind, key };
     const fx = !prev || prev.key === key ? '' : prev.kind !== kind ? ' flip' : sc?.title !== sceneEl.querySelector('.t')?.textContent ? ' retitle' : ' resub';
     sceneEl.className = `scene ${kind}${fx}`;
-    sceneEl.replaceChildren(sc ? h('div', {}, h('b', { class: 't' }, sc.title), sc.sub ? h('span', { class: 's' }, sc.sub) : null) : null);
+    // 终局：漆面金边的匾，右侧盖一枚朱印「胜」（没有胜方时「和」）；印只在刚结束时盖下来一次
+    const seal = kind === 'over' ? h('span', { class: `seal scene-seal${prev && prev.kind !== 'over' ? ' fresh' : ''}`, 'aria-hidden': 'true' }, /胜/.test(sc?.title || '') ? '胜' : '和') : null;
+    sceneEl.replaceChildren(sc ? h('div', {}, h('b', { class: 't' }, sc.title), sc.sub ? h('span', { class: 's' }, sc.sub) : null) : null, seal);
   }
 
   /** 焦点区：大头像 +「说的」（公开发言、投票）+「想的」（AI 的推理，上帝视角或对局结束后才有） */
@@ -425,7 +479,7 @@ export async function matchView(root, id, { characters, session }) {
     focusEl.className = `focus${solo ? ' solo' : ''}${swapped ? ' swap' : ''}`;
     focusEl.replaceChildren(
       // 结构：头像行（横排）+「说的」+「想的」；宽屏时说的、想的左右并排
-      h('div', { class: 'who' }, h('span', { class: 'coin lg' }, c?.avatar || '？'),
+      h('div', { class: 'who' }, coin(c, 'lg'),
         h('div', { class: 'id' }, h('b', { class: 'gold-text' }, `${seats.indexOf(seat) + 1} 号 · ${c?.name || '？'}`), h('small', {}, modelLine(c))),
         info.role ? h('span', { class: 'role', style: { '--rc': info.role.color || 'var(--jade)' } }, info.role.text) : null,
         hidden ? h('span', { class: 'chip' }, '想法对局结束后公开') : null,
@@ -482,7 +536,7 @@ export async function matchView(root, id, { characters, session }) {
     const status = f.live ? '思考中' : f.human ? (mine ? '轮到你' : '思考中') : f.pinned ? `第 ${f.ply} 步` : f.idle ? (d.status === 'running' ? '等待开局' : '') : d.status === 'running' ? '刚出手' : '最后一手';
     const line = renderer.seatLine?.(view, seat);
     const head = [
-      h('span', { class: 'coin' }, c?.avatar || '？'),
+      coin(c),
       h('div', { class: 'who' },
         h('b', {}, c?.name || seatName(seat)),
         h('span', {}, [seatName(seat), c?.kind === 'human' ? '真人' : c?.kind === 'agent' ? '自带 Agent' : c?.kind === 'model' ? c.model : modelLine(c || {})].filter(Boolean).join(' · ')),
@@ -586,7 +640,7 @@ export async function matchView(root, id, { characters, session }) {
     camps[seat].el.classList.toggle('out', !!cv?.out?.includes?.(seat));
     camps[seat].head.replaceChildren(
       h('div', { class: 'camp-id' },
-        h('div', { class: 'camp-avatar' }, c?.avatar || '？', thinking ? h('i', { class: 'pulse' }) : null),
+        h('div', { class: `camp-avatar${avatarFace(c).ch ? ' glyph' : ''}` }, avatarFace(c).emoji || h('i', { class: 'g' }, avatarFace(c).ch), thinking ? h('i', { class: 'pulse' }) : null),
         h('div', { class: 'camp-name' },
           h('div', { class: 'row', style: { gap: '6px', flexWrap: 'nowrap' } },
             h('span', { class: 'side-tag', style: { background: color(seat) } }, seatName(seat)),
@@ -597,12 +651,17 @@ export async function matchView(root, id, { characters, session }) {
           two ? h('div', { class: 'row', style: { gap: '6px', marginTop: '4px' } },
             c?.tier ? tierBadge(c.tier) : null,
             change ? h('span', { class: change.delta >= 0 ? 'delta-up' : 'delta-down' }, `${change.before} → ${change.after}（${change.delta >= 0 ? '+' : ''}${change.delta}）`) : null) : null)),
-      two ? h('div', { class: `camp-stats${evalHidden() ? ' n4' : ''}` },
-        s.acc !== null && !evalHidden() ? stat('准确率', `${s.acc}%`, '按 lichess 的算法：每步按胜率损失折算 0–100 分，整局取算术平均和调和平均的平均（一次大漏着会明显拉低）') : stat('步数', s.n),
-        stat('平均用时', s.n ? fmtMs(Math.round(s.avg)) : '—'),
-        stat('tokens', fmtTokens(s.tok)),
-        evalHidden() ? null : stat('失误', s.tags.失误 + s.tags.大漏着, s.tags.大漏着 ? `其中大漏着 ${s.tags.大漏着}` : ''),
-        stat('无效', s.illegal)) : h('div', { class: 'camp-mini' }, `${s.n} 步 · ${s.n ? fmtMs(Math.round(s.avg)) : '—'} · ${fmtTokens(s.tok)} tokens${s.illegal ? ` · 无效 ${s.illegal}` : ''}${change ? ` · ${change.delta >= 0 ? '+' : ''}${change.delta}` : ''}`),
+      two ? (() => {
+        // 真人没有 tokens、无效着法这两项：不摆两个永远是 0 的格子
+        const isHuman = c?.kind === 'human';
+        const cells = [
+          s.acc !== null && !evalHidden() ? stat('准确率', `${s.acc}%`, '按 lichess 的算法：每步按胜率损失折算 0–100 分，整局取算术平均和调和平均的平均（一次大漏着会明显拉低）') : stat('步数', s.n),
+          stat('平均用时', s.n ? fmtMs(Math.round(s.avg)) : '—'),
+          isHuman ? null : stat('tokens', fmtTokens(s.tok)),
+          evalHidden() ? null : stat('失误', s.tags.失误 + s.tags.大漏着, s.tags.大漏着 ? `其中大漏着 ${s.tags.大漏着}` : ''),
+          isHuman ? null : stat('无效', s.illegal)].filter(Boolean);
+        return h('div', { class: `camp-stats n${cells.length}` }, ...cells);
+      })() : h('div', { class: 'camp-mini' }, c?.kind === 'human' ? `${s.n} 步 · ${s.n ? fmtMs(Math.round(s.avg)) : '—'}${change ? ` · ${change.delta >= 0 ? '+' : ''}${change.delta}` : ''}` : `${s.n} 步 · ${s.n ? fmtMs(Math.round(s.avg)) : '—'} · ${fmtTokens(s.tok)} tokens${s.illegal ? ` · 无效 ${s.illegal}` : ''}${change ? ` · ${change.delta >= 0 ? '+' : ''}${change.delta}` : ''}`),
       two && !evalHidden() && s.last?.self_winrate !== null && s.last?.self_winrate !== undefined
         ? h('div', { class: 'camp-gauge', title: '最近一步：模型自评胜率 / 引擎评估（走棋前）' },
           h('span', {}, '自评'), bar(s.last.self_winrate / 100, 'self'), h('b', {}, `${s.last.self_winrate}%`),
@@ -620,6 +679,13 @@ export async function matchView(root, id, { characters, session }) {
     if (duo || hud || !two) return [];
     const last = [...turns.values()].filter((t) => t.seat && t.label).sort((a, b) => b.ply - a.ply)[0];
     return last ? seats.filter((s) => s !== last.seat) : [seats[0]];
+  }
+  /** 我本人坐在里面时，结果写成「你赢了 · …」「你输了 · …」 */
+  function myResult() {
+    const r = d.result;
+    if (!humanSeat || !r || r.aborted || d.status === 'running') return '';
+    const o = seatOutcome(r, humanSeat);
+    return `${o === 'w' ? '你赢了' : o === 'l' ? '你输了' : '和局'} · ${resultText(d, d.seatNames)}`;
   }
   /** 进行中的状态字：谁在想、谁在发言、投票进度——不再只显示「…」 */
   function liveStatus() {
@@ -685,6 +751,18 @@ export async function matchView(root, id, { characters, session }) {
   sb.abort = h('button', { type: 'button', class: 'btn sm ghost danger', title: '中止对局：不计胜负，已经下的部分保留', onclick: guard(async () => { if (await confirmDialog({ title: '中止对局', body: '中止这盘？不计胜负，已经下的部分保留。', okText: '中止', danger: true })) await post(`/matches/${id}/control`, { op: 'abort' }); }) }, '中止');
   sb.flip = stage.setFlipped ? ibtn('flip', '翻转（F）', () => { flipped = !flipped; stage.setFlipped(flipped); renderStage(false); }) : null;
   sb.report = h('button', { type: 'button', class: 'btn sm', onclick: showReport }, '战报');
+  // 再来一局：同样的座位和设置（娱乐赛）；两人局还可以换边。开局的人、庄家、坐在里面的真人可用，座位上的蛐蛐都得是自己能用的
+  const canRematch = () => d.status !== 'running' && (canControl || !!humanSeat) && seats.every((s) => chars.has(d.seats[s]));
+  const rematch = async (swap) => {
+    const ids = seats.map((s) => d.seats[s]);
+    if (swap && two) ids.reverse();
+    const setup = d.record?.setup && Object.keys(d.record.setup).length ? d.record.setup : undefined;
+    const r = await post('/matches', { game: d.game, seats: Object.fromEntries(seats.map((s, i) => [s, ids[i]])), mode: 'casual',
+      options: { showLegal: d.options?.showLegal !== false, delayMs: d.options?.delayMs ?? 600, ...(setup ? { setup } : {}) } });
+    location.hash = `#/match/${r.id}`;
+  };
+  sb.again = h('button', { type: 'button', class: 'btn sm primary', title: '同样的座位和设置，马上再开一盘（娱乐赛）', onclick: guard(() => rematch(false)) }, '再来一局');
+  sb.swap = h('button', { type: 'button', class: 'btn sm', title: '双方交换座位（先后手、红黑对调）再开一盘', onclick: guard(() => rematch(true)) }, '换边再来');
   sb.sep2 = h('span', { class: 'bar-sep', 'aria-hidden': 'true' });
   // 录像、音效、导出、链接：手机上（≤480）收进「⋯」菜单
   sb.record = ibtn('record', '录成视频（按当前回放速度）', record, 'bar-extra');
@@ -704,7 +782,7 @@ export async function matchView(root, id, { characters, session }) {
   });
   sb.ctrl = h('div', { class: 'bar-ctrl' },
     sb.play, sb.speed, sb.prev, sb.next, sb.latest, sb.sep1,
-    sb.pause, sb.pov, sb.step, sb.accept, sb.offer, sb.resign, sb.abort, sb.flip, sb.report, sb.sep2,
+    sb.pause, sb.pov, sb.step, sb.accept, sb.offer, sb.resign, sb.abort, sb.flip, sb.report, sb.again, sb.swap, sb.sep2,
     sb.record, sb.sound,
     h('a', { class: 'icon-btn bar-extra', title: '导出记录', 'aria-label': '导出记录', href: `/api/matches/${id}/export` }, icon('download')),
     ibtn('link', '复制这一步的链接（打开就停在这一步）', copyLink, 'bar-extra'),
@@ -718,7 +796,7 @@ export async function matchView(root, id, { characters, session }) {
     const reviewing = viewPly !== null;
     // 复盘、回放时不显示「思考中」：看的是过去的局面
     const status = reviewing && viewPly < n ? (replaying ? '回放中' : '复盘中')
-      : running ? liveStatus() : resultText(d, d.seatNames);
+      : running ? liveStatus() : myResult() || resultText(d, d.seatNames);
     const po = pendingOffer();
     const prevStatus = lastStatus;
     lastStatus = status;
@@ -741,6 +819,8 @@ export async function matchView(root, id, { characters, session }) {
       [sb.abort, running && d.mode === 'casual' && canControl],
       [sb.flip, true],
       [sb.report, !running && winbarOn && n],
+      [sb.again, canRematch()],
+      [sb.swap, canRematch() && two],
     ].filter(([el]) => el);
     for (const [el, on] of keys) vis(el, on);
     const anyMatch = keys.some(([, on]) => on);
@@ -849,12 +929,32 @@ export async function matchView(root, id, { characters, session }) {
   }
   // 手机上轮到自己（狼人杀、谁是卧底）：操作区钉在屏幕底部，第一次轮到时滚过去一次
   let turnSeen = null;
+  /** 最近几句公开发言（按步数，最新的在最后）：轮到自己发言时钉在输入框上面，好接话 */
+  function recentSpeeches(k = 3) {
+    const out = [];
+    for (const t of [...turns.values()].filter((x) => x.seat && x.label).sort((a, b) => b.ply - a.ply)) {
+      const said = duoInfo.seats?.[t.seat]?.said || [];
+      if (!said.some((x) => x.text && (x.text === t.label || t.label.includes(x.text) || x.text.includes(t.label)))) continue;
+      out.push({ no: seats.indexOf(t.seat) + 1, name: seatLabel(t.seat), text: t.label });
+      if (out.length >= k) break;
+    }
+    return out.reverse();
+  }
   function syncMyTurn(movable) {
     if (!duo) return;
     const arenaEl = root.querySelector('.arena');
     const ctrl = stage.el.querySelector('.ww-ctrl, .uc-ctrl');
     const on = !!movable && !!ctrl && !ctrl.hidden;
     arenaEl?.classList.toggle('my-turn', on);
+    // 轮到我发言（有输入框）：在操作区顶上放最近 2–3 句发言（手机上操作区钉在屏幕底部，看不到焦点区）
+    const speaking = on && ctrl.querySelector('.ww-form:not([hidden]), .uc-form:not([hidden])');
+    const old = ctrl?.querySelector(':scope > .recent-said');
+    const list = speaking ? recentSpeeches(3) : [];
+    if (list.length) {
+      const box = h('div', { class: 'recent-said', role: 'group', 'aria-label': '最近的发言' },
+        ...list.map((x) => h('div', { class: 'rs' }, h('b', {}, `${x.no}号`), h('span', { class: 'rs-nm' }, x.name), h('span', { class: 'rs-tx' }, x.text))));
+      if (old) old.replaceWith(box); else ctrl.prepend(box);
+    } else old?.remove();
     if (!on) { arenaEl?.style.removeProperty('--ctrl-h'); return; }
     requestAnimationFrame(() => {
       if (!ctrl.isConnected) return;
@@ -935,7 +1035,7 @@ export async function matchView(root, id, { characters, session }) {
       const q = { 大漏着: 0, 失误: 0, 缓着: 0 };
       for (const t of turns.values()) if (t.seat === seat && t.eval?.quality?.tag in q) q[t.eval.quality.tag]++;
       return h('div', { class: 'rp-row' },
-        h('span', { class: 'coin' }, c?.avatar || '？'),
+        coin(c),
         h('div', { class: 'rp-id' }, h('b', {}, c?.name || seatName(seat)), h('small', {}, seatName(seat))),
         h('div', { class: 'rp-acc' }, h('b', {}, st.acc ?? '—'), h('small', {}, '准确率')),
         h('div', { class: 'rp-q' }, h('span', { class: 'q-大漏着' }, `大漏着 ${q.大漏着}`), h('span', { class: 'q-失误' }, `失误 ${q.失误}`), h('span', { class: 'q-缓着' }, `缓着 ${q.缓着}`)),
@@ -976,7 +1076,8 @@ export async function matchView(root, id, { characters, session }) {
         if (k.d > last.d) { last.p = k.p; last.d = k.d; }
       } else out.push({ ...k, end: k.p });
     }
-    return out.map((k) => k.p);
+    // 最多 5 个：留波动最大的 5 次，再按步数排回去
+    return out.sort((a, b) => b.d - a.d).slice(0, 5).map((k) => k.p).sort((a, b) => a - b);
   }
 
   function renderCurve() {
@@ -987,6 +1088,15 @@ export async function matchView(root, id, { characters, session }) {
     const pts = [];
     const upto = noSpoil() ? (viewPly ?? n) : n;
     for (let p = 0; p <= upto; p++) { const e = e0At(p); if (e !== null) pts.push([p, e]); }
+    // 长对局（80 步以上）的胜率线、自评线先做一遍前后双向的指数平滑（EMA，不滞后），锯齿太密时看不出走势
+    const ema = (arr) => {
+      if (n <= 80 || arr.length <= 8) return;
+      const a = 2 / (Math.max(2, Math.min(8, Math.round(n / 50))) + 1);
+      for (let i = 1; i < arr.length; i++) arr[i][1] = a * arr[i][1] + (1 - a) * arr[i - 1][1];
+      for (let i = arr.length - 2; i >= 0; i--) arr[i][1] = a * arr[i][1] + (1 - a) * arr[i + 1][1];
+    };
+    ema(pts);
+    const smooth = new Map(pts);
     const self = [];
     for (let p = 1; p <= upto; p++) {
       const t = turns.get(p);
@@ -994,6 +1104,7 @@ export async function matchView(root, id, { characters, session }) {
       const s = t.self_winrate / 100;
       self.push([p, t.seat === seats[0] ? s : 1 - s]);
     }
+    ema(self);
     const X = (p) => (n ? (p / n) * W : 0);
     const Y = (e) => H - e * H;
     const path = (arr) => arr.map(([p, e], i) => `${i ? 'L' : 'M'} ${X(p).toFixed(1)} ${Y(e).toFixed(1)}`).join(' ');
@@ -1016,7 +1127,7 @@ export async function matchView(root, id, { characters, session }) {
     let lastX = -Infinity;
     for (let p = 1; p <= upto; p++) {
       const q = turns.get(p)?.eval?.quality;
-      const e = e0At(p);
+      const e = smooth.get(p) ?? null; // 点落在画出来的（平滑过的）线上
       if (!q || !show.has(q.tag) || e === null) continue;
       // 挨得太近（横向不到 1.2%）的点只画第一个，长对局里不糊成一片
       if (X(p) - lastX < W * 0.012 && p !== cur) continue;
@@ -1069,7 +1180,12 @@ export async function matchView(root, id, { characters, session }) {
       const it = items[j];
       if (!it) return null;
       const q = evalHidden() ? null : turns.get(j + 1)?.eval?.quality;
-      return h('span', { class: `mv${cur === j + 1 ? ' on' : ''}`, style: { color: two && seats.indexOf(it.seat) === 0 ? color(seats[0]) : '' }, onclick: () => { if (canReview()) { stopReplay(); goto(j + 1); } }, title: q ? q.tag : seatName(it.seat) },
+      // 双方不再靠字色区分（浅色主题下白方的灰字对比度太低）：字一律用正文色，前面一颗阵营色小棋子
+      const on = cur === j + 1;
+      return h('span', { class: `mv${on ? ' on' : ''}`, role: 'option', tabindex: on ? 0 : -1, 'aria-selected': on ? 'true' : 'false', 'data-ply': j + 1,
+        'aria-label': `第 ${j + 1} 步 ${seatName(it.seat)} ${it.label}${q ? ` · ${q.tag}` : ''}`,
+        onclick: () => { if (canReview()) { stopReplay(); goto(j + 1); } }, title: q ? q.tag : seatName(it.seat) },
+        two ? h('i', { class: 'side', style: { '--c': sideDot(it.seat) }, 'aria-hidden': 'true' }) : null,
         q ? h('i', { class: `q q-${q.tag}` }) : null, two ? '' : `${seatName(it.seat)} `, h('span', { class: `mv-l${latin(it.label)}` }, it.label));
     };
     let from = 0, to = items.length;
@@ -1083,7 +1199,10 @@ export async function matchView(root, id, { characters, session }) {
     if (two) for (let i = from; i < to; i += 2) els.push(h('span', { class: 'mvpair' }, h('em', {}, i / 2 + 1), cell(i), i + 1 < to ? cell(i + 1) : null));
     else for (let i = from; i < to; i++) els.push(h('span', { class: 'mvpair' }, h('em', {}, i + 1), cell(i)));
     if (to < items.length) els.push(more(`后面还有 ${items.length - to} 条 · 显示全部`));
+    const hadFocus = moves.contains(document.activeElement) && document.activeElement.classList.contains('mv');
     moves.replaceChildren(...(els.length ? els : [h('span', { class: 'muted small' }, '还没有行动')]));
+    // 键盘在着法表里走：重画之后焦点还落在当前那一步上
+    if (hadFocus) moves.querySelector('.mv.on')?.focus({ preventScroll: true });
     // 新的一步弹出来
     if (viewPly === null && movesShown !== null && items.length > movesShown) {
       const cells = moves.querySelectorAll('.mv');
@@ -1159,7 +1278,10 @@ export async function matchView(root, id, { characters, session }) {
       const limit = viewPly ?? Infinity;
       const plies = [...turns.keys()].filter((k) => turns.get(k).seat === seat && k <= limit).sort((a, b) => b - a);
       for (const k of plies) cards.push(thoughtCard(turns.get(k)));
-      if (!cards.length) cards.push(h('div', { class: 'camp-empty' }, d.status === 'running' ? '等待出手' : '没有记录'));
+      // 我自己的那一栏：轮到我时顶上写「轮到你」，不是「等待出手」
+      const myTurnNow = seat === humanSeat && waitingHuman === seat && d.status === 'running' && viewPly === null;
+      if (myTurnNow) cards.unshift(h('div', { class: 'camp-empty camp-turn' }, '轮到你'));
+      if (!cards.length) cards.push(h('div', { class: 'camp-empty' }, d.status !== 'running' ? '没有记录' : seat === humanSeat ? '等对手出手' : '等待出手'));
       // 新出现的思考卡从上面滑进来（已经在的卡不重播）
       if (viewPly === null) {
         const prev = seenCards[seat];
@@ -1228,6 +1350,7 @@ export async function matchView(root, id, { characters, session }) {
     renderStatus();
   }
 
+  let foldMeasured = false;
   function renderAll() {
     if (!duo) seats.forEach(renderCamp); // 多人局的座位卡在 renderStage 里画（要用新算出的场景）
     renderStage(); // 先算出场景（多人局的状态字要用）
@@ -1235,6 +1358,8 @@ export async function matchView(root, id, { characters, session }) {
     renderCurve();
     renderMoves();
     renderThoughts();
+    // 第一次量折叠时焦点区还是空的（renderStage 在 renderFocus 之前），会把面板全收起来、留下一大块空宣纸：画完整页后重量一次
+    if (duo && !foldMeasured) { foldMeasured = true; fold?.update(true); }
   }
 
   // 只更新正在思考的卡片，避免每个字都重绘整栏
@@ -1382,7 +1507,12 @@ export async function matchView(root, id, { characters, session }) {
         if (Array.isArray(d.record?.actions)) d.record.actions.push({ seat: e.seat, action: e.action });
         if (e.view) d.view = e.view;
         else await refresh();
-        if (viewPly === null) { renderAll(); stampFx(stampFor(e.label, d.view)); const so = soundFor(e.label, d.view); if (so) sfx(so); }
+        if (viewPly === null) {
+          renderAll(); stampFx(stampFor(e.label, d.view)); const so = soundFor(e.label, d.view); if (so) sfx(so);
+          const st = duo || hud ? null : stampFor(e.label, d.view);
+          const lb = String(e.label || '');
+          announceMove(`第${e.ply}步 ${duo ? `${seats.indexOf(e.seat) + 1}号` : seatName(e.seat)} ${lb.length > 40 ? `${lb.slice(0, 40)}…` : lb}${st === '杀' ? ' 将死' : st === '将' ? ' 将军' : ''}`);
+        }
         else { seats.forEach(renderCamp); renderStatus(); renderMoves(); }
         break;
       }
@@ -1425,7 +1555,8 @@ export async function matchView(root, id, { characters, session }) {
         // 战报等结果横幅演完再弹
         if (d.status === 'finished' && winbarOn && !recordMode) reportTimer = setTimeout(() => { if (root.isConnected && !left) showReport(); }, two && !duo ? 3400 : 1800);
         // 棋类已经有结果横幅，不再叠一枚「终」字大印
-        if (d.status === 'finished' && !hud && !(two && !duo && !recordMode)) stampFx(d.result?.ranks && Object.values(d.result.ranks).every((r) => r === 1) ? '和' : '终', true);
+        // 狼人杀、谁是卧底的场景匾自己盖「胜」印，不再在屏幕正中压一枚大「终」字（会盖住座位和发言）
+        if (d.status === 'finished' && !hud && !duo && !(two && !recordMode)) stampFx(d.result?.ranks && Object.values(d.result.ranks).every((r) => r === 1) ? '和' : '终', true);
         break;
     }
   });

@@ -264,7 +264,7 @@ export default {
       };
     }
     const title = over ? `对局结束 · ${view.result?.team || ''}胜` : `第 ${view.round} 轮 · ${PHASE[view.phase] || ''}`;
-    return { scene: { kind: 'day', title, sub: sceneSub(view) }, seats };
+    return { scene: { kind: over ? 'over' : 'day', title, sub: sceneSub(view) }, seats };
   },
 
   createStage({ onAction }) {

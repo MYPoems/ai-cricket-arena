@@ -420,13 +420,16 @@ export class Board {
     this.#drawCoords();
   }
 
+  /** 中式路数，和着法记录（炮二平五、马８进７）对得上：红方一侧从红方右手数起「九 … 一」，黑方一侧「1 … 9」；翻转后跟着换边 */
   #drawCoords() {
     this.coords.replaceChildren();
+    const CN = '〇一二三四五六七八九';
+    const near = F + BH + F / 2 + 1, far = F / 2 + 1;
     for (let f = 0; f < 9; f++) {
-      this.coords.append(svg('text', { class: 'xq-coord', x: this.x(f), y: F + BH + F / 2 + 1, 'text-anchor': 'middle', 'dominant-baseline': 'central' }, String.fromCharCode(97 + f)));
-    }
-    for (let r = 0; r < 10; r++) {
-      this.coords.append(svg('text', { class: 'xq-coord', x: F / 2, y: this.y(r), 'text-anchor': 'middle', 'dominant-baseline': 'central' }, String(r)));
+      const at = { class: 'xq-coord', x: this.x(f), 'text-anchor': 'middle', 'dominant-baseline': 'central' };
+      this.coords.append(
+        svg('text', { ...at, y: this.flipped ? far : near }, CN[9 - f]),
+        svg('text', { ...at, y: this.flipped ? near : far }, String(f + 1)));
     }
   }
 

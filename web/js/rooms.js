@@ -1,8 +1,6 @@
 // 组局：开房、把自己的 AI 蛐蛐拉进座位、坐满后房主开局。
 
-import { h, api, post, guard, guardConfirm, toast, listen, modelLine, fmtTime, dialog, pageHead, emptyState, setTitle, pressed, icon, cleanName } from './ui.js';
-
-const coin = (c, cls = '') => h('span', { class: `coin ${cls}` }, c?.avatar || '？');
+import { h, api, post, guard, guardConfirm, toast, listen, modelLine, fmtTime, dialog, pageHead, emptyState, setTitle, pressed, icon, cleanName, coin } from './ui.js';
 
 export async function roomsView(root, { meta, go, session }) {
   const list = await api('/rooms');
@@ -29,7 +27,7 @@ export async function roomsView(root, { meta, go, session }) {
 
   const card = (r) => h('a', { class: 'card room', href: `#/room/${r.id}` },
     h('div', { class: 'row', style: { justifyContent: 'space-between' } }, h('span', { class: 't' }, r.title), h('span', { class: 'chip' }, r.gameName)),
-    h('div', { class: 'slots' }, ...Object.values(r.seats).map((s) => s ? h('span', { class: 'coin sm', title: cleanName(s.character.name) }, s.character.avatar) : h('span', { class: 'slot-dot' }, '＋'))),
+    h('div', { class: 'slots' }, ...Object.values(r.seats).map((s) => s ? Object.assign(coin(s.character, 'sm'), { title: cleanName(s.character.name) }) : h('span', { class: 'slot-dot' }, '＋'))),
     h('div', { class: 'small muted' }, `房主 ${r.host?.name || '—'} · ${r.filled}/${r.players} 人 · ${fmtTime(r.updated_at)}`));
   // 没有组局时：页头不放按钮（主操作只出现一次），下面一张安静的卡片讲清楚三步
   const emptyBox = () => h('div', { class: 'card quiet rooms-empty' },
@@ -93,7 +91,7 @@ export async function roomView(root, id, { go, session, characters, meta }) {
     }
     const mineSeat = me && (s.by?.id === me.id || isHost());
     return h('div', { class: 'card seatcard' }, h('span', { class: 'no' }, i + 1), coin(s.character),
-      h('div', { style: { minWidth: 0 } }, h('div', { class: 'nm gold-text' }, cleanName(s.character.name)), h('div', { class: 'md' }, `${room.seatNames[seat]} · ${modelLine(s.character)}`), h('div', { class: 'md' }, s.character.system ? '系统选手' : `${s.by?.name || '—'} 带来的`)),
+      h('div', { style: { minWidth: 0 } }, h('div', { class: 'nm gold-text' }, cleanName(s.character.name)), h('div', { class: 'md' }, `${room.seatNames[seat]} · ${modelLine(s.character)}`), h('div', { class: 'md' }, s.character.system ? '系统选手' : s.character.kind === 'human' ? `${s.by?.name ? `${s.by.name} ` : ''}本人入座` : `${s.by?.name || '—'} 带来的`)),
       open && mineSeat ? h('button', { class: 'btn sm ghost', type: 'button', onclick: guard(async () => { room = await post(`/rooms/${id}/leave`, { seat }); draw(); }) }, '离座') : null);
   }
 

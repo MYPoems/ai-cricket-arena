@@ -41,6 +41,7 @@ const CSS = `
 .ww-news { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 18px; padding: 8px 14px; font-size: 13.5px; }
 .ww-news > span { display: inline-flex; align-items: center; gap: 6px; }
 .ww-news .hot { color: var(--zhu-2); font-weight: 700; }
+.ww-news .ww-out { display: inline-flex; align-items: center; gap: 4px; margin-right: 6px; }
 .ww-ctrl { display: flex; flex-direction: column; gap: 8px; padding: 10px 14px 12px; }
 .ww-ctrl[hidden], .ww-form[hidden] { display: none; }
 .ww-ctrl .head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
@@ -162,10 +163,11 @@ function newsBlock(view) {
     items.push(el('span', {}, el('span', { class: 'label' }, '猎人'), coin(sh.seat),
       sh.target ? el('span', { class: 'hot' }, `开枪带走 ${no(sh.target)} 号`) : el('span', {}, '没有开枪')));
   }
+  // 出局名单和谁是卧底的「历史」同一个写法：号码铜钱 + 身份小牌（知道身份时）
   const ds = view.deaths || [];
   if (ds.length) {
     items.push(el('span', {}, el('span', { class: 'label' }, '出局'),
-      ds.map((d) => coin(d.seat, `第 ${d.day} ${d.time === 'night' ? '夜' : '天'}${d.cause ? ` · ${CAUSE[d.cause]}` : ''}`))));
+      ds.map((d) => el('span', { class: 'ww-out' }, coin(d.seat, `第 ${d.day} ${d.time === 'night' ? '夜' : '天'}${d.cause ? ` · ${CAUSE[d.cause]}` : ''}`), view.roles?.[d.seat] ? roleChip(view.roles[d.seat]) : null))));
   }
   return items.length ? el('div', { class: 'well ww-news' }, items) : null;
 }
@@ -330,6 +332,12 @@ export default {
   announce(prev, view) {
     if (!prev || !view) return null;
     const no = (s) => `${String(s).replace(/^\D+/, '')} 号`;
+    // 预言家本人：刚查验出结果时浮一张卡（只有预言家的视角里有 checks；上帝视角的观众不弹）
+    const ck = view.checks || [];
+    if (!view.god && ck.length > (prev.checks || []).length) {
+      const c = ck.at(-1);
+      return { kind: `seer${c.wolf ? ' wolf' : ''}`, title: `${no(c.target)}是${c.wolf ? '狼人' : '好人'}`, sub: `第 ${c.day} 夜查验结果 · 只有你看得到` };
+    }
     if (view.dawn && view.dawn.day !== prev.dawn?.day) {
       const dead = view.dawn.dead || [];
       return { kind: 'dawn', title: `第 ${view.dawn.day} 天 · 天亮了`, sub: dead.length ? `昨夜 ${dead.map(no).join('、')} 出局` : '昨夜平安夜，没有人出局' };
@@ -398,7 +406,7 @@ export default {
       };
     }
     const title = over ? `对局结束 · ${view.result?.team || ''}胜` : `第 ${view.day} 天 · ${night ? '夜晚' : '白天'}`;
-    return { scene: { kind: night ? 'night' : 'day', title, sub: sceneSub(view) }, seats };
+    return { scene: { kind: over ? 'over' : night ? 'night' : 'day', title, sub: sceneSub(view) }, seats };
   },
 
   createStage({ onAction }) {

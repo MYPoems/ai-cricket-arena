@@ -420,8 +420,25 @@ const CSS = `
 .pk.port .pk-stats .th, .pk.port .pk-stats .tr { grid-template-columns: 1.9em minmax(0, 1fr) 4.6em 2.4em 3.2em 3.2em 3.4em 4.4em; gap: .4em; padding-left: .4em; padding-right: .4em; }
 .pk.port .pk-stats .tr > .spk, .pk.port .pk-stats .th > span:nth-child(4) { display: none; }
 
+/* 浅色主题：结算卡背后的压暗换成暖墨色，不是一层黑 */
+:root[data-theme="light"] .pk-veil { background: radial-gradient(62% 60% at 50% 47%, rgb(42 18 9 / .3), rgb(42 18 9 / .45)); }
+/* 跟注额刚变、跟注键锁着的那 1 秒：按 C 或点按钮时浮一句说明 */
+.pk-cooltip { position: absolute; left: 50%; bottom: calc(100% + .5em); translate: -50% 0; z-index: 3; padding: .4em .9em; border-radius: .6em; white-space: nowrap; pointer-events: none;
+  font: 600 1em/1.3 var(--sans); color: #fff3d6; background: rgb(42 12 6 / .92); box-shadow: 0 0 0 .08em rgb(240 205 120 / .55), 0 .3em .6em rgb(0 0 0 / .45); animation: pk-rise .2s ${EASE} both; }
+.pk-cooltip[hidden] { display: none; }
+.pk.port .pk-cooltip { font-size: 1.3em; }
+/* 触屏：结算卡的 ✕、本手 / 全场统计切换键，命中区扩到 44px 以上（外观不变） */
+@media (pointer: coarse) {
+  .pk-x::before, .pk-sum .tabs button::before { content: ''; position: absolute; inset: -12px; }
+  .pk-sum .tabs button { position: relative; }
+}
+/* 手机竖屏：操作台的按钮至少 40px 高 */
+@media (max-width: 700px) {
+  .pk-ctl .r2 .btn { min-height: 40px; }
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .pk-seat.on::after, .pk-seat .think i, .pk-seat .tag i, .pk-seat .tmr.hot, .pk-seat .who span.turn::after, .pk-ctl .btn.arm { animation: none !important; }
+  .pk-seat.on::after, .pk-seat .think i, .pk-seat .tag i, .pk-seat .tmr.hot, .pk-seat .who span.turn::after, .pk-ctl .btn.arm, .pk-cooltip { animation: none !important; }
 }
 `;
 
@@ -579,7 +596,8 @@ const fmtBB = (v, bb) => `${Math.round((v / bb) * 10) / 10}BB`;
 export default {
   // 对局页用「牌桌 + 右侧聚光框 + 本手记录」版式：牌桌上已经有每个人的名牌、筹码和动作，两侧不再放选手卡
   hud: true,
-  turnTip: '轮到你了：在牌桌右下角的操作台出手。',
+  // 手机竖屏的操作台在牌桌下方，桌面在右下角
+  turnTip: () => (typeof matchMedia === 'function' && matchMedia('(max-width: 700px)').matches ? '轮到你了：在牌桌下方的操作台出手。' : '轮到你了：在牌桌右下角的操作台出手。'),
 
   /** 回放、录制时两步之间额外停多久：和服务端的每手停顿是同一份时长 */
   pauseAfter: (a, b) => pauseBetween(pickView(a), pickView(b)),
@@ -649,7 +667,18 @@ export default {
     const num = el('input', { type: 'number', step: 1, 'aria-label': '加注金额' });
     const presets = el('div', { class: 'pre' });
     const r1 = el('div', { class: 'r1' }, presets, range, num);
-    const ctl = el('div', { class: 'pk-ctl', hidden: '' }, r1, el('div', { class: 'r2' }, foldBtn, callBtn, raiseBtn, allinBtn));
+    const coolTip = el('div', { class: 'pk-cooltip', role: 'status', hidden: '' }, '跟注额刚变，1 秒后可按');
+    const r2 = el('div', { class: 'r2' }, foldBtn, callBtn, raiseBtn, allinBtn, coolTip);
+    r2.style.position = 'relative';
+    const ctl = el('div', { class: 'pk-ctl', hidden: '' }, r1, r2);
+    // 锁着的跟注键：按 C、空格或点它时说明为什么没反应（禁用的按钮收不到点击，听外层）
+    let coolTipTimer = null;
+    const showCool = () => { coolTip.hidden = false; clearTimeout(coolTipTimer); coolTipTimer = setTimeout(() => { coolTip.hidden = true; }, 1200); };
+    r2.addEventListener('pointerdown', (e) => {
+      if (!callBtn.classList.contains('cool')) return;
+      const r = callBtn.getBoundingClientRect();
+      if (e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom) showCool();
+    });
     ctl.addEventListener('click', (e) => e.stopPropagation());
 
     // ---------- 预选操作（还没轮到你时先勾好，轮到时自动出手） ----------
@@ -752,6 +781,7 @@ export default {
       const k = e.key.toLowerCase();
       if (/^[1-5]$/.test(k)) { const b = presets.children[Number(k) - 1]; if (b) { e.preventDefault(); b.click(); } return; }
       const b = KEYS[k];
+      if (b === callBtn && callBtn.classList.contains('cool')) { e.preventDefault(); showCool(); return; }
       if (b && !b.disabled) { e.preventDefault(); b.classList.add('is-active'); setTimeout(() => b.classList.remove('is-active'), 120); b.click(); }
     };
     document.addEventListener('keydown', onKey);
@@ -818,6 +848,7 @@ export default {
         callBtn.classList.add('cool');
         coolTimer = setTimeout(() => {
           callBtn.classList.remove('cool');
+          coolTip.hidden = true;
           if (ctlKey === key) callBtn.disabled = !cur.callId;
         }, 1000);
       }

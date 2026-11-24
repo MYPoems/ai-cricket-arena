@@ -364,8 +364,31 @@ export function tierBadge(t) {
   return h('span', { class: 'tier', 'data-t': t.tier }, t.label || t.tier);
 }
 
+// ---------- 头像 ----------
+// 只有主人自己挑的、真正的 emoji 才画 emoji；系统选手、真人、坏掉的旧头像（'??'）一律换成
+// 「漆面印钮」：朱漆圆面上一圈金线，中间一个名字的首字（像顶栏里「庄」那枚）——不再是千篇一律的表情。
+const PICTO = /\p{Extended_Pictographic}/u;
+const DEFAULT_KINDS = new Set(['human', 'random', 'builtin', 'engine']);
+const DEFAULT_AVATARS = new Set(['🎲', '🤖', '🦾', '🙂', '🐟', '⚫', '♞']); // 服务端给系统选手、真人的默认头像
+const GLYPH = /[\p{Script=Han}\p{L}\p{N}]/u;
+/** 头像该画什么：{ emoji } 或 { ch }（名字首字；内置 AI 取级别字「初」「中」，比一排「内」好认） */
+export function avatarFace(c) {
+  const a = String(c?.avatar ?? '').trim();
+  const isDefault = !!c?.system || DEFAULT_KINDS.has(c?.kind) || DEFAULT_AVATARS.has(a);
+  if (a && !isDefault && PICTO.test(a) && !/[?�]/.test(a)) return { emoji: a };
+  let name = cleanName(c?.name);
+  if (c?.kind === 'builtin' && name.includes('·')) name = name.split('·').at(-1);
+  const m = GLYPH.exec(name);
+  return { ch: m ? m[0].toUpperCase() : '？' };
+}
+/** 圆形头像（.coin）：cls 是尺寸等附加类名，extra 是叠在上面的东西（「亡」字、思考光点） */
+export function coin(c, cls = '', ...extra) {
+  const f = avatarFace(c);
+  return h('span', { class: `coin${cls ? ` ${cls}` : ''}${f.ch ? ' glyph' : ''}`, 'aria-hidden': 'true' }, f.emoji || h('i', { class: 'g' }, f.ch), ...extra);
+}
 export function avatar(c, size = '') {
-  return h('div', { class: `avatar ${size}` }, c?.avatar || '？');
+  const f = avatarFace(c);
+  return h('div', { class: `avatar ${size}${f.ch ? ' glyph' : ''}`, 'aria-hidden': 'true' }, f.emoji || h('i', { class: 'g' }, f.ch));
 }
 
 export function fmtTime(iso) {
@@ -418,6 +441,7 @@ export function resultText(m, seatNames = {}) {
 
 /** 页面标题：书法大字 + 副标题 + 角落水印字，右侧可放按钮 */
 export function pageHead(title, sub = '', wm = '', ...actions) {
+  actions = actions.filter(Boolean);
   return h('div', { class: 'page-head' },
     wm ? h('span', { class: 'wm', 'aria-hidden': 'true' }, wm) : null,
     h('div', { class: 'ph-title' }, h('h1', {}, title), sub ? h('div', { class: 'sub' }, sub) : null),

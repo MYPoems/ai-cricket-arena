@@ -14,9 +14,12 @@
   <link rel="stylesheet" href="/css/ladder.css">
 </head>
 <body>
+  <a class="skip-link" href="#app" id="skipLink">跳到正文</a>
   <div class="route-bar" id="routeBar" aria-hidden="true"></div>
   <header class="top">
     <a class="brand" href="#/"><span class="seal">斗</span><span class="brand-name">电子斗蛐蛐</span></a>
+    <!-- 手机上的对局页：不放整排导航，只留一个「‹ 大厅 · 游戏名」返回 -->
+    <a class="top-back" id="topBack" href="#/" aria-label="返回大厅"><span class="chev" aria-hidden="true">‹</span>大厅<span class="top-back-g" id="topBackGame"></span></a>
     <nav class="nav" id="nav" aria-label="主导航">
       <a href="#/" data-r="lobby">大厅</a>
       <a href="#/rooms" data-r="rooms">组局</a>
