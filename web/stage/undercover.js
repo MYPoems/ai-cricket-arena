@@ -260,6 +260,7 @@ export default {
         votes: counts[s] || 0,
         pick: picks[s] ? s : null,
         pickTitle: picks[s],
+        pickLabel: picks[s] ? `投 ${no(s)} 号` : undefined, // 悬停、选中时浮在座位卡上，再点「确认」才提交
       };
     }
     const title = over ? `对局结束 · ${view.result?.team || ''}胜` : `第 ${view.round} 轮 · ${PHASE[view.phase] || ''}`;
@@ -313,7 +314,7 @@ export default {
         ctrlHead.replaceChildren();
         if (speaking || voting) {
           ctrlHead.append(el('span', { class: 'label' }, '你的行动'), el('b', {}, PHASE[view.phase] || ''));
-          if (voting) ctrlHead.append(el('span', { class: 'hint' }, view.phase === 'revote' ? '点座位卡，在平票者中重投' : '点座位卡投票'));
+          if (voting) ctrlHead.append(el('span', { class: 'hint' }, view.phase === 'revote' ? '在平票者中点一人，再点「确认」' : '点座位卡选人，再点「确认」投票'));
         }
         const key = speaking ? `${view.round}-${view.phase}-${(view.speeches || []).length}` : null;
         if (key && key !== ctx.key) input.value = '';

@@ -49,7 +49,11 @@ export async function api(path, { method = 'GET', body } = {}) {
     body: method !== 'GET' ? JSON.stringify(body || {}) : undefined,
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || `请求失败（${res.status}）`);
+  if (!res.ok) {
+    const err = new Error(data.error || `请求失败（${res.status}）`);
+    err.status = res.status; // 调用方按状态码区分（比如 404：组局已关闭）
+    throw err;
+  }
   return data;
 }
 
@@ -59,8 +63,20 @@ export const patch = (path, body) => api(path, { method: 'PATCH', body });
 const reducedMotion = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 // ---------- 实时事件 ----------
-// 所有订阅共用一个「连接状态」：任何一条断了，顶栏的直播点显示「重连中」，全部恢复后复原。
+// 一个标签页里的所有订阅合用一条 EventSource（/api/events?ch=a,b,c）：浏览器对同一主机最多 6 条连接，
+// 每个订阅各开一条的话，开两三个标签页就占满了，新页面的请求全卡住。
+// 订阅的频道一变（防抖 60ms），开一条新连接；新连接连上后接管它的频道，旧连接没频道可管了再关——换线时不漏事件。
+// 服务端每条连接最多收 10 个频道，超过就分成几条。
+// 「连接状态」：任何一条断了，顶栏的直播点显示「重连中」，全部恢复后复原。
 // 浏览器会自动重连 EventSource；连接被服务端关掉时，这里按 1、2、4…15 秒退避自己重开。
+const MAX_CH = 40;
+const subs = new Set(); // { chans: Set<string>, onEvent }
+const owner = new Map(); // 频道 → 现在由哪条连接投递这个频道的事件（同一事件可能两条连接都收到，只认这一条）
+let conns = [];
+let liveKey = null;
+let syncTimer = null;
+let retryTimer = null;
+let retryDelay = 1000;
 const broken = new Set();
 let connOk = true;
 let unloading = false;
@@ -75,37 +91,94 @@ function markConn(key, ok) {
 }
 export const connectionOk = () => connOk;
 
-/** 订阅实时事件；返回关闭函数 */
-export function listen(channels, onEvent) {
-  const key = {};
-  const url = `/api/events?ch=${encodeURIComponent(channels.join(','))}`;
-  let es = null;
-  let closed = false;
-  let retry = null;
-  let delay = 1000;
-  const open = () => {
-    es = new EventSource(url);
-    es.onopen = () => { delay = 1000; markConn(key, true); };
-    es.onmessage = (e) => {
-      try {
-        onEvent(JSON.parse(e.data));
-      } catch (err) {
-        console.error(err);
-      }
-    };
-    es.onerror = () => {
-      if (closed || unloading) return;
-      markConn(key, false);
-      if (es.readyState === EventSource.CLOSED) {
-        es.close();
-        clearTimeout(retry);
-        retry = setTimeout(() => { if (!closed) open(); }, delay);
-        delay = Math.min(delay * 2, 15000);
-      }
-    };
+/** 一个标签页最多开 2 条：大厅一口气订 20 多盘对局时也只占 2 条连接。
+ *  超出的部分先舍弃对局频道（match:*，大厅缩略图的实时刷新），大厅、组局、管理这些频道一定保留 */
+const MAX_CONNS = 2;
+function wantedChannels() {
+  const all = new Set();
+  for (const s of subs) for (const c of s.chans) all.add(c);
+  const rank = (c) => (c.startsWith('match:') ? 1 : 0);
+  return [...all].sort((a, b) => rank(a) - rank(b) || (a < b ? -1 : a > b ? 1 : 0)).slice(0, MAX_CH * MAX_CONNS);
+}
+
+function dispatch(data) {
+  for (const s of [...subs]) {
+    if (!s.chans.has(data.ch)) continue;
+    try { s.onEvent(data); } catch (err) { console.error(err); }
+  }
+}
+
+function closeConn(c) {
+  c.dead = true;
+  c.es.close();
+  conns = conns.filter((x) => x !== c);
+  markConn(c, true);
+}
+
+/** 关掉不再负责任何频道的连接（还没连上的新连接留着，等它接管） */
+function prune() {
+  for (const c of [...conns]) {
+    const owns = c.chans.some((ch) => owner.get(ch) === c);
+    if (owns) continue;
+    if (c.dead || c.opened || c.key !== liveKey) closeConn(c);
+  }
+}
+
+function openConn(chans, key) {
+  const c = { chans, key, opened: false, dead: false, es: new EventSource(`/api/events?ch=${encodeURIComponent(chans.join(','))}`) };
+  c.es.onopen = () => {
+    if (c.dead) return;
+    c.opened = true;
+    retryDelay = 1000;
+    markConn(c, true);
+    const want = new Set(wantedChannels());
+    for (const ch of chans) if (want.has(ch)) owner.set(ch, c);
+    prune();
   };
-  open();
-  return () => { closed = true; clearTimeout(retry); es?.close(); markConn(key, true); };
+  c.es.onmessage = (e) => {
+    if (c.dead) return;
+    let data;
+    try { data = JSON.parse(e.data); } catch { return; }
+    if (owner.get(data.ch) === c) dispatch(data);
+  };
+  c.es.onerror = () => {
+    if (c.dead || unloading) return;
+    markConn(c, false);
+    // 服务端把连接关了（浏览器不会再自己重连）：退避后整组重开
+    if (c.es.readyState === EventSource.CLOSED) {
+      c.es.close();
+      c.dead = true;
+      clearTimeout(retryTimer);
+      retryTimer = setTimeout(() => sync(true), retryDelay);
+      retryDelay = Math.min(retryDelay * 2, 15000);
+    }
+  };
+  conns.push(c);
+  return c;
+}
+
+function sync(force = false) {
+  clearTimeout(syncTimer);
+  syncTimer = null;
+  const want = wantedChannels();
+  const wantSet = new Set(want);
+  for (const ch of [...owner.keys()]) if (!wantSet.has(ch)) owner.delete(ch);
+  const key = want.join(',');
+  if (force || key !== liveKey) {
+    liveKey = key;
+    for (let i = 0; i < want.length; i += MAX_CH) openConn(want.slice(i, i + MAX_CH), key);
+  }
+  prune();
+}
+
+const scheduleSync = () => { if (!syncTimer) syncTimer = setTimeout(() => sync(), 60); };
+
+/** 订阅实时事件；返回关闭函数。同一标签页的订阅合用一条连接 */
+export function listen(channels, onEvent) {
+  const s = { chans: new Set(channels), onEvent };
+  subs.add(s);
+  scheduleSync();
+  return () => { if (subs.delete(s)) scheduleSync(); };
 }
 
 // ---------- 提示条 ----------
@@ -183,8 +256,22 @@ export function markBusy(btn) {
 export const guard = (fn) => async (...args) => {
   const ev = args[0] instanceof Event ? args[0] : null;
   const field = ev && ev.currentTarget instanceof HTMLInputElement ? ev.currentTarget : null;
+  return runGuarded(fn, args, ev ? busyTarget(ev) : null, field);
+};
+
+/** 先问一句再做：确认框开着时按钮不转圈，点了「确定」才进入忙碌。
+ *  ask 是 confirmDialog 的参数，或返回 true/false（可以是 Promise）的函数——不需要确认时直接返回 true */
+export const guardConfirm = (ask, fn) => async (...args) => {
+  const ev = args[0] instanceof Event ? args[0] : null;
+  const btn = ev ? busyTarget(ev) : null; // 事件派发完 currentTarget 就清空了，先记下按钮
+  const ok = typeof ask === 'function' ? await ask(...args) : await confirmDialog(ask);
+  if (!ok) return undefined;
+  return runGuarded(fn, args, btn, null);
+};
+
+async function runGuarded(fn, args, btn, field) {
   const check = field && (field.type === 'checkbox' || field.type === 'radio') ? field : null;
-  const release = ev ? markBusy(busyTarget(ev)) : () => {};
+  const release = markBusy(btn);
   if (check) { check.disabled = true; check.setAttribute('aria-busy', 'true'); }
   try {
     const r = await fn(...args);
@@ -199,7 +286,28 @@ export const guard = (fn) => async (...args) => {
     release();
     if (check) { check.disabled = false; check.removeAttribute('aria-busy'); }
   }
-};
+}
+
+/** 表单项就地报错：红框（aria-invalid）、字段下方一行说明、焦点移过去；改动后自动清掉 */
+export function markInvalid(input, msg) {
+  clearInvalid(input);
+  const id = `err-${Math.random().toString(36).slice(2, 8)}`;
+  const tip = h('div', { class: 'field-err', id, role: 'alert' }, msg);
+  input.setAttribute('aria-invalid', 'true');
+  input.setAttribute('aria-describedby', id);
+  const host = input.closest('.field') || input.parentElement;
+  host.append(tip);
+  input._errTip = tip;
+  input.addEventListener('input', () => clearInvalid(input), { once: true });
+  input.focus();
+  return false;
+}
+export function clearInvalid(input) {
+  input._errTip?.remove();
+  input._errTip = null;
+  input.removeAttribute('aria-invalid');
+  input.removeAttribute('aria-describedby');
+}
 
 /** 页面标题：setTitle('天梯', '中国象棋') → 「天梯 · 中国象棋 — 电子斗蛐蛐」 */
 export function setTitle(...parts) {
@@ -207,10 +315,25 @@ export function setTitle(...parts) {
   document.title = t ? `${t} — 电子斗蛐蛐` : '电子斗蛐蛐';
 }
 
-/** 空状态：角落水印字 + 一句话 + 一个主操作 */
+/** 选手名字：旧数据里有编码坏掉的名字（含 U+FFFD 或控制字符），显示成「未命名蛐蛐」 */
+const BAD_NAME = /[\uFFFD\u0000-\u001F\u007F-\u009F]/;
+export const cleanName = (name) => (!name || BAD_NAME.test(String(name)) ? '未命名蛐蛐' : String(name));
+
+/** 座位名单压成一句：重复的合并成「×N」，两人局写「A 对 B」，太多时只列前几位。
+ *  summarizeSeats(['我', '内置 AI · 中级', '内置 AI · 中级']) → 「我 + 内置 AI · 中级 ×2」 */
+export function summarizeSeats(names, { max = 3 } = {}) {
+  const list = (names || []).map(cleanName);
+  if (list.length === 2) return `${list[0]} 对 ${list[1]}`;
+  const groups = new Map();
+  for (const n of list) groups.set(n, (groups.get(n) || 0) + 1);
+  const parts = [...groups].map(([n, k]) => (k > 1 ? `${n} ×${k}` : n));
+  return parts.length > max ? `${parts.slice(0, max).join(' + ')} 等 ${list.length} 位` : parts.join(' + ');
+}
+
+/** 空状态：角落水印字 + 一句话 + 一个主操作（wm 传 null 不要水印，比如页头已经有一个了） */
 export function emptyState(text, { wm = '空', action = null, card = true } = {}) {
   return h('div', { class: `empty${card ? ' card' : ''}` },
-    h('span', { class: 'wm', 'aria-hidden': 'true' }, wm),
+    wm ? h('span', { class: 'wm', 'aria-hidden': 'true' }, wm) : null,
     h('p', { class: 'empty-text' }, text),
     action);
 }
@@ -287,7 +410,7 @@ export function resultText(m, seatNames = {}) {
   const winners = seats.filter((s) => seatOutcome(r, s) === 'w');
   if (seats.length && !winners.length) return `平局（${r.reason}）`;
   if (!seats.length && !r.winner) return `和棋（${r.reason}）`;
-  const names = (winners.length ? winners : [r.winner]).map((s) => m.players?.[s]?.name || seatNames[s] || s);
+  const names = (winners.length ? winners : [r.winner]).map((s) => (m.players?.[s] ? cleanName(m.players[s].name) : seatNames[s] || s));
   return `${names.join('、')}胜（${r.reason}）`;
 }
 
@@ -295,7 +418,7 @@ export function resultText(m, seatNames = {}) {
 export function pageHead(title, sub = '', wm = '', ...actions) {
   return h('div', { class: 'page-head' },
     wm ? h('span', { class: 'wm', 'aria-hidden': 'true' }, wm) : null,
-    h('div', {}, h('h1', {}, title), sub ? h('div', { class: 'sub' }, sub) : null),
+    h('div', { class: 'ph-title' }, h('h1', {}, title), sub ? h('div', { class: 'sub' }, sub) : null),
     actions.length ? h('div', { class: 'row' }, actions) : null);
 }
 

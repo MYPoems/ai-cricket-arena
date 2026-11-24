@@ -83,9 +83,9 @@ function setCookie(req, res, value, maxAgeSec) {
   res.setHeader('Set-Cookie', parts.join('; '));
 }
 
-export function createSession(db, userId) {
+export function createSession(db, userId, { minutes = null } = {}) {
   const token = randomBytes(32).toString('base64url');
-  const expires = new Date(Date.now() + SESSION_DAYS * 864e5).toISOString();
+  const expires = new Date(Date.now() + (minutes ? minutes * 6e4 : SESSION_DAYS * 864e5)).toISOString();
   db.insert('sessions', { id: sha(token), user_id: userId, created_at: now(), expires_at: expires });
   return token;
 }

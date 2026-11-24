@@ -61,11 +61,13 @@ async function readJson(req) {
   if (!sameOrigin) throw new HttpError(403, '不接受跨站请求');
   const chunks = [];
   let size = 0;
+  let tooBig = false;
   for await (const c of req) {
     size += c.length;
-    if (size > 1e6) throw new HttpError(413, '请求太大');
+    if (size > 1e6) { tooBig = true; if (size > 9e6) { req.destroy(); break; } continue; }
     chunks.push(c);
   }
+  if (tooBig) throw new HttpError(413, '请求太大');
   if (!chunks.length) return {};
   let body;
   try {

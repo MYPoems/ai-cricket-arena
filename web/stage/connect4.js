@@ -32,7 +32,9 @@ const stops = (...list) => list.map(([o, c, a = 1]) => svg('stop', { offset: o, 
 const CSS = `
 svg.board.connect4 .c4-st { pointer-events: none; transition: opacity .5s, filter .5s; }
 svg.board.connect4 .c4-veil { fill: #120302; opacity: 0; transition: opacity .6s .3s; pointer-events: none; }
-svg.board.connect4.won .c4-veil { opacity: .62; }
+svg.board.connect4.won .c4-veil { opacity: .16; }
+/* 终局：没连上的子退后一步（半透明、去点饱和），不再压成一片黑 */
+svg.board.connect4.won .c4-st:not(.win) { opacity: .55; filter: saturate(.7); }
 svg.board.connect4 .c4-num { font: 600 15px/1 var(--num); fill: #e6c578; fill-opacity: .7; }
 svg.board.connect4 .c4-last { fill: #fff3d8; fill-opacity: .9; stroke: #3a0d06; stroke-opacity: .45; stroke-width: 1; pointer-events: none; }
 svg.board.connect4 .c4-best { fill: none; stroke: #f3d27e; stroke-width: 2.4; stroke-dasharray: 4 4; pointer-events: none; }

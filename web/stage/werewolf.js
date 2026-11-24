@@ -16,13 +16,14 @@ const NIGHT_PHASES = new Set(['wolf', 'seer', 'witch', 'night']);
 const CAUSE = { wolf: '狼刀', poison: '毒杀', vote: '放逐', shot: '枪杀' };
 const NONE_LABEL = { wolf: '空刀', vote: '弃票', revote: '弃票', hunter: '不开枪' };
 const PICK_VERB = { wolf: '提名刀', seer: '查验', vote: '投票放逐', revote: '重投放逐', hunter: '开枪带走' };
-const HINT = { wolf: '点座位卡，提名今晚要刀的人', seer: '点座位卡，查验一人', vote: '点座位卡，投票放逐', revote: '点座位卡，在平票者中重投', hunter: '点座位卡开枪' };
+const PICK_SHORT = { wolf: '刀', seer: '验', vote: '投', revote: '投', hunter: '带走' };
+const HINT = { wolf: '点座位卡选今晚要刀的人，再点「确认」', seer: '点座位卡选一人，再点「确认」查验', vote: '点座位卡选要放逐的人，再点「确认」', revote: '在平票者中点一人，再点「确认」', hunter: '点座位卡选目标，再点「确认」开枪' };
 
 // 布局用的少量样式；面板、凹槽、票型行（.vrow .vb .voters）、行动行（.act）、两栏（.panels）都用设计系统的类
 const CSS = `
 .ww-stage { display: flex; flex-direction: column; gap: 10px; min-height: 0; }
-.ww-body { display: flex; flex-direction: column; gap: 10px; min-height: 0; transition: filter .6s; }
-.ww-stage.night .ww-body { filter: brightness(.8) saturate(.8); }
+.ww-body { display: flex; flex-direction: column; gap: 10px; min-height: 0; transition: opacity .6s; }
+.ww-stage.night .ww-body { opacity: .84; }
 .ww-stage .panels { padding-bottom: 0; }
 .ww-stage .panel > .label { display: flex; align-items: center; gap: 8px; margin-bottom: 2px; }
 .ww-stage .act > span { min-width: 0; }
@@ -354,9 +355,10 @@ export default {
     const counts = seatCounts(view);
     // 玩家本人可选的目标：点座位卡就提交
     const picks = {};
+    // pickLabel：悬停、选中时浮在座位卡上的短句（「刀 5 号」），提交前再点「确认」
     for (const a of movable && Array.isArray(actions) ? actions : []) {
-      if (/^p\d$/.test(a.id)) picks[a.id] = { pick: a.id, pickTitle: `${PICK_VERB[view.phase] || '选'} ${no(a.id)} 号` };
-      else if (/^poison:p\d$/.test(a.id)) { const t = a.id.slice(7); picks[t] = { pick: a.id, pickTitle: `用毒药毒 ${no(t)} 号` }; }
+      if (/^p\d$/.test(a.id)) picks[a.id] = { pick: a.id, pickTitle: `${PICK_VERB[view.phase] || '选'} ${no(a.id)} 号`, pickLabel: `${PICK_SHORT[view.phase] || '选'} ${no(a.id)} 号` };
+      else if (/^poison:p\d$/.test(a.id)) { const t = a.id.slice(7); picks[t] = { pick: a.id, pickTitle: `用毒药毒 ${no(t)} 号`, pickLabel: `毒 ${no(t)} 号` }; }
     }
     // 夜里正在行动的阵营亮着，其余闭眼
     const lit = new Set();
@@ -392,6 +394,7 @@ export default {
         votes: counts[s] || 0,
         pick: picks[s]?.pick || null,
         pickTitle: picks[s]?.pickTitle,
+        pickLabel: picks[s]?.pickLabel,
       };
     }
     const title = over ? `对局结束 · ${view.result?.team || ''}胜` : `第 ${view.day} 天 · ${night ? '夜晚' : '白天'}`;
@@ -453,7 +456,7 @@ export default {
             if (view.tonight && 'kill' in view.tonight) ctrlHead.append(el('span', { class: 'hint' }, k ? `今晚 ${no(k)} 号被刀` : '今晚狼人空刀'));
             const save = acts.find((a) => a.id === 'save');
             if (save) btns.append(el('button', { type: 'button', class: 'btn primary sm', onclick: () => onAction('save') }, save.label));
-            if (acts.some((a) => a.id.startsWith('poison:'))) ctrlHead.append(el('span', { class: 'hint' }, '点座位卡下毒'));
+            if (acts.some((a) => a.id.startsWith('poison:'))) ctrlHead.append(el('span', { class: 'hint' }, '下毒：点座位卡选人，再点「确认」'));
             btns.append(el('button', { type: 'button', class: 'btn sm', onclick: () => onAction('none') }, '不用药'));
           } else if (acts.length) {
             if (acts.some((a) => /^p\d$/.test(a.id)) && HINT[phase]) ctrlHead.append(el('span', { class: 'hint' }, HINT[phase]));

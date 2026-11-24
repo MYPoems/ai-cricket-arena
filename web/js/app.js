@@ -1,6 +1,6 @@
 // 前端入口：登录状态、按地址栏 hash 切换页面。
 
-import { h, api, toast, listen, icon, dialog, setTitle, connectionOk, emptyState } from './ui.js';
+import { h, api, listen, icon, dialog, setTitle, connectionOk, emptyState } from './ui.js';
 import { playView } from './play.js';
 import { lobbyView } from './lobby.js';
 import { matchView } from './match.js';
@@ -39,7 +39,7 @@ const PUBLIC_PAGES = new Set(['login', 'register']);
 // 导航高亮：对局页不属于任何一个栏目
 const NAV_KEY = { lobby: 'lobby', new: 'play', match: '', rooms: 'rooms', room: 'rooms', characters: 'characters', ladder: 'ladder', compare: 'history', history: 'history', settings: 'settings', account: 'settings', admin: 'admin', 'agent-guide': 'characters', login: '', register: '' };
 // 默认页面标题；页面自己知道更具体的名字时（天梯的游戏、选手名字）会再改
-const TITLES = { lobby: '大厅', rooms: '组局', room: '组局', new: '开局', characters: '蛐蛐', ladder: '天梯', history: '对局记录', compare: '同题对比', settings: '设置', account: '我的账号', admin: '审批', login: '登录', register: '申请注册', 'agent-guide': 'Agent 接入说明', match: '对局' };
+const TITLES = { lobby: '大厅', rooms: '组局', room: '组局', new: '开局', characters: '蛐蛐', ladder: '天梯', history: '对局记录', compare: '同题对比', settings: '设置', account: '我的账号', admin: '审批', login: '登录', register: '申请注册', 'agent-guide': 'Agent 接入', match: '对局' };
 // 手机底栏「更多」里收着的栏目
 const MORE_KEYS = new Set(['play', 'history', 'settings', 'admin']);
 
@@ -95,6 +95,8 @@ addEventListener('pagehide', () => saveScroll(location.hash || '#/'));
 
 async function route() {
   const seq = ++routeSeq;
+  clearTimeout(slowTimer);
+  hideSlow();
   currentKey = location.hash || '#/';
   cleanup?.();
   cleanup = null;
@@ -117,6 +119,9 @@ async function route() {
   }
   if (page === 'admin' && session.user?.role !== 'admin') { go('#/'); return; }
   loadingStart();
+  // 8 秒还没加载完：右下角给一个「加载较慢 · 重试」，不让人对着半透明的旧页面干等
+  clearTimeout(slowTimer);
+  slowTimer = setTimeout(() => { if (seq === routeSeq) showSlow(); }, 8000);
   try {
     const characters = loggedIn && ['new', 'match', 'compare', 'room'].includes(page) ? await api('/characters') : [];
     const ctx = { meta, characters, go, reloadMeta, session, reloadSession };
@@ -149,12 +154,27 @@ async function route() {
     pageInTimer = setTimeout(() => app.classList.remove('page-in'), 500);
   } catch (e) {
     if (seq !== routeSeq) return;
-    app.replaceChildren(emptyState(e.message, { wm: '误', action: h('button', { class: 'btn primary', type: 'button', onclick: () => route() }, '重试') }));
-    toast(e.message, true);
+    // 页面本身就显示了原因，不再另弹提示条
+    if (e.status === 404 && page === 'room') {
+      app.replaceChildren(emptyState('这个组局已关闭或不存在。', { wm: '散', action: h('a', { class: 'btn primary', href: '#/rooms' }, '返回组局') }));
+    } else {
+      app.replaceChildren(emptyState(e.message, { wm: '误', action: h('button', { class: 'btn primary', type: 'button', onclick: () => route() }, '重试') }));
+    }
   } finally {
-    if (seq === routeSeq) loadingEnd();
+    if (seq === routeSeq) { loadingEnd(); clearTimeout(slowTimer); hideSlow(); }
   }
 }
+
+// ---------- 加载较慢：超过 8 秒给一个重试 ----------
+let slowTimer = null;
+let slowBox = null;
+function showSlow() {
+  hideSlow();
+  slowBox = h('div', { class: 'slow-note', role: 'status' }, h('span', {}, '加载较慢'),
+    h('button', { class: 'btn sm', type: 'button', onclick: () => { hideSlow(); route(); } }, icon('refresh', 14), '重试'));
+  document.body.append(slowBox);
+}
+function hideSlow() { slowBox?.remove(); slowBox = null; }
 
 // ---------- 顶栏右侧：登录用户 / 登录按钮；庄家的审批角标 ----------
 const userBox = document.getElementById('userBox');
@@ -169,6 +189,8 @@ function paintUser() {
   // 用 style.display 控制显示：.nav a 的 display:flex 会盖过 hidden 属性
   navAdmin.hidden = u?.role !== 'admin';
   navAdmin.style.display = u?.role === 'admin' ? '' : 'none';
+  // 游客：要登录才能用的栏目（开局、设置）不放进导航
+  for (const a of document.querySelectorAll('#nav [data-r="play"], #nav [data-r="settings"]')) a.style.display = u ? '' : 'none';
   for (const b of [pendingBadge, moreBadge]) {
     b.hidden = !session.pending;
     b.style.display = session.pending ? '' : 'none';
@@ -205,11 +227,11 @@ document.getElementById('moreBtn').addEventListener('click', () => {
   const u = session.user;
   const item = (href, ic, label, extra = null) => h('a', { class: 'sheet-item', href }, icon(ic, 20), h('span', {}, label), extra);
   const dlg = dialog('更多', h('nav', { class: 'sheet-list', 'aria-label': '更多栏目' },
-    item('#/new', 'swords', '开局'),
+    u ? item('#/new', 'swords', '开局') : null,
     item('#/history', 'history', '对局记录'),
     u ? item('#/settings', 'settings', '设置') : null,
     u?.role === 'admin' ? item('#/admin', 'shield', '审批', session.pending ? h('span', { class: 'badge' }, session.pending) : null) : null,
-    item('#/agent-guide', 'link', 'Agent 接入说明'),
+    item('#/agent-guide', 'link', 'Agent 接入'),
     u ? item('#/account', 'user', '我的账号') : item('#/login', 'user', '登录'),
     h('button', { class: 'sheet-item', type: 'button', onclick: () => { toggleTheme(); dlg.close(); } }, icon(isDark() ? 'sun' : 'moon', 20), h('span', {}, isDark() ? '换成浅色' : '换成深色'))), [], { className: 'sheet' });
   // 点当前页的链接不会触发换页，也要收起

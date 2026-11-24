@@ -270,4 +270,100 @@ test('段位划分', () => {
   assert.ok(leaderboard(db, 'xiangqi').length >= 2);
 });
 
+test('代答步（game.autoAction）：不问选手，私密步随机停 1.5–5 秒，旁人收到的事件和真的私密行动一样', async () => {
+  const { registerGame, GAMES } = await import('../games/index.js');
+  // 两人的隐藏信息小游戏，按 plan 走 4 步：[座位, 是否代答, 是否私密]
+  const plan = [['b', false, true], ['a', true, true], ['b', true, true], ['a', false, false]];
+  const asked = [];
+  const g = {
+    id: 'autotest', name: '代答测试', players: { min: 2, max: 2, default: 2 }, features: { hidden: true },
+    seats: () => ['a', 'b'], seatName: (s) => `${s} 座`,
+    create: () => ({ step: 0 }),
+    pending: (s) => (s.step < plan.length ? [plan[s.step][0]] : []),
+    autoAction: (s, seat) => (s.step < plan.length && plan[s.step][0] === seat && plan[s.step][1] ? 'skip' : null),
+    actions: (s, seat) => (g.pending(s).includes(seat) ? [{ id: g.autoAction(s, seat) || 'go', label: '行动' }] : []),
+    apply(s, seat, action) {
+      if (!g.pending(s).includes(seat)) throw new Error('现在不是你');
+      if (action !== (g.autoAction(s, seat) || 'go')) throw new Error(`第 ${s.step} 步不能走 ${action}`);
+      return { step: s.step + 1 };
+    },
+    secret: (s) => s.step < plan.length && plan[s.step][2],
+    outcome: (s) => (s.step >= plan.length ? { over: true, winner: 'a', ranks: { a: 1, b: 2 }, reason: '走完了' } : { over: false }),
+    forfeit: (s, seat, reason) => ({ over: true, winner: seat === 'a' ? 'b' : 'a', ranks: seat === 'a' ? { a: 2, b: 1 } : { a: 1, b: 2 }, reason }),
+    label: (s, seat, a) => a,
+    view: (s) => ({ step: s.step }),
+    // 内置 AI：代答步被问到就记下来（不该发生）
+    builtinMove: (s, seat) => { asked.push(s.step); return g.autoAction(s, seat) || 'go'; },
+  };
+  registerGame(g);
+  try {
+    const me = db.get("SELECT * FROM characters WHERE kind = 'human'");
+    const from = events.length;
+    const id = arena.createMatch({ game: 'autotest', seats: { a: me.id, b: builtin.id }, mode: 'casual', options: { delayMs: 0 } });
+    // 真人只应在第 3 步（a 的真行动）被问到；代答步被问到的话会一直卡住
+    const prompted = [];
+    await new Promise((resolve, reject) => {
+      const t0 = Date.now();
+      const iv = setInterval(() => {
+        const rt = arena.live.get(id);
+        if (rt?.humans?.a) {
+          clearInterval(iv);
+          const d = arena.detail(id, null, me.owner_id);
+          prompted.push(d.view.step);
+          arena.humanMove(id, 'go', false, 'a');
+          resolve();
+        } else if (Date.now() - t0 > 20000) { clearInterval(iv); reject(new Error('真人一直没被问到')); }
+      }, 10);
+    });
+    const m = await waitEnd(id);
+    assert.equal(m.status, 'finished', JSON.stringify(m.result));
+    assert.deepEqual(prompted, [3], '真人只在自己的真行动时被问到');
+    assert.deepEqual(asked, [0], '内置 AI 只在自己的真行动时被问到');
+    const full = db.get('SELECT * FROM matches WHERE id = ?', id);
+    assert.deepEqual(full.actions, [{ seat: 'b', action: 'go' }, { seat: 'a', action: 'skip' }, { seat: 'b', action: 'skip' }, { seat: 'a', action: 'go' }]);
+    // 私密的代答步也停了 1.5–5 秒
+    const turns = db.all('SELECT ply, latency_ms FROM turns WHERE match_id = ? ORDER BY ply', id);
+    for (const t of turns.filter((x) => x.ply === 2 || x.ply === 3)) assert.ok(t.latency_ms >= 1450 && t.latency_ms <= 5600, `第 ${t.ply} 步停了 ${t.latency_ms} 毫秒`);
+    // 事件：前三步（真的私密行动、真人座位的代答、AI 座位的代答）收到的完全一样
+    const mine = events.slice(from).filter((e) => e.ch === `match:${id}`);
+    const segs = [];
+    let cur = [];
+    for (const e of mine) {
+      cur.push(JSON.stringify({ ...e, ply: undefined }));
+      if (e.type === 'move') { segs.push(cur); cur = []; }
+    }
+    assert.equal(segs.length, 4);
+    assert.deepEqual(segs[0], [JSON.stringify({ ch: `match:${id}`, type: 'human_turn', seat: null }), JSON.stringify({ ch: `match:${id}`, type: 'move', seat: null, characterId: null, action: null, label: null, analysis: null, view: null, secret: true })]);
+    assert.deepEqual(segs[1], segs[0]);
+    assert.deepEqual(segs[2], segs[0]);
+    assert.ok(segs[3].some((x) => x.includes('"turn_start"')), '公开的真行动照常 turn_start');
+  } finally {
+    delete GAMES.autotest;
+  }
+});
+
+test('狼人杀整局：代答步（死者、没药的女巫、非猎人死者）从不调模型、不问内置 AI', async () => {
+  const { default: ww } = await import('../games/werewolf/index.js');
+  const orig = { builtinMove: ww.builtinMove, turnPrompt: ww.turnPrompt, interlude: ww.interlude };
+  const bad = [];
+  ww.builtinMove = function (s, seat, o) { if (ww.autoAction(s, seat) !== null) bad.push(`builtinMove ${s.phase} ${seat}`); return orig.builtinMove.call(this, s, seat, o); };
+  ww.turnPrompt = function (s, seat, o) { if (ww.autoAction(s, seat) !== null) bad.push(`turnPrompt ${s.phase} ${seat}`); return orig.turnPrompt.call(this, s, seat, o); };
+  ww.interlude = () => 0; // 不等公告动画，测试快一点
+  try {
+    let autoTurns = 0;
+    for (const seed of [3, 11]) {
+      const mk = mock(`狼人代答${seed}`);
+      const seats = { p1: mk.id, p2: builtin.id, p3: builtin.id, p4: builtin.id, p5: builtin.id, p6: builtin.id, p7: builtin.id, p8: builtin.id };
+      const id = arena.createMatch({ game: 'werewolf', seats, mode: 'casual', options: { delayMs: 0, seed } });
+      const m = await waitEnd(id);
+      assert.equal(m.status, 'finished', JSON.stringify(m.result));
+      autoTurns += db.all('SELECT label FROM turns WHERE match_id = ?', id).filter((t) => /跳过|不能开枪/.test(t.label || '')).length;
+    }
+    assert.deepEqual(bad, [], '代答步不该问选手');
+    assert.ok(autoTurns > 0, '应走过代答步');
+  } finally {
+    Object.assign(ww, orig);
+  }
+});
+
 test.after(() => aiPool.close());

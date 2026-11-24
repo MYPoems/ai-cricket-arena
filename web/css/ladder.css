@@ -104,3 +104,30 @@ table.heat td.hit { padding: 0; }
 .heat-btn:focus-visible { outline-offset: -2px; }
 /* 窄屏选手列被钉住时，行链接的铺满层只到这一格：别的格子由行点击接手 */
 .ladder-table tr.click { cursor: pointer; }
+
+/* ---------- 参照组、定级中的「?」、手机上的两行排名 ---------- */
+.ladder-table tr.grp td { padding: 14px 14px 6px; font: 600 12px/1.4 var(--sans); letter-spacing: .14em; color: var(--muted); border-top: 1px solid rgb(201 162 74 / .5); background: rgb(0 0 0 / .1); }
+:root[data-theme="light"] .ladder-table tr.grp td { background: rgb(154 116 32 / .06); }
+.ladder-table td.score.prov b { color: var(--muted); }
+.ladder-table td.score .q { margin-left: 1px; color: var(--warn); font-weight: 600; }
+.ladder-table td.m-meta { display: none; }
+@media (max-width: 760px) {
+  .ladder-table, .ladder-table > tbody { display: block; }
+  .ladder-table tr:has(> th) { display: none; }
+  .ladder-table tr.click { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "who score" "meta meta"; column-gap: 10px; row-gap: 2px; align-items: center; padding: 10px 14px 10px 10px; border-top: 1px solid var(--rule); }
+  .ladder-table tr.click:first-child, .ladder-table tr:has(> th) + tr.click { border-top: 0; }
+  .ladder-table tr.click > td { display: none; padding: 0; border: 0; }
+  .ladder-table tr.click > td.who { display: block; grid-area: who; position: static; min-width: 0; background: none; box-shadow: none; }
+  .ladder-table tr.click:hover td.who { background: none; }
+  .ladder-table tr.click > td.score { display: block; grid-area: score; text-align: right; }
+  .ladder-table tr.click > td.m-meta { display: block; grid-area: meta; padding-left: 36px; font: 400 var(--fs-xs)/1.5 var(--sans); color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ladder-table .m-meta .w { color: var(--good); }
+  .ladder-table .m-meta .l { color: var(--bad); }
+  .ladder-table td.score .unc { display: none; }
+  .ladder-table td.score b { font-size: 18px; }
+  .ladder-table .who-in { min-width: 0; }
+  .ladder-table .who .nm { max-width: none; min-width: 0; flex: 0 1 auto; white-space: nowrap; }
+  .ladder-table .rank-no { width: 28px; flex: none; }
+  .ladder-table tr.grp { display: block; }
+  .ladder-table tr.grp td { display: block; padding: 12px 14px 6px; }
+}

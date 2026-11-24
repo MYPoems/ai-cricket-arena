@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 import { openDb } from './db.js';
 import { initSecrets } from './secrets.js';
-import { Router, handler, Hub } from './http.js';
+import { Router, handler, Hub, HttpError } from './http.js';
 import { AiPool } from './ai-worker.js';
 import { Evaluator } from './evaluator.js';
 import { Arena } from './arena.js';
@@ -69,8 +69,15 @@ ladderRoutes(router, { db }); // 天梯：分数可信度、分阵营、对位�
 roomRoutes(router, { db, hub, arena });
 lobbyRoutes(router, { db, arena, matchmaker });
 agentRoutes(router, { db, arena });
-const recorder = new Recorder({ db, outDir: join(DATA, 'recordings'), baseUrl: `http://127.0.0.1:${PORT}`, sessionToken: () => createSession(db, ADMIN_ID) });
-router.post('/api/matches/:id/record', ({ params, body }) => recorder.start(params.id, { speed: body.speed }));
+const recorder = new Recorder({ db, outDir: join(DATA, 'recordings'), baseUrl: `http://127.0.0.1:${PORT}`, sessionToken: () => createSession(db, ADMIN_ID, { minutes: 90 }) });
+router.post('/api/matches/:id/record', ({ params, body, user }) => {
+  const m = db.get('SELECT seats, created_by FROM matches WHERE id = ?', params.id);
+  if (!m) throw new HttpError(404, '对局不存在');
+  const inMatch = Object.values(m.seats).some((cid) => db.get('SELECT owner_id FROM characters WHERE id = ?', cid)?.owner_id === user.id);
+  if (user.role !== 'admin' && m.created_by !== user.id && !inMatch) throw new HttpError(403, '只有开局的人、参赛者和庄家可以录制这盘');
+  if (db.get("SELECT COUNT(*) AS n FROM recordings WHERE status IN ('queued', 'running')").n >= 3) throw new HttpError(429, '录制排队已满，稍后再试');
+  return recorder.start(params.id, { speed: body.speed });
+});
 router.get('/api/recordings', () => ({ status: recorder.status(), list: recorder.list() }));
 router.get('/api/recordings/:id/file', ({ params, res }) => { recorder.send(params.id, res); });
 

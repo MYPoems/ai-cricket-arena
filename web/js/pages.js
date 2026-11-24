@@ -1,9 +1,18 @@
 // 对局记录（含同题对比、录像）、设置。
 
-import { h, api, post, guard, toast, fmtTime, MODE_NAMES, resultText, pageHead, setTitle, emptyState, linkRow, confirmDialog, icon } from './ui.js';
+import { h, api, post, guard, guardConfirm, toast, fmtTime, MODE_NAMES, resultText, pageHead, setTitle, emptyState, linkRow, icon, pressed, summarizeSeats, cleanName, seatOutcome } from './ui.js';
 
 const REC_STATUS = { queued: '排队中', running: '录制中', done: '已完成', failed: '失败' };
 const ORIGIN = { auto: '天梯匹配', room: '组局', manual: '手动开局' };
+
+const RESULT_KINDS = [['all', '全部结果'], ['running', '进行中'], ['decided', '分出胜负'], ['draw', '和局'], ['aborted', '中止']];
+function resultKind(m) {
+  if (m.status === 'running' || !m.result) return 'running';
+  if (m.result.aborted) return 'aborted';
+  const seats = Object.keys(m.result.ranks || {});
+  const won = seats.length ? seats.some((s) => seatOutcome(m.result, s) === 'w') : !!m.result.winner || !!m.result.winnerTeam;
+  return won ? 'decided' : 'draw';
+}
 
 export async function historyView(root, { session }) {
   const TABS = [['all', '全部对局'], ...(session.user ? [['mine', '我的对局']] : []), ['compare', '同题对比'], ['video', '录像']];
@@ -41,27 +50,54 @@ export async function historyView(root, { session }) {
     tabs.querySelector('[aria-selected="true"]')?.focus();
   });
 
+  // 筛选（游戏 / 模式 / 结果）和分页都在本页做：一次取最近 200 盘，每页 50
+  const PAGE = 50;
+  const filt = { game: 'all', mode: 'all', result: 'all' };
+  let shown = PAGE;
   async function drawMatches(seq) {
     const list = await api(`/matches?limit=200${tab === 'mine' ? '&mine=1' : ''}`);
+    shown = PAGE;
     if (seq !== drawSeq) return;
-    body.replaceChildren(list.length ? h('div', { class: 'card table-wrap' },
-      h('table', { class: 'list cardify hist-table' },
-        h('tr', {}, h('th', {}, '时间'), h('th', {}, '游戏'), h('th', {}, '蛐蛐'), h('th', {}, '来源'), h('th', {}, '模式'), h('th', { class: 'num' }, '步数'), h('th', {}, '结果')),
-        ...list.map((m) => {
-          const names = Object.values(m.players).map((pl) => pl?.name);
-          return linkRow(`#/match/${m.id}`, [
-            h('td', { class: 'c-time muted' }, fmtTime(m.created_at)),
-            h('td', { class: 'c-game' }, h('span', { class: 'chip' }, m.gameName)),
-            h('td', { class: 'c-players' }, names.join(' · ')),
-            h('td', { class: 'c-origin muted' }, ORIGIN[m.origin] || '—'),
-            h('td', { class: 'c-mode' }, MODE_NAMES[m.mode]),
-            h('td', { class: 'c-plies num' }, m.plies),
-            h('td', { class: 'c-result' }, m.status === 'running' ? h('span', { class: 'chip good' }, '进行中') : resultText(m))],
-          { label: `${fmtTime(m.created_at)} ${m.gameName}：${names.join(names.length === 2 ? ' 对 ' : '、')}，${m.status === 'running' ? '进行中' : resultText(m)}` });
-        })))
-      : tab === 'mine'
+    if (!list.length) { body.replaceChildren(tab === 'mine'
         ? emptyState('你还没有下过对局。', { wm: '局', action: h('a', { class: 'btn primary', href: '#/rooms' }, '去组局') })
-        : emptyState('还没有对局。', { wm: '局', action: session.user ? h('a', { class: 'btn primary', href: '#/new' }, '开一局') : null }));
+        : emptyState('还没有对局。', { wm: '局', action: session.user ? h('a', { class: 'btn primary', href: '#/new' }, '开一局') : null })); return; }
+    const games = [...new Map(list.map((m) => [m.game, m.gameName])).entries()];
+    const modes = [...new Set(list.map((m) => m.mode))];
+    const filters = h('div', { class: 'hist-filters' });
+    const tableBox = h('div');
+    const chipRow = (label, key, opts) => h('div', { class: 'pills', role: 'group', 'aria-label': label },
+      ...opts.map(([v, l]) => h('button', { type: 'button', class: `pill${filt[key] === v ? ' on' : ''}`, ...pressed(filt[key] === v), onclick: () => { filt[key] = v; shown = PAGE; paint(); } }, l)));
+    const row = (m) => {
+      const names = Object.values(m.players).map((pl) => pl?.name);
+      const who = summarizeSeats(names);
+      const kind = resultKind(m);
+      const res = kind === 'running' ? h('span', { class: 'chip good' }, '进行中') : kind === 'aborted' ? h('span', { class: 'chip', title: resultText(m) }, '中止') : resultText(m);
+      return linkRow(`#/match/${m.id}`, [
+        h('td', { class: 'c-time muted' }, fmtTime(m.created_at)),
+        h('td', { class: 'c-game' }, h('span', { class: 'chip' }, m.gameName)),
+        h('td', { class: 'c-players', title: names.map(cleanName).join('、') }, who),
+        h('td', { class: 'c-origin muted' }, ORIGIN[m.origin] || '—'),
+        h('td', { class: 'c-mode' }, MODE_NAMES[m.mode]),
+        h('td', { class: 'c-plies num' }, m.plies),
+        h('td', { class: 'c-result' }, res)],
+      { label: `${fmtTime(m.created_at)} ${m.gameName}：${who}，${kind === 'running' ? '进行中' : kind === 'aborted' ? '中止' : resultText(m)}` });
+    };
+    function paint() {
+      filters.replaceChildren(
+        chipRow('按游戏筛选', 'game', [['all', '全部游戏'], ...games]),
+        h('div', { class: 'hist-filter-2' },
+          modes.length > 1 ? chipRow('按模式筛选', 'mode', [['all', '全部模式'], ...modes.map((x) => [x, MODE_NAMES[x] || x])]) : null,
+          chipRow('按结果筛选', 'result', RESULT_KINDS)));
+      const hit = list.filter((m) => (filt.game === 'all' || m.game === filt.game) && (filt.mode === 'all' || m.mode === filt.mode) && (filt.result === 'all' || resultKind(m) === filt.result));
+      tableBox.replaceChildren(hit.length ? h('div', { class: 'card table-wrap' },
+        h('table', { class: 'list cardify hist-table' },
+          h('tr', {}, h('th', {}, '时间'), h('th', {}, '游戏'), h('th', {}, '蛐蛐'), h('th', {}, '来源'), h('th', {}, '模式'), h('th', { class: 'num' }, '步数'), h('th', {}, '结果')),
+          ...hit.slice(0, shown).map(row)))
+        : emptyState('没有符合筛选条件的对局。', { wm: null, action: h('button', { class: 'btn', type: 'button', onclick: () => { Object.assign(filt, { game: 'all', mode: 'all', result: 'all' }); paint(); } }, '清除筛选') }),
+      hit.length > shown ? h('div', { class: 'more-row' }, h('button', { class: 'btn', type: 'button', onclick: () => { shown += PAGE; paint(); } }, `加载更多（还有 ${hit.length - shown} 盘）`)) : null);
+    }
+    paint();
+    body.replaceChildren(filters, tableBox);
   }
 
   async function drawCompare(seq) {
@@ -99,7 +135,7 @@ export async function settingsView(root, { meta, reloadMeta, session, go }) {
   await reloadMeta();
   const m = meta;
   const isAdmin = session.user?.role === 'admin';
-  const keyRows = m.presets.filter((p) => p.needsKey).map((p) => {
+  const keyRow = (p) => {
     const st = m.keys[p.id];
     const input = h('input', { type: 'password', autocomplete: 'off', 'aria-label': `${p.name} API Key`, placeholder: st === 'db' ? '已保存（输入新值可替换）' : st === 'env' ? '已从环境变量读取' : '粘贴 API Key' });
     return h('tr', {},
@@ -113,21 +149,27 @@ export async function settingsView(root, { meta, reloadMeta, session, go }) {
           toast(`${p.name} 密钥已加密保存`);
           settingsView(root, { meta, reloadMeta, session, go });
         }) }, '保存'),
-        st === 'db' ? h('button', { class: 'btn sm ghost', type: 'button', onclick: guard(async () => {
-          if (!await confirmDialog({ title: '删除密钥', body: `删除 ${p.name} 的密钥？用这个平台的蛐蛐之后会连不上，直到你重新填一个。`, okText: '删除', danger: true })) return;
+        st === 'db' ? h('button', { class: 'btn sm ghost', type: 'button', onclick: guardConfirm({ title: '删除密钥', body: `删除 ${p.name} 的密钥？用这个平台的蛐蛐之后会连不上，直到你重新填一个。`, okText: '删除', danger: true }, async () => {
           await post('/keys', { provider: p.id, key: '' });
           settingsView(root, { meta, reloadMeta, session, go });
         }) }, '删除') : null)),
     );
-  });
+  };
+  // 配好的平台排前面；其余收进「其他平台（N）」
+  const needKey = m.presets.filter((p) => p.needsKey);
+  const done = needKey.filter((p) => m.keys[p.id] === 'db' || m.keys[p.id] === 'env');
+  const rest = needKey.filter((p) => !done.includes(p));
+  const keyTable = (ps) => h('div', { class: 'table-wrap' }, h('table', { class: 'list cardify keys-table' }, ...ps.map(keyRow)));
 
   const ev = m.evaluator;
   const engines = ev.engines || {};
   root.replaceChildren(pageHead('设置', isAdmin ? '你的密钥，以及只有庄家能改的全局设置。' : '你的模型平台密钥。蛐蛐对局时用的是它主人的密钥。', '设'),
-    h('div', { class: 'col', style: { maxWidth: '960px' } },
-      h('div', { class: 'card framed col' },
+    h('div', { class: 'settings-grid' },
+      h('div', { class: 'card framed col settings-keys' },
         h('div', {}, h('h2', {}, '我的 API 密钥'), h('div', { class: 'small muted' }, '密钥加密保存在服务器数据库里，只用于你自己的蛐蛐，不会发到浏览器，也不会给别人用。')),
-        h('div', { class: 'table-wrap' }, h('table', { class: 'list cardify keys-table' }, ...keyRows))),
+        done.length ? keyTable(done) : h('div', { class: 'small muted' }, '还没有配置任何平台的密钥。'),
+        rest.length ? h('details', { class: 'more-keys', open: !done.length }, h('summary', {}, `其他平台（${rest.length}）`), keyTable(rest)) : null),
+      h('div', { class: 'col settings-side' },
       h('div', { class: 'card quiet pad row', style: { justifyContent: 'space-between' } },
         h('div', {}, h('h3', {}, '我的账号'), h('div', { class: 'small muted' }, `${session.user.name}（${session.user.username}）${isAdmin ? ' · 庄家' : ''}`)),
         h('a', { class: 'btn', href: '#/account' }, '修改密码、退出登录')),
@@ -144,6 +186,6 @@ export async function settingsView(root, { meta, reloadMeta, session, go }) {
             toast('已重新检测引擎');
             settingsView(root, { meta, reloadMeta, session, go });
           }) }, '重新检测 engines/ 目录'))),
-        h('div', { class: 'small muted' }, '天梯自动匹配的开关和节奏在「天梯」页右侧。注册审批在顶栏「审批」。')) : null,
+        h('div', { class: 'small muted' }, '天梯自动匹配的开关和节奏在「天梯」页右侧。注册审批在顶栏「审批」。')) : null),
     ));
 }

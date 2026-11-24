@@ -1,6 +1,6 @@
 // 开局：选游戏、人数和各座位的选手。
 
-import { h, api, post, guard, avatar, modelLine, MODE_NAMES, listen, pageHead, pressed } from './ui.js';
+import { h, api, post, guard, avatar, modelLine, MODE_NAMES, listen, pageHead, pressed, icon, cleanName, summarizeSeats } from './ui.js';
 
 export async function playView(root, { meta, characters, go, session }) {
   // 排位赛由天梯自动匹配产生；只有庄家能手动开排位（测试用）
@@ -47,20 +47,22 @@ export async function playView(root, { meta, characters, go, session }) {
   const delayLabel = h('span', { class: 'small muted' }, '0.6 秒');
   const delay = h('input', { type: 'range', min: 0, max: 3000, step: 200, value: sel.delayMs, oninput: (e) => { sel.delayMs = Number(e.target.value); delayLabel.textContent = `${(sel.delayMs / 1000).toFixed(1)} 秒`; } });
   const startExtra = h('div', { class: 'col', style: { gap: '8px' } });
+  const summary = h('div', { class: 'start-sum' });
 
   function seatBox(seat) {
     const box = h('div', { class: 'seat-pick', role: 'group', 'aria-label': `${game().seatNames[seat] || seat}的选手` });
     const others = Object.entries(sel.seats).filter(([s]) => s !== seat).map(([, id]) => id);
     box.replaceChildren(...pickable.filter(fits).map((c) => {
       const dis = sel.mode === 'ranked' && (!c.ranked || (!c.system && others.includes(c.id)));
+      const on = sel.seats[seat] === c.id;
       return h('button', {
         type: 'button',
-        class: `pick${sel.seats[seat] === c.id ? ' on' : ''}${dis ? ' dis' : ''}`,
-        ...pressed(sel.seats[seat] === c.id),
+        class: `pick${on ? ' on' : ''}${dis ? ' dis' : ''}`,
+        ...pressed(on),
         'aria-disabled': dis ? 'true' : null,
         title: dis ? (others.includes(c.id) ? '排位赛里同一名选手不能占多个座位' : '本机订阅和自定义接口只能下娱乐赛') : modelLine(c),
         onclick: () => { if (dis) return; sel.seats[seat] = c.id; redraw(); },
-      }, avatar(c, 'sm'), h('span', { class: 't' }, h('span', {}, c.name), h('small', {}, c.kind === 'model' ? c.model : modelLine(c))));
+      }, on ? h('span', { class: 'pick-check' }, icon('check', 16)) : avatar(c, 'sm'), h('span', { class: 't' }, h('span', {}, cleanName(c.name)), h('small', {}, c.kind === 'model' ? c.model : modelLine(c))));
     }));
     return box;
   }
@@ -77,6 +79,12 @@ export async function playView(root, { meta, characters, go, session }) {
     seatsBox.replaceChildren(...seatIds().map((seat, i) => h('div', { class: 'col', style: { gap: '8px' } },
       h('div', { class: 'row', style: { gap: '8px' } }, h('span', { class: 'side-tag seat-lab' }, g.seatNames[seat] || seat)),
       seatBox(seat))));
+    const byId = new Map(pickable.map((c) => [c.id, c]));
+    summary.replaceChildren(...(() => {
+      const names = seatIds().map((s) => byId.get(sel.seats[s])?.name);
+      if (names.some((n) => !n)) return [h('span', { class: 'muted' }, '还有座位没选选手')];
+      return [h('span', { class: 'small muted' }, `${g.name} · ${sel.mode === 'ranked' ? '排位赛' : '娱乐赛'}`), h('b', {}, summarizeSeats(names).replace(' 对 ', ' vs '))];
+    })());
     startExtra.replaceChildren(
       sel.game === 'xiangqi' && sel.mode === 'casual' ? h('label', { class: 'field' }, h('span', {}, '起始局面'), startSel) : null,
       sel.game === 'xiangqi' && sel.mode === 'casual' && sel.start === 'fen' ? fenInput : null,
@@ -94,10 +102,15 @@ export async function playView(root, { meta, characters, go, session }) {
   });
 
   const liveList = h('div', { class: 'live-list' });
+  const LIVE_MAX = 8;
   const drawLive = (list) => {
-    liveList.replaceChildren(...(list.length ? list.map((m) => h('a', { class: 'live-item', href: `#/match/${m.id}` },
-      h('div', { class: 'who' }, h('span', { class: 'chip' }, m.gameName), h('span', {}, Object.values(m.players).map((p) => p?.name).join(' · '))),
-      h('span', { class: 'chip' }, MODE_NAMES[m.mode]), h('span', { class: 'small muted' }, `${m.plies} 步`))) : [h('div', { class: 'muted small' }, '暂时没有进行中的对局')]));
+    liveList.replaceChildren(...(list.length ? list.slice(0, LIVE_MAX).map((m) => {
+      const names = Object.values(m.players).map((p) => p?.name);
+      return h('a', { class: 'live-item', href: `#/match/${m.id}`, title: names.map(cleanName).join('、') },
+        h('div', { class: 'who' }, h('span', { class: 'chip' }, m.gameName), h('span', { class: 'names' }, summarizeSeats(names))),
+        h('span', { class: 'chip' }, MODE_NAMES[m.mode]), h('span', { class: 'small muted' }, m.plies ? `${m.plies} 步` : '等待第一手'));
+    }) : [h('div', { class: 'muted small' }, '暂时没有进行中的对局')]),
+    list.length > LIVE_MAX ? h('a', { class: 'small live-all', href: '#/' }, `全部 ${list.length} 盘 →`) : null);
   };
   drawLive(liveMatches);
 
@@ -114,7 +127,7 @@ export async function playView(root, { meta, characters, go, session }) {
           h('label', { class: 'switch' }, legalSw, '给模型提供合法行动列表'),
           h('label', { class: 'field' }, h('span', {}, h('span', {}, '两步之间的间隔 '), delayLabel), delay)),
       ),
-      h('div', { class: 'row' }, h('button', { class: 'btn primary lg', type: 'button', onclick: start }, '开始对局'), h('a', { href: '#/characters', class: 'small' }, '创建新的 AI 选手')),
+      h('div', { class: 'start-bar' }, summary, h('a', { href: '#/characters', class: 'small start-new' }, '养一只新蛐蛐'), h('button', { class: 'btn primary lg', type: 'button', onclick: start }, '开始对局')),
     ),
     h('div', { class: 'card quiet col setup-side', style: { gap: '12px' } },
       h('div', { class: 'section-title', style: { margin: 0 } }, h('h3', {}, '正在进行')), liveList),

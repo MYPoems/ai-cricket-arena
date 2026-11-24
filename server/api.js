@@ -36,7 +36,7 @@ export function routes(router, { db, hub, arena, matchmaker, compare, evaluator 
 
   router.get('/api/events', ({ req, res, query, user }) => {
     // admin 频道（注册申请）只给庄家
-    const chans = String(query.ch || 'lobby').split(',').filter(Boolean).filter((c) => c !== 'admin' || isAdmin(user)).slice(0, 10);
+    const chans = String(query.ch || 'lobby').split(',').filter(Boolean).filter((c) => c !== 'admin' || isAdmin(user)).slice(0, 40); // 一个标签页的所有订阅合成一条连接（浏览器对同一站点只开 6 条长连接）
     hub.subscribe(req, res, chans);
   });
 
@@ -89,7 +89,7 @@ export function routes(router, { db, hub, arena, matchmaker, compare, evaluator 
     if (query.scope !== 'all') rows = rows.filter((c) => c.system || (user && c.owner_id === user.id));
     else rows = rows.filter((c) => c.kind !== 'human' || (user && c.owner_id === user.id));
     const game = query.game || 'xiangqi';
-    return rows.map((c) => ({ ...publicCharacter(db, c), mine: !!user && c.owner_id === user.id, tier: tierFor(db, c.id, poolKey(game, c.kind)), today: arena.todayUsage(c.id) }));
+    return rows.map((c) => ({ ...publicCharacter(db, c), ...(user && (c.owner_id === user.id || isAdmin(user)) ? {} : { base_url: undefined }), mine: !!user && c.owner_id === user.id, tier: tierFor(db, c.id, poolKey(game, c.kind)), today: arena.todayUsage(c.id) }));
   });
 
   router.post('/api/characters', ({ body, user }) => {
@@ -109,7 +109,10 @@ export function routes(router, { db, hub, arena, matchmaker, compare, evaluator 
   router.get('/api/characters/:id', ({ params, user }) => {
     const c = getCharacter(db, params.id);
     const owner = db.get('SELECT id, name FROM users WHERE id = ?', c.owner_id);
-    return { character: { ...publicCharacter(db, c), mine: !!user && c.owner_id === user.id, owner: c.system ? null : owner }, ...characterProfile(db, arena, c) };
+    const mine = !!user && c.owner_id === user.id;
+    const pub = publicCharacter(db, c);
+    if (!mine && !isAdmin(user)) delete pub.base_url;
+    return { character: { ...pub, mine, owner: c.system ? null : owner }, ...characterProfile(db, arena, c) };
   });
 
   router.patch('/api/characters/:id', ({ params, body, user }) => {
@@ -172,7 +175,7 @@ export function routes(router, { db, hub, arena, matchmaker, compare, evaluator 
 
   // ---------- 对局 ----------
   router.get('/api/matches', ({ query, user }) => {
-    const limit = Math.min(200, Number(query.limit) || 50);
+    const limit = Math.max(1, Math.min(200, Math.floor(Number(query.limit)) || 50));
     const where = [];
     const args = [];
     if (query.status) { where.push('status = ?'); args.push(query.status); }
@@ -195,7 +198,13 @@ export function routes(router, { db, hub, arena, matchmaker, compare, evaluator 
       // 排位赛由自动匹配产生；庄家可以手动开（测试用）
       throw new HttpError(403, '排位赛由天梯自动匹配产生，手动开局只能下娱乐赛');
     }
-    return { id: arena.createMatch({ ...body, origin: 'manual', createdBy: user.id }) };
+    const options = { ...(body.options || {}) };
+    if (!isAdmin(user)) {
+      delete options.seed;
+      delete options.series;
+      try { if (getGame(String(body.game || 'xiangqi')).features?.hidden) delete options.setup; } catch { /* 游戏不存在由 createMatch 报错 */ }
+    }
+    return { id: arena.createMatch({ ...body, options, origin: 'manual', createdBy: user.id }) };
   });
 
   router.get('/api/matches/:id', ({ params, query, user }) => arena.detail(params.id, query.viewer || null, user?.id || null));
@@ -221,7 +230,7 @@ export function routes(router, { db, hub, arena, matchmaker, compare, evaluator 
     const seat = mySeat(params.id, user);
     const player = !!seat;
     const owner = isAdmin(user) || m.created_by === user.id;
-    if (['resign', 'accept_draw'].includes(body.op) ? !player : !(owner || player)) throw new HttpError(403, '你不能控制这盘对局');
+    if (['resign', 'accept_draw'].includes(body.op) ? !player : !owner) throw new HttpError(403, ['resign', 'accept_draw'].includes(body.op) ? '你不在这盘对局里' : '只有开局的人和庄家能暂停或中止这盘');
     return arena.control(params.id, body.op, seat);
   });
 

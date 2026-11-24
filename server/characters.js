@@ -63,11 +63,19 @@ function clean(s, max) {
   return String(s ?? '').trim().slice(0, max);
 }
 
+/** 名字里不能有乱码替换符（U+FFFD，多半是编码错了）和控制字符 */
+const BAD_NAME = /[\uFFFD\u0000-\u001F\u007F-\u009F]/;
+function checkName(name) {
+  if (BAD_NAME.test(name)) throw new HttpError(400, '名字含无法识别的字符');
+  return name;
+}
+
 export function createCharacter(db, ownerId, input, { system = false } = {}) {
   const kind = input.kind || 'model';
   if (!['model', 'agent', 'builtin', 'random', 'engine', 'human'].includes(kind)) throw new HttpError(400, '未知选手类型');
   const name = clean(input.name, 24);
   if (!name) throw new HttpError(400, '请填写选手名字');
+  checkName(name);
   const c = {
     id: newId('ch'),
     owner_id: ownerId,
@@ -122,7 +130,7 @@ export function updateCharacter(db, id, input) {
   const patch = {};
   for (const k of EDITABLE) {
     if (!(k in input)) continue;
-    if (k === 'name') patch.name = clean(input.name, 24) || c.name;
+    if (k === 'name') patch.name = checkName(clean(input.name, 24)) || c.name;
     else if (k === 'avatar') patch.avatar = clean(input.avatar, 8) || c.avatar;
     else if (k === 'daily_limit') patch.daily_limit = Math.max(1, Math.min(MAX_DAILY_LIMIT, Number(input.daily_limit) || c.daily_limit));
     else if (k === 'daily_tokens') patch.daily_tokens = input.daily_tokens ? Math.max(1000, Number(input.daily_tokens)) : null;

@@ -1,13 +1,29 @@
 // 登录、注册（等庄家审批）、我的账号、庄家审批页。
 
-import { h, api, post, guard, toast, fmtTime, pageHead, emptyState, icon } from './ui.js';
+import { h, api, post, guard, toast, fmtTime, pageHead, emptyState, icon, markInvalid } from './ui.js';
+
+/** 手机上不自动聚焦：一进页面就弹键盘，会把表单挤到屏幕外 */
+const autoFocus = (el) => { if (matchMedia('(min-width: 761px)').matches) el.focus(); };
+
+/** 密码框 + 显示/隐藏切换 */
+function passField(input) {
+  const btn = h('button', { class: 'icon-btn pw-eye', type: 'button', 'aria-label': '显示密码', title: '显示密码', 'aria-pressed': 'false' }, icon('eye', 18));
+  btn.addEventListener('click', () => {
+    const show = input.type === 'password';
+    input.type = show ? 'text' : 'password';
+    btn.replaceChildren(icon(show ? 'eye-off' : 'eye', 18));
+    const label = show ? '隐藏密码' : '显示密码';
+    btn.setAttribute('aria-label', label); btn.title = label; btn.setAttribute('aria-pressed', String(show));
+  });
+  return h('span', { class: 'pw-wrap' }, input, btn);
+}
 
 const nextOf = () => decodeURIComponent(new URLSearchParams(location.hash.split('?')[1] || '').get('next') || '#/');
 
 export async function loginView(root, { go, reloadSession, reloadMeta, session }) {
   if (session.user) { go('#/'); return; }
-  const user = h('input', { type: 'text', id: 'login-user', autocomplete: 'username', placeholder: '用户名' });
-  const pass = h('input', { type: 'password', id: 'login-pass', autocomplete: 'current-password', placeholder: '密码' });
+  const user = h('input', { type: 'text', id: 'login-user', autocomplete: 'username', required: true });
+  const pass = h('input', { type: 'password', id: 'login-pass', autocomplete: 'current-password', required: true });
   const submit = guard(async (e) => {
     e?.preventDefault();
     await post('/auth/login', { username: user.value.trim(), password: pass.value });
@@ -23,23 +39,23 @@ export async function loginView(root, { go, reloadSession, reloadMeta, session }
     h('div', { class: 'row', style: { gap: '14px' } }, h('span', { class: 'seal', style: { width: '44px', height: '44px', fontSize: '26px' } }, '斗'), h('h1', {}, '入场')),
     h('div', { class: 'small muted' }, '登录后可以养自己的 AI 蛐蛐、组局、开局。'),
     h('label', { class: 'field' }, h('span', {}, '用户名'), user),
-    h('label', { class: 'field' }, h('span', {}, '密码'), pass),
+    h('label', { class: 'field' }, h('span', {}, '密码'), passField(pass)),
     h('button', { class: 'btn primary lg', type: 'submit' }, '登录'),
     h('div', { class: 'switcher' }, '还没有账号？', h('a', { href: '#/register' }, '申请注册')),
     session.publicView ? h('div', { class: 'switcher' }, h('a', { href: '#/' }, '先随便看看（游客观战）')) : null)));
-  user.focus();
+  autoFocus(user);
 }
 
 export async function registerView(root, { go, session }) {
   if (session.user) { go('#/'); return; }
   const user = h('input', { type: 'text', id: 'reg-user', autocomplete: 'username', placeholder: '2–20 个字：中文、字母、数字、下划线', maxlength: 20 });
   const pass = h('input', { type: 'password', id: 'reg-pass', autocomplete: 'new-password', placeholder: '至少 8 位' });
-  const pass2 = h('input', { type: 'password', id: 'reg-pass2', autocomplete: 'new-password', placeholder: '再输一次' });
+  const pass2 = h('input', { type: 'password', id: 'reg-pass2', autocomplete: 'new-password' });
   const note = h('textarea', { id: 'reg-note', maxlength: 200, placeholder: '选填：告诉庄家你是谁、想用哪些模型来斗（最多 200 字）' });
   const card = h('form', { class: 'card framed auth-card' });
   card.addEventListener('submit', guard(async (e) => {
     e.preventDefault();
-    if (pass.value !== pass2.value) throw new Error('两次输入的密码不一样');
+    if (pass.value !== pass2.value) { markInvalid(pass2, '两次输入的密码不一样'); return; }
     await post('/auth/register', { username: user.value.trim(), password: pass.value, note: note.value.trim() });
     card.replaceChildren(h('span', { class: 'wm', 'aria-hidden': 'true' }, '候'), h('h1', {}, '已提交'),
       h('div', { class: 'ok' }, `申请已经交给庄家。审批通过后，用「${user.value.trim()}」和刚才的密码登录即可。`),
@@ -55,27 +71,33 @@ export async function registerView(root, { go, session }) {
     h('button', { class: 'btn primary lg', type: 'submit' }, '提交申请'),
     h('div', { class: 'switcher' }, '已经有账号？', h('a', { href: '#/login' }, '登录')));
   root.replaceChildren(h('div', { class: 'auth' }, card));
-  user.focus();
+  autoFocus(user);
 }
 
 export async function accountView(root, { session }) {
   const u = session.user;
-  const old = h('input', { type: 'password', id: 'pw-old', autocomplete: 'current-password' });
-  const pw = h('input', { type: 'password', id: 'pw-new', autocomplete: 'new-password', placeholder: '至少 8 位' });
-  root.replaceChildren(pageHead('我的账号', `${u.name}（${u.username}）${u.role === 'admin' ? ' · 庄家' : ''}`, '我'),
-    h('div', { class: 'col', style: { maxWidth: '560px' } },
+  const old = h('input', { type: 'password', id: 'pw-old', autocomplete: 'current-password', required: true });
+  const pw = h('input', { type: 'password', id: 'pw-new', autocomplete: 'new-password', minlength: 8, required: true, placeholder: '至少 8 位' });
+  const pw2 = h('input', { type: 'password', id: 'pw-new2', autocomplete: 'new-password', required: true });
+  const d = u.created_at ? new Date(u.created_at) : null;
+  const since = d ? `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日` : '—';
+  root.replaceChildren(pageHead('我的账号', `${u.role === 'admin' ? '管理员（庄家）' : '玩家'} · 注册于 ${since}`, '我'),
+    h('div', { class: 'account-grid' },
       h('form', { class: 'card framed col', onsubmit: guard(async (e) => {
         e.preventDefault();
+        if (pw.value.length < 8) { markInvalid(pw, '新密码至少 8 位'); return; }
+        if (pw.value !== pw2.value) { markInvalid(pw2, '两次输入的新密码不一样'); return; }
         await post('/auth/password', { old: old.value, password: pw.value });
-        old.value = ''; pw.value = '';
+        old.value = ''; pw.value = ''; pw2.value = '';
         toast('密码已修改，其他设备上的登录已退出');
       }) },
         h('h2', {}, '修改密码'),
-        h('label', { class: 'field' }, h('span', {}, '原密码'), old),
-        h('label', { class: 'field' }, h('span', {}, '新密码'), pw),
+        h('label', { class: 'field' }, h('span', {}, '原密码'), passField(old)),
+        h('label', { class: 'field' }, h('span', {}, '新密码'), passField(pw)),
+        h('label', { class: 'field' }, h('span', {}, '确认新密码'), passField(pw2)),
         h('div', {}, h('button', { class: 'btn primary', type: 'submit' }, '保存新密码'))),
-      h('div', { class: 'card pad row', style: { justifyContent: 'space-between' } },
-        h('div', { class: 'small muted' }, `注册于 ${fmtTime(u.created_at)}`),
+      h('div', { class: 'card pad row', style: { justifyContent: 'space-between', alignSelf: 'start' } },
+        h('div', {}, h('div', { class: 'label' }, '当前登录'), h('b', {}, `${u.name}（${u.username}）`)),
         h('button', { class: 'btn', type: 'button', onclick: guard(async () => {
           await post('/auth/logout'); location.hash = '#/'; location.reload();
         }) }, icon('logout', 16), '退出登录'))));

@@ -322,11 +322,14 @@ export class Arena {
       const jobs = pend.map((seat, i) => {
         const ch = getCharacter(this.db, m.seats[seat]);
         const ply = base + i + 1;
+        // 代答步（游戏说这一步不需要真的问该座位，例如狼人杀里已出局的狼）：不问选手，见 #getMove
+        const auto = game.autoAction?.(state, seat) ?? null;
         rt.partials[seat] = { ply, seat, characterId: ch.id, text: '', reasoning: '', attempts: [], secret: isSecret(game, state, seat, null, humans), at: Date.now() };
         if (!rt.partials[seat].secret) this.hub.emit(channel, { type: 'turn_start', ply, seat, characterId: ch.id, kind: ch.kind, simultaneous: pend.length > 1 });
+        else if (ch.kind !== 'human' || auto !== null) this.hub.emit(channel, { type: 'human_turn', seat: null }); // 真人的由 #humanMove 发；代答步不进 #humanMove，这里照样发一条
         const offer = game.features?.draw ? pendingOfferTo(m, seat) : null;
         const t0 = Date.now();
-        return this.#getMove({ m, rt, game, state, seat, ch, channel, offer, ply })
+        return this.#getMove({ m, rt, game, state, seat, ch, channel, offer, ply, auto })
           .then((res) => ({ seat, ch, ply, offer, res, latency: Date.now() - t0 }));
       });
       const results = await Promise.all(jobs);
@@ -413,7 +416,14 @@ export class Arena {
   // ---------- 各类玩家 ----------
 
   async #getMove(ctx) {
-    const { ch, game, state, seat, offer } = ctx;
+    const { ch, game, state, seat, offer, rt, auto } = ctx;
+    // 代答步：不调模型、不提示真人，直接交代答行动。私密步要像真的一样停一会儿（1.5–5 秒随机），
+    // 旁人收到的事件和真的私密行动一样（human_turn 占位 + 私密 move），从时间上也分不出来
+    if (auto !== null && auto !== undefined) {
+      if (rt.partials[seat]?.secret) await sleep(AUTO_DELAY_MS[0] + Math.random() * (AUTO_DELAY_MS[1] - AUTO_DELAY_MS[0]), rt);
+      if (rt.abort.signal.aborted) throw new Abort();
+      return { action: auto };
+    }
     // 内置 AI 和引擎：自己不占优（期望得分低于 55%）就接受和棋；随机走子不接受
     if (offer && (ch.kind === 'builtin' || ch.kind === 'engine') && game.evalSpec) {
       const spec = game.evalSpec(state);
@@ -448,7 +458,9 @@ export class Arena {
   #humanMove({ m, rt, game, state, seat, offer }) {
     const secret = !!rt.partials[seat]?.secret;
     return new Promise((resolve, reject) => {
-      rt.humans[seat] = {
+      const onAbort = () => { clearTimeout(timer); reject(new Abort()); };
+      const done = (v) => { clearTimeout(timer); rt.abort.signal.removeEventListener('abort', onAbort); delete rt.humans[seat]; resolve(v); };
+      const handle = {
         at: Date.now(),
         seat, offer: !!offer,
         resolve: (action, offerDraw = false) => {
@@ -457,20 +469,36 @@ export class Arena {
             // 自由文本，或不在代表性列表里的行动（例如德州的任意加注额）：交给游戏规则校验
             try { game.apply(state, seat, action); } catch (e) { throw new HttpError(400, e.message); }
           }
-          delete rt.humans[seat];
-          resolve({ action, offerDraw });
+          done({ action, offerDraw });
         },
         acceptDraw: () => {
           if (!offer) throw new HttpError(409, '对方没有提出和棋');
-          delete rt.humans[seat];
-          resolve({ acceptDraw: true });
+          done({ acceptDraw: true });
         },
-        resign: () => { delete rt.humans[seat]; resolve({ forfeit: `${game.seatName(seat)}认输` }); },
+        resign: () => done({ forfeit: `${game.seatName(seat)}认输` }),
       };
+      rt.humans[seat] = handle;
+      // 限时：挂机不能卡住整局（成熟平台都有回合计时和托管）
+      const limit = Math.max(30, Number(m.options.humanTimeout) || HUMAN_TIMEOUT_S) * 1000;
+      const timer = setTimeout(() => {
+        if (rt.humans[seat] !== handle) return;
+        const acts = (() => { try { return game.actions(state, seat) || []; } catch { return []; } })();
+        const safe = ['check', '不出', 'none', 'fold', 'pass'].find((id) => acts.some((a) => a.id === id));
+        done(safe ? { action: safe, timeout: true } : { forfeit: `${game.seatName(seat)}超时` });
+      }, limit);
       // 私密行动（夜里）不说是谁：各位玩家收到后刷新详情，只有轮到的那位能拿到自己的行动
       this.hub.emit(`match:${m.id}`, { type: 'human_turn', seat: secret ? null : seat });
-      rt.abort.signal.addEventListener('abort', () => reject(new Abort()), { once: true });
+      rt.abort.signal.addEventListener('abort', onAbort, { once: true });
     });
+  }
+
+  /**
+   * 无效行动的事件：理由里可能带着私密信息（谁是卧底「发言里不能出现你的词『奶酪』」、斗地主压不过的那手牌就是它手里的牌），
+   * 所以有真人的隐藏信息对局里只告诉大家「第几次无效」，理由和原话等对局结束后从记录里看
+   */
+  #illegalEvent(m, game, e) {
+    if (game.features?.hidden && this.humanSeats(m).length) return { type: 'illegal', ply: e.ply, seat: e.seat, attempt: e.attempt };
+    return { type: 'illegal', ...e };
   }
 
   /** 模型行动：整局保持一段连续的对话（模型能看到自己整局的思考） */
@@ -537,7 +565,7 @@ ${game.noun || '行动'}：${act}`;
         }
         const error = res.timeout || res.text.trim() ? parsed.error : '回答是空的';
         attempts.push({ text: res.text, reasoning: res.reasoning, error, attempted: parsed.attempted });
-        if (!partial.secret) this.hub.emit(channel, { type: 'illegal', ply: partial.ply, seat, attempt, error, attempted: parsed.attempted });
+        if (!partial.secret) this.hub.emit(channel, this.#illegalEvent(m, game, { ply: partial.ply, seat, attempt, error, attempted: parsed.attempted }));
         verdict({ ok: false, error, retries_left: MAX_RETRIES - attempt });
         if (attempt === MAX_RETRIES) {
           return { forfeit: `${game.seatName(seat)}连续 ${MAX_RETRIES + 1} 次给出无效${game.noun || '行动'}，判负`, text: res.text, reasoning: res.reasoning, attempts, usage, model: served };
@@ -567,7 +595,7 @@ ${game.noun || '行动'}：${act}`;
       }
       const error = res.text.trim() ? parsed.error : '只有思考、没有给出回答（可能用完了输出长度上限）';
       attempts.push({ text: res.text, reasoning: res.reasoning, error, attempted: parsed.attempted });
-      if (!partial.secret) this.hub.emit(channel, { type: 'illegal', ply: partial.ply, seat, attempt, error, attempted: parsed.attempted });
+      if (!partial.secret) this.hub.emit(channel, this.#illegalEvent(m, game, { ply: partial.ply, seat, attempt, error, attempted: parsed.attempted }));
       if (attempt === MAX_RETRIES) {
         return { forfeit: `${game.seatName(seat)}连续 ${MAX_RETRIES + 1} 次给出无效${game.noun || '行动'}，判负`, text: res.text, reasoning: res.reasoning, attempts, usage, model: served };
       }
@@ -816,7 +844,14 @@ ${game.noun || '行动'}：${act}`;
 
 function sleep(ms, rt) {
   return new Promise((resolve) => {
-    const t = setTimeout(resolve, ms);
-    rt.abort.signal.addEventListener('abort', () => { clearTimeout(t); resolve(); }, { once: true });
+    const onAbort = () => { clearTimeout(t); resolve(); };
+    const t = setTimeout(() => { rt.abort.signal.removeEventListener('abort', onAbort); resolve(); }, ms);
+    rt.abort.signal.addEventListener('abort', onAbort, { once: true });
   });
 }
+
+/** 私密代答步的随机停顿范围（毫秒） */
+export const AUTO_DELAY_MS = [1500, 5000];
+
+/** 真人每一步的限时（秒）：超时按默认行动（过牌、不出、弃票、弃牌），没有就判超时负 */
+const HUMAN_TIMEOUT_S = 600;

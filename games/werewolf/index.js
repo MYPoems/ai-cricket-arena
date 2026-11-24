@@ -1,5 +1,8 @@
 // 狼人杀（6–9 人，简化的标准局）。实现电子斗蛐蛐的通用游戏接口（见 games/index.js）。
 // 夜晚：狼人同时提名刀人（多数决，平票取座位号小的，可以空刀）→ 预言家查验 → 女巫用药（解药、毒药各一瓶，同一晚只能用一瓶，不能自救）。
+// 夜里的步数固定：每个狼人座位（含已出局的）一步、预言家一步、女巫一步；有人死亡后每名死者一步「猎人检查」（本局有猎人时）。
+// 不该真问的步（死者、没药的女巫、不是猎人或被毒的死者）由 autoAction 给出空行动，框架不问选手、随机停顿后代为提交——
+// 旁人看到的私密步数和种类因此和谁死了、谁是什么身份无关。
 // 白天：公布昨夜死亡（不公布死因）；首夜死者留遗言；猎人被狼杀或被放逐时可以开枪；
 // 存活者按座位顺序发言 → 同时投票放逐（可以弃票）→ 出局者留遗言；平票者再各说一句后重投，再平票无人出局。
 // 胜负：狼人全部出局好人胜；狼人数不少于好人数狼人胜；最多 10 天，到时狼人还在算狼人胜。
@@ -85,6 +88,7 @@ function emptyNight() {
 function startNight(s) {
   s.phase = 'wolf';
   s.wolfVotes = {};
+  s.wolfSkip = [];
   s.night = emptyNight();
   s.queue = [];
   s.votes = {};
@@ -95,6 +99,7 @@ function finish(s, team, reason) {
   s.phase = 'over';
   s.queue = [];
   s.lastQueue = [];
+  s.hunterQueue = [];
   s.shooter = null;
   s.votes = {};
   s.result = { team, reason: `${reason}（狼人：${list(wolvesOf(s))}）` };
@@ -124,18 +129,102 @@ function witchOptions(s) {
   return opts;
 }
 
-/** 夜里狼人之后的步骤：预言家 → 女巫 → 天亮；角色已死或无事可做就跳过 */
+/**
+ * 夜里狼人之后的步骤：预言家 → 女巫 → 天亮。角色已死或无事可做也照样进入这一步（由 autoAction 代为跳过），
+ * 否则旁人能从夜里的步数看出预言家、女巫是否还活着
+ */
 function nextNightStep(s, from) {
-  if (from === 'seer') {
-    const seer = roleSeat(s, 'seer');
-    if (seer && s.alive.includes(seer)) { s.phase = 'seer'; return; }
-    from = 'witch';
-  }
-  if (from === 'witch') {
-    const w = roleSeat(s, 'witch');
-    if (w && s.alive.includes(w) && witchOptions(s).length > 1) { s.phase = 'witch'; s.night.witchSaw = true; return; }
+  if (from === 'seer' && roleSeat(s, 'seer')) { s.phase = 'seer'; return; }
+  const w = roleSeat(s, 'witch');
+  if (w) {
+    s.phase = 'witch';
+    s.night.witchSaw = autoFor(s, w) === null; // 女巫真的被问到时才知道今晚的刀口
+    return;
   }
   dawn(s);
+}
+
+/** 猎人能不能开枪：被狼杀或被放逐的猎人 */
+function canShoot(s, seat) {
+  if (s.roles[seat] !== 'hunter') return false;
+  const d = s.deaths.find((x) => x.seat === seat);
+  return d?.cause === 'wolf' || d?.cause === 'vote';
+}
+
+/** 本局身份里有没有猎人（身份配置是公开的；没有猎人的局不需要「猎人检查」步） */
+const hasHunter = (s) => !!roleSeat(s, 'hunter');
+
+/** 这一步该座位不需要真的被问时的代答行动（已出局的狼人、预言家、女巫；没药可用的女巫；不能开枪的死者）；需要问时为 null */
+function autoFor(s, seat) {
+  switch (s.phase) {
+    case 'wolf': case 'seer': return s.alive.includes(seat) ? null : 'none';
+    case 'witch': return s.alive.includes(seat) && witchOptions(s).length > 1 ? null : 'none';
+    case 'hunter': return canShoot(s, seat) ? null : 'none';
+    default: return null;
+  }
+}
+
+function autoLabel(s, seat) {
+  if (s.phase === 'hunter') return s.roles[seat] === 'hunter' ? '被毒，不能开枪' : '不是猎人，跳过';
+  if (!s.alive.includes(seat)) return '已出局，跳过';
+  return '无药可用，跳过';
+}
+
+/** 执行一步代答：对结果没有任何影响，只是把这一步走完。log 为 false 时不记行动记录（重放旧记录时补的空步） */
+function autoStep(s, seat, log) {
+  const p = s.phase;
+  if (log) s.log.push({ seat, kind: p, label: autoLabel(s, seat), secret: true, auto: true, day: s.day });
+  if (p === 'wolf') {
+    s.wolfSkip = [...(s.wolfSkip || []), seat]; // 死去的狼不算票
+    if (!pendingOf(s).length) resolveWolves(s);
+  } else if (p === 'seer') nextNightStep(s, 'witch');
+  else if (p === 'witch') dawn(s);
+  else if (p === 'hunter') { s.shooter = null; advance(s); }
+}
+
+/** 传进来的是不是轮到的这一步的代答行动 */
+const isAutoMove = (s, p0, seat, action, a) => p0 === seat && String(action ?? '').trim() === a;
+
+/**
+ * 兼容旧记录：以前的规则会直接跳过这些空步，旧对局的行动列表里没有它们。
+ * 轮到的是代答步、而传进来的不是这一步的代答行动时，先默默补上这些空步（不记行动记录，结果和旧规则一致）
+ */
+function catchUp(s, seat, action) {
+  for (let k = 0; k < 64; k++) {
+    const p = pendingOf(s);
+    if (p.length !== 1) return s;
+    const a = autoFor(s, p[0]);
+    if (a === null || isAutoMove(s, p[0], seat, action, a)) return s;
+    autoStep(s, p[0], false);
+  }
+  return s;
+}
+
+/**
+ * 接下来只剩代答步、而且走完它们对局就结束时，当场走完（不记行动记录）：结束后一切公开，没有要藏的；
+ * 旧记录在这种地方本来就结束了（例如狼刀完、预言家女巫都已出局，直接天亮分出胜负），新旧记录因此一致
+ */
+function endIfOnlyAuto(s) {
+  if (s.phase === 'over') return s;
+  const p = pendingOf(s);
+  if (p.length !== 1 || autoFor(s, p[0]) === null) return s;
+  const t = structuredClone(s);
+  for (let k = 0; k < 64 && t.phase !== 'over'; k++) {
+    const q = pendingOf(t);
+    if (q.length !== 1 || autoFor(t, q[0]) === null) return s;
+    autoStep(t, q[0], false);
+  }
+  return t.phase === 'over' ? t : s;
+}
+
+/** 只读用：需要补空步时返回补好的副本，否则原样返回。action 为空（问的是轮到的这一步本身，例如框架开始等行动时）不补 */
+function settled(state, seat, action) {
+  if (state.phase === 'over' || action === null || action === undefined) return state;
+  const p = pendingOf(state);
+  if (p.length !== 1) return state;
+  const a = autoFor(state, p[0]);
+  if (a === null || isAutoMove(state, p[0], seat, action, a)) return state;
+  return catchUp(structuredClone(state), seat, action);
 }
 
 /** 狼人提名计票：多数决，平票取座位号小的，空刀排在所有座位之后 */
@@ -158,11 +247,13 @@ function dawn(s) {
   for (const d of dead) die(s, d.seat, 'night', d.cause);
   s.dawn = { day: s.day, dead: dead.map((d) => d.seat) };
   s.wolfVotes = {};
+  s.wolfSkip = [];
   s.night = emptyNight();
   if (dead.length && checkWin(s)) return;
   s.lastQueue = s.day === 1 ? dead.map((d) => d.seat) : [];
-  const hunter = dead.find((d) => d.cause === 'wolf' && s.roles[d.seat] === 'hunter');
-  s.shooter = hunter ? hunter.seat : null;
+  // 每名死者都有一步「猎人检查」：真猎人（被刀）决定开不开枪，其他人代答跳过——旁人分不出谁是猎人
+  s.hunterQueue = hasHunter(s) ? dead.map((d) => d.seat) : [];
+  s.shooter = null;
   s.after = 'day';
   advance(s);
 }
@@ -171,6 +262,7 @@ function dawn(s) {
 function advance(s) {
   if (s.result) return;
   if (s.lastQueue.length) { s.phase = 'lastword'; return; }
+  if (!s.shooter && s.hunterQueue?.length) s.shooter = s.hunterQueue.shift();
   if (s.shooter) { s.phase = 'hunter'; return; }
   if (s.after === 'day') {
     s.phase = 'speak';
@@ -207,7 +299,8 @@ function targets(s, seat) {
 
 function pendingOf(s) {
   switch (s.phase) {
-    case 'wolf': return aliveWolves(s).filter((x) => !(x in s.wolfVotes)).slice(0, 1); // 狼人逐个提名，后面的能看到队友的提名
+    // 狼人逐个提名，后面的能看到队友的提名；已出局的狼也占一步（代答跳过），夜里的步数才不会暴露狼死了几只
+    case 'wolf': return wolvesOf(s).filter((x) => !(x in s.wolfVotes) && !(s.wolfSkip || []).includes(x)).slice(0, 1);
     case 'seer': return [roleSeat(s, 'seer')];
     case 'witch': return [roleSeat(s, 'witch')];
     case 'speak': case 'tiespeak': return s.queue.length ? [s.queue[0]] : [];
@@ -227,6 +320,7 @@ function resolveVotes(s) {
   s.votes = {};
   s.after = 'night';
   s.lastQueue = [];
+  s.hunterQueue = [];
   s.shooter = null;
   const max = Math.max(0, ...Object.values(counts));
   const top = max ? s.seats.filter((x) => counts[x] === max) : [];
@@ -237,7 +331,7 @@ function resolveVotes(s) {
     die(s, out, 'day', 'vote');
     if (checkWin(s)) return;
     s.lastQueue = [out];
-    if (s.roles[out] === 'hunter') s.shooter = out;
+    s.hunterQueue = hasHunter(s) ? [out] : [];
     advance(s);
     return;
   }
@@ -486,18 +580,26 @@ const game = {
       n, seats, roles,
       alive: seats.slice(), deaths: [],
       day: 1, phase: 'wolf',
-      wolfVotes: {}, night: emptyNight(), nights: [], checks: [],
+      wolfVotes: {}, wolfSkip: [], night: emptyNight(), nights: [], checks: [],
       potions: { save: true, poison: true },
       dawn: null, speeches: [], queue: [], votes: {}, voteLog: [], tied: null,
-      lastQueue: [], shooter: null, after: null, shots: [], log: [], result: null,
+      lastQueue: [], hunterQueue: [], shooter: null, after: null, shots: [], log: [], result: null,
     };
     return state;
   },
 
   pending: pendingOf,
 
+  /** 轮到的这一步不需要真的问该座位时返回代答行动（框架不问选手，停顿一会儿后代为提交），否则 null */
+  autoAction(state, seat) {
+    if (state.phase === 'over' || !pendingOf(state).includes(seat)) return null;
+    return autoFor(state, seat);
+  },
+
   actions(state, seat) {
     if (!pendingOf(state).includes(seat)) return [];
+    const auto = autoFor(state, seat);
+    if (auto !== null) return [{ id: auto, label: autoLabel(state, seat) }];
     const p = state.phase;
     if (p === 'speak' || p === 'tiespeak' || p === 'lastword') return null;
     if (p === 'witch') {
@@ -511,10 +613,21 @@ const game = {
   },
 
   apply(state, seat, action) {
-    if (state.phase === 'over') throw new Error('对局已经结束');
+    return endIfOnlyAuto(game.applyStep(state, seat, action));
+  },
+
+  /** apply 的一步（不含「只剩代答步就直接结束」） */
+  applyStep(state0, seat, action) {
+    if (state0.phase === 'over') throw new Error('对局已经结束');
+    const state = settled(state0, seat, action); // 旧记录里没有的空步先补上
     if (!pendingOf(state).includes(seat)) throw new Error(`现在不是${seatName(seat)}行动`);
     const s = structuredClone(state);
     const p = s.phase;
+    if (autoFor(s, seat) !== null) {
+      // 代答步（settled 之后这里传进来的一定是代答行动）：对结果没有影响
+      autoStep(s, seat, true);
+      return s;
+    }
     const secret = game.secret(state, seat, action);
     const logIt = (label) => s.log.push({ seat, kind: p, label, secret, day: state.day });
 
@@ -568,7 +681,8 @@ const game = {
   },
 
   /** 这一步行动是否只有本人（狼人行动时还有狼队友）和上帝视角能看到；供框架在有玩家本人时隐藏 */
-  secret(state, seat, action) {
+  secret(state0, seat, action) {
+    const state = settled(state0, seat, action);
     if (NIGHT.has(state.phase)) return true;
     // 猎人阶段：还不知道开不开枪时（action 为空，例如轮到他行动时）先隐藏；不开枪的话这一步一直不公开
     if (state.phase === 'hunter') return action === null || action === undefined || normalize(state, action) === 'none';
@@ -587,7 +701,9 @@ const game = {
     return result(state, win, `${reason}（${seatName(seat)}是${ROLE_NAMES[state.roles[seat]]}，${win === 'wolf' ? '狼人' : '好人'}胜；狼人：${list(wolvesOf(state))}）`);
   },
 
-  label(state, seat, action) {
+  label(state0, seat, action) {
+    const state = settled(state0, seat, action);
+    if (pendingOf(state).includes(seat) && autoFor(state, seat) !== null) return autoLabel(state, seat);
     const p = state.phase;
     if (p === 'speak' || p === 'tiespeak' || p === 'lastword') return cleanSpeech(action);
     const a = normalize(state, action);
@@ -702,6 +818,8 @@ const game = {
     const p = state.phase;
     const fail = (error, attempted = null) => ({ action: null, attempted, winrate, error });
     if (!KEYS[p] || !pendingOf(state).includes(seat)) return fail('现在不需要你行动');
+    const auto = autoFor(state, seat);
+    if (auto !== null) return { action: auto, attempted: autoLabel(state, seat), winrate, error: null };
     const m = [...t.matchAll(new RegExp(`(?:${KEYS[p]})\\s*[:：]([^\\n]*)`, 'g'))].pop();
     if (!m) return fail(`没有找到行动（最后一行应为${EXAMPLE[p]}）`);
     let raw = m[1];
@@ -748,6 +866,8 @@ const game = {
   builtinMove(state, seat) {
     const s = state;
     const p = s.phase;
+    const auto = pendingOf(s).includes(seat) ? autoFor(s, seat) : null;
+    if (auto !== null) return auto;
     if (p === 'speak' || p === 'tiespeak' || p === 'lastword') return builtinSpeech(s, seat);
     if (p === 'wolf') {
       const ts = targets(s, seat);
@@ -798,12 +918,20 @@ const game = {
     const wolfView = myRole === 'wolf';
     const night = NIGHT.has(s.phase);
     const pend = pendingOf(s);
-    // 玩家视角：夜里只有参与者知道现在是谁在行动；猎人决定时其他人看不到
+    // 玩家视角：夜里只有参与者知道现在是谁在行动；猎人决定时其他人看不到。代答步连本人也不提示（不需要他做什么）
+    const autoNow = !over && pend.length === 1 && autoFor(s, pend[0]) !== null;
     let phase = s.phase;
     let pending = pend;
-    if (!god && (night || s.phase === 'hunter') && !pend.includes(viewer) && !(wolfView && s.phase === 'wolf')) {
-      phase = night ? 'night' : 'wait';
+    if (!god && (night || s.phase === 'hunter')) {
+      const mine = pend.includes(viewer) && !autoNow;
+      if (!mine && !(wolfView && s.phase === 'wolf')) {
+        phase = night ? 'night' : 'wait';
+        pending = [];
+      } else if (autoNow) pending = [];
+    } else if (god && autoNow) {
+      // 上帝视角：代答步没人真在行动；非猎人死者的「猎人检查」显示为结算中，免得像是他在决定开枪
       pending = [];
+      if (s.phase === 'hunter') phase = 'wait';
     }
     const roles = {};
     const identity = {};
@@ -820,14 +948,25 @@ const game = {
       const o = { day: n.day };
       if (wolfView) { o.wolfVotes = { ...(n.wolfVotes || {}) }; o.kill = n.kill; }
       if (myRole === 'seer' && n.check) { o.check = n.check; o.checkWolf = n.checkWolf; }
-      if (myRole === 'witch' && (n.witchSaw || (current && s.phase === 'witch'))) { o.kill = n.kill; o.save = n.save; o.poison = n.poison; o.witchSaw = true; }
+      if (myRole === 'witch' && n.witchSaw) { o.kill = n.kill; o.save = n.save; o.poison = n.poison; o.witchSaw = true; }
       return o;
     };
     const tonight = night ? nightInfo({ day: s.day, ...s.night, wolfVotes: s.wolfVotes }, true) : null;
     const lastNight = s.nights.length ? nightInfo(s.nights.at(-1), false) : null;
     // 行动记录：夜间行动只给本人（狼人行动给狼队）；进行中的投票计票前只给本人
     const openVotes = s.phase === 'vote' || s.phase === 'revote' ? Object.keys(s.votes).length : 0;
-    const visible = (e, i) => god || e.seat === viewer || (wolfView && e.kind === 'wolf') || (!e.secret && i < s.log.length - openVotes);
+    const visible = (e, i) => god || e.seat === viewer || (!e.auto && wolfView && e.kind === 'wolf') || (!e.secret && i < s.log.length - openVotes);
+    // 玩家视角的行动记录：别人的夜间行动每夜只留一条「夜晚」（不暴露夜里走了几步）；白天的隐藏步（猎人检查）整条不出现
+    const log = [];
+    const nightShown = new Set();
+    s.log.forEach((e, i) => {
+      if (visible(e, i)) log.push({ seat: e.seat, label: e.label, kind: e.kind, day: e.day });
+      else if (!e.secret) log.push({ seat: e.seat, label: '已投票', kind: 'hidden', day: e.day });
+      else if (NIGHT.has(e.kind) && !nightShown.has(e.day)) {
+        nightShown.add(e.day);
+        log.push({ seat: '', label: '夜晚', kind: 'hidden', day: e.day });
+      }
+    });
     return {
       n: s.n,
       seats: s.seats.slice(),
@@ -858,9 +997,7 @@ const game = {
       votes: god ? { ...s.votes } : viewer && s.votes[viewer] ? { [viewer]: s.votes[viewer] } : {},
       voteLog: s.voteLog.map((v) => ({ ...v, votes: { ...v.votes }, counts: { ...v.counts }, tied: v.tied ? v.tied.slice() : null })),
       shots: s.shots.filter((x) => god || x.target || x.seat === viewer).map((x) => ({ ...x })),
-      // 白天的隐藏步（猎人不开枪）对别人整条不出现；夜间行动留一条「夜间行动」
-      log: s.log.filter((e, i) => visible(e, i) || !e.secret || NIGHT.has(e.kind)).map((e) => ({ e, i: s.log.indexOf(e) })).map(({ e, i }) => (visible(e, i) ? { seat: e.seat, label: e.label, kind: e.kind, day: e.day } : e.secret ? { seat: '', label: NIGHT.has(e.kind) ? '夜间行动' : '（未公开）', kind: 'hidden', day: e.day }
-        : { seat: e.seat, label: '已投票', kind: 'hidden', day: e.day })),
+      log,
       result: s.result ? { team: s.result.team === 'wolf' ? '狼人' : '好人', reason: s.result.reason } : null,
       maxLen: MAX_LEN,
     };

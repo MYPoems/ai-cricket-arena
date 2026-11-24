@@ -37,28 +37,30 @@ const LAYOUTS = {
     plaque: { cx: 40, y: 1.3 },
     left: { plate: [1.6, 1.6], hand: { cx: 15, y: 9.4, cw: 3.3, maxW: 26.5 }, bubble: [20.2, 2.6, 'l'], from: [15, 12], front: { x: 3.4, y: 15.9, al: 'l' } },
     right: { plate: [80 - 1.6 - 17.5, 1.6], hand: { cx: 65, y: 9.4, cw: 3.3, maxW: 26.5 }, bubble: [80 - 20.2, 2.6, 'r'], from: [65, 12], front: { x: 80 - 3.4, y: 15.9, al: 'r' } },
-    bottom: { plate: [1.6, 40.6], hand: { cx: 44.8, y: 38.4, cw: 5.1, maxW: 47.6 }, bubble: [2.2, 35.2, 'l'], from: [44.8, 42], front: { x: 2.4, y: 34.6, al: 'l' } },
-    frontCw: 2.4, frontMaxW: 19,
+    bottom: { plate: [1.6, 40.6], hand: { cx: 44.8, y: 38.4, cw: 5.1, maxW: 47.6 }, bubble: [2.2, 35.2, 'l'], from: [44.8, 42], front: { x: 2.4, y: 34.4, al: 'l', maxW: 17.8 } },
+    frontCw: 3.3, frontMaxW: 19.5,
     // 轮到玩家本人出牌时的手牌：放大、铺宽，整张露出更多，好点
     mine: { cx: 49.6, y: 36.6, cw: 6.2, maxW: 55 }, ctlMine: 31.5,
     lead: { cx: 40, y: 19.2, cw: 4.7, maxW: 44 },
     ctl: { cx: 40, y: 32.6 },
     res: { cx: 40, y: 11.4, w: 34 },
     ban: 22.5,
-    counter: { cx: 40, y: 8.2 },
+    counter: { cx: 40, y: 8.7 },
+    pill: [78.2, 44.6],
   },
   port: {
     w: 50, h: 70, plateW: 23.6,
     plaque: { cx: 25, y: 1 },
     left: { plate: [0.9, 8.2], hand: { cx: 12.7, y: 15.4, cw: 2.75, maxW: 23 }, bubble: [1.4, 21.4, 'l'], from: [12.7, 18], front: { x: 1.4, y: 21.4, al: 'l' } },
     right: { plate: [50 - 0.9 - 23.6, 8.2], hand: { cx: 37.3, y: 15.4, cw: 2.75, maxW: 23 }, bubble: [50 - 1.4, 21.4, 'r'], from: [37.3, 18], front: { x: 50 - 1.4, y: 21.4, al: 'r' } },
-    bottom: { plate: [0.9, 47.4], hand: { cx: 25, y: 56, cw: 5.2, maxW: 48.4 }, bubble: [50 - 1.4, 48.4, 'r'], from: [25, 60], front: { x: 50 - 1.4, y: 48.6, al: 'r' } },
-    frontCw: 2.1, frontMaxW: 21.6,
+    bottom: { plate: [0.9, 47.4], hand: { cx: 25, y: 56, cw: 5.2, maxW: 48.4 }, bubble: [50 - 1.4, 48.4, 'r'], from: [25, 60], front: { x: 50 - 1.4, y: 48.4, al: 'r', maxW: 22.6 } },
+    frontCw: 3.4, frontMaxW: 21.6,
     mine: { cx: 25, y: 54.6, cw: 5.9, maxW: 49 }, ctlMine: 40.4,
     lead: { cx: 25, y: 29.4, cw: 4, maxW: 46 },
     ctl: { cx: 25, y: 41.6 },
     res: { cx: 25, y: 25.2, w: 42 },
     ban: 33,
+    pill: [48.8, 64.8],
   },
 };
 
@@ -105,9 +107,13 @@ const CSS = `
 .ddz-c .ix.br { left: auto; top: auto; right: .32em; bottom: .26em; rotate: 180deg; }
 .ddz-c .pip { position: absolute; left: 50%; top: 52%; translate: -50% -50%; font-size: 2.7em; line-height: 1; }
 .ddz-c .pip.a { font-size: 3.5em; }
-.ddz-c .face { position: absolute; inset: 1.05em .95em; border-radius: .2em; border: .05em solid currentColor; opacity: .9; display: grid; place-items: center;
-  background: linear-gradient(180deg, rgb(201 162 74 / .16), rgb(201 162 74 / .04)); box-shadow: inset 0 0 0 .14em rgb(255 255 255 / .6), inset 0 0 0 .19em rgb(201 162 74 / .45); }
-.ddz-c .face b { font: 400 2.5em/1 var(--brush); }
+/* 人头牌（J/Q/K）：中间一块描金双线框，框顶一枚冠饰（K 王冠、Q 后冠、J 羽帽），中间衬线大字母，下面花色 */
+.ddz-c .face { position: absolute; inset: 1.15em .95em; border-radius: .24em; display: grid; grid-template-rows: 1.05em 1fr 1em; justify-items: center; align-items: center; padding: .22em 0 .2em;
+  background: radial-gradient(90% 60% at 50% 44%, rgb(255 255 255 / .85), transparent 70%), linear-gradient(180deg, rgb(232 196 112 / .3), rgb(201 162 74 / .12));
+  box-shadow: inset 0 0 0 .05em currentColor, inset 0 0 0 .14em #fffaf0, inset 0 0 0 .2em rgb(186 142 52 / .85), 0 .03em .06em rgb(90 60 14 / .25); }
+.ddz-c .face svg { width: 2.1em; height: 1.05em; overflow: visible; }
+.ddz-c .face b { font: 900 2.3em/1 var(--serif); letter-spacing: -.02em; text-shadow: 0 .04em 0 rgb(255 255 255 / .9); }
+.ddz-c .face i { font-style: normal; font-size: 1em; line-height: 1; }
 .ddz-c.jk .ix { font: 400 1.05em/1.02 var(--brush); writing-mode: vertical-rl; letter-spacing: -.05em; }
 .ddz-c.jk .emb { position: absolute; left: 50%; top: 53%; translate: -50% -50%; border-radius: 50%; display: grid; place-items: center;
   font: 400 1.9em/1 var(--brush); width: 1.55em; height: 1.55em; box-shadow: inset 0 0 0 .07em currentColor, inset 0 0 0 .2em rgb(255 255 255 / .8), inset 0 0 0 .26em rgb(201 162 74 / .7);
@@ -155,11 +161,14 @@ const CSS = `
 .ddz-plate.on { --edge-now: var(--edge-hi); box-shadow: var(--hi), 0 0 0 .1em #040100, 0 0 0 .38em rgb(42 11 8 / .9), 0 0 0 .48em rgb(240 205 120 / .75), 0 0 2em .3em rgb(240 205 120 / .38), 0 .55em .8em rgb(0 0 0 / .55); }
 .ddz-plate.win { --edge-now: var(--edge-hi); }
 .ddz-plate .coin { font-size: 1.55em; width: 2.1em; height: 2.1em; flex: none; font-family: var(--num); font-weight: 600; margin-bottom: .2em; }
-.ddz-plate .who { display: grid; gap: .25em; min-width: 0; flex: 1; }
+.ddz-plate .who { display: grid; gap: .25em; min-width: 4em; flex: 1 1 auto; }
 .ddz-plate .who b { font: 900 1.5em/1.15 var(--serif); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ddz-plate .who span { display: flex; align-items: center; gap: .45em; font: 600 1.05em/1 var(--sans); color: var(--muted); white-space: nowrap; }
 .ddz-plate .tag { font: 700 1em/1 var(--sans); padding: .32em .55em; border-radius: .3em; color: var(--muted); background: var(--well-bg); box-shadow: var(--well-sh); }
-.ddz-plate .seal { font-size: 1.05em; width: 2.5em; height: 2.5em; flex: none; writing-mode: vertical-rl; letter-spacing: -.08em; line-height: 1; margin: 0 -.2em 0 .1em; }
+/* 地主印章：铜钱右下角的小角标，不占名字的宽度 */
+.ddz-plate .coin .seal { position: absolute; right: -.42em; bottom: -.3em; width: 1.5em; height: 1.5em; font: 400 .68em/1 var(--brush); z-index: 1; }
+/* 竖版：名字长了折成两行 */
+.ddz.port .ddz-plate .who b { white-space: normal; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-height: 1.08; word-break: break-all; }
 .ddz-plate .cnt { display: grid; justify-items: center; flex: none; min-width: 2.6em; }
 .ddz-plate .cnt b { font: 600 2.5em/1 var(--num); color: var(--text); font-variant-numeric: tabular-nums; }
 .ddz-plate .cnt small { font: 600 .9em/1.2 var(--sans); color: var(--muted); letter-spacing: .1em; }
@@ -232,6 +241,21 @@ const CSS = `
 .ddz-res .row .sc { font: 700 1.75em/1 var(--num); text-align: right; font-variant-numeric: tabular-nums; color: #6a5a4a; }
 .ddz-res .row.win .sc { color: #b4241a; }
 
+/* 结算卡右上角的关闭键；收起后桌角留一枚「结算 ▸」小签，点开再看 */
+.ddz-x { position: absolute; right: .55em; top: .55em; width: 2.1em; height: 2.1em; border: 0; border-radius: 50%; display: grid; place-items: center; cursor: pointer; pointer-events: auto;
+  font: 700 1.05em/1 var(--sans); color: #6a4a2a; background: rgb(120 84 30 / .12); box-shadow: inset 0 0 0 .07em rgb(120 84 30 / .3); transition: background-color .15s, color .15s; }
+.ddz-x:hover, .ddz-x:focus-visible { color: #a3261a; background: rgb(120 84 30 / .22); }
+.ddz-pill { translate: -100% 0; display: flex; align-items: center; padding: .5em .95em .55em; border-radius: 1.2em; border: .12em solid transparent; cursor: pointer; z-index: 7; white-space: nowrap;
+  font: 700 1em/1 var(--sans); letter-spacing: .1em; color: var(--on-gold); background: var(--gold-metal) padding-box, linear-gradient(180deg, #fbe8a6, #8e6824) border-box;
+  box-shadow: var(--gold-key-sh), 0 .3em .6em rgb(0 0 0 / .45); animation: ddz-rise .3s ${EASE} both; }
+.ddz-pill:hover { filter: brightness(1.06); }
+.ddz-pill > span { font-size: 1.2em; }
+.ddz.port .ddz-pill > span { font-size: 1.45em; }
+/* 只能「要不起」时：按钮底边一道进度条走空后自动出手 */
+.ddz-ctl .btn.auto { position: relative; overflow: hidden; }
+.ddz-ctl .btn.auto::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: .22em; background: currentColor; opacity: .6; transform-origin: 0 50%; animation: ddz-auto var(--auto, 1200ms) linear var(--auto-delay, 0ms) both; }
+@keyframes ddz-auto { from { transform: scaleX(1); } to { transform: scaleX(0); } }
+
 /* 春天 / 反春横幅：结算卡之前横着打开一条朱红绸带 */
 .ddz-ban { left: 50%; translate: -50% -50%; z-index: 8; pointer-events: none; display: grid; justify-items: center; gap: .2em; padding: .5em 7em .8em; white-space: nowrap;
   background:
@@ -278,14 +302,14 @@ const CSS = `
 .ddz-plate .tmr.warm { background: linear-gradient(180deg, #ffd9a0, #f09a3c); }
 .ddz-plate .tmr.hot { color: #fff4e0; background: linear-gradient(180deg, #ff8a6a, #c42d1e); animation: tmr-pulse 1s ease-in-out infinite; }
 @keyframes tmr-pulse { 50% { transform: scale(1.12); } }
-/* 记牌器：牌匾下方一条，大王 … 3 */
-.ddz-cnt { translate: -50% 0; display: flex; align-items: stretch; gap: .12em; padding: .25em .35em; border-radius: .7em; white-space: nowrap; pointer-events: auto;
-  background: rgb(10 3 2 / .5); box-shadow: inset 0 .06em .2em rgb(0 0 0 / .6), 0 .06em 0 rgb(255 224 176 / .12); }
-.ddz-cnt small { writing-mode: vertical-rl; font: 600 .72em/1 var(--sans); letter-spacing: .1em; color: rgb(240 205 120 / .7); padding: 0 .2em; align-self: center; }
-.ddz-cnt .c { display: grid; justify-items: center; width: 1.7em; padding: .12em 0 .16em; border-radius: .35em; }
-.ddz-cnt .c i { font: 600 .82em/1.1 var(--num); font-style: normal; color: rgb(242 227 194 / .66); }
-.ddz-cnt .c.j i { font-family: var(--sans); }
-.ddz-cnt .c b { font: 700 1.15em/1.05 var(--num); color: #f2e3c2; }
+/* 记牌器：牌匾下方两排（大王 … 10 / 9 … 3），左边竖写「别家剩」 */
+.ddz-cnt { translate: -50% 0; display: grid; grid-template-columns: auto repeat(8, 2.2em); gap: .14em .1em; padding: .3em .45em .32em .3em; border-radius: .8em; white-space: nowrap; pointer-events: auto;
+  background: rgb(10 3 2 / .58); box-shadow: inset 0 .06em .2em rgb(0 0 0 / .6), 0 .06em 0 rgb(255 224 176 / .12); }
+.ddz-cnt small { grid-row: 1 / 3; writing-mode: vertical-rl; font: 600 .95em/1 var(--sans); letter-spacing: .12em; color: rgb(240 205 120 / .82); padding: 0 .25em; align-self: center; }
+.ddz-cnt .c { display: grid; justify-items: center; padding: .14em 0 .18em; border-radius: .4em; }
+.ddz-cnt .c i { font: 600 1em/1.1 var(--num); font-style: normal; color: rgb(242 227 194 / .78); }
+.ddz-cnt .c.j i { font-family: var(--sans); font-size: .95em; }
+.ddz-cnt .c b { font: 700 1.3em/1.05 var(--num); color: #f2e3c2; }
 .ddz-cnt .c.z { opacity: .28; }
 .ddz-cnt .c.f { background: rgb(240 205 120 / .16); box-shadow: inset 0 0 0 .06em rgb(240 205 120 / .45); }
 .ddz-cnt .c.f b { color: #f6dc94; }
@@ -385,8 +409,21 @@ function cardEl({ n, s }, x, y, fs, cls = '') {
   const face = n === 'J' || n === 'Q' || n === 'K';
   return el('div', { class: `ddz-c${red ? ' r' : ''} ${cls}`, style: st },
     el('div', { class: 'ix' }, el('b', {}, n), el('i', {}, s[0])),
-    face ? el('div', { class: 'face' }, el('b', {}, n)) : el('div', { class: `pip${n === 'A' ? ' a' : ''}` }, s[0]),
+    face ? faceEl(n, s[0]) : el('div', { class: `pip${n === 'A' ? ' a' : ''}` }, s[0]),
     el('div', { class: 'ix br' }, el('b', {}, n), el('i', {}, s[0])));
+}
+
+// 人头牌的冠饰：K 王冠、Q 后冠、J 羽帽（金面，描边用牌的红 / 黑）
+const CROWN = {
+  K: '<path d="M2.5 9.2 1.6 2.6l5 3.4L10 .9l3.4 5.1 5-3.4-.9 6.6z"/><path d="M3 9.2h14" stroke-width="1.3"/><circle cx="1.6" cy="2.4" r="1"/><circle cx="10" cy=".8" r="1"/><circle cx="18.4" cy="2.4" r="1"/>',
+  Q: '<path d="M2.6 9.2C2.6 5.4 5.6 2.7 10 2.7s7.4 2.7 7.4 6.5z"/><path d="M3 9.2h14" stroke-width="1.3"/><path d="M6 6.2 10 4.3l4 1.9" fill="none"/><circle cx="10" cy="1.3" r="1.1"/>',
+  J: '<path d="M2.4 9.2c0-2.8 3-4.9 7.6-4.9s7.6 2.1 7.6 4.9z"/><path d="M3 9.2h14" stroke-width="1.3"/><path d="M12.6 4.6C13.8 1.6 16.6.4 19.2 1.1c-1.3 1.1-2.8 2.4-4.4 4" fill="none"/>',
+};
+function faceEl(r, suit) {
+  const f = el('div', { class: 'face' });
+  f.innerHTML = `<svg viewBox="0 0 20 10" aria-hidden="true" fill="#e6bd5c" stroke="currentColor" stroke-width=".9" stroke-linejoin="round" stroke-linecap="round">${CROWN[r]}</svg>`;
+  f.append(el('b', {}, r), el('i', {}, suit));
+  return f;
 }
 
 /** 牌的几何：n 张牌在 maxW 宽度里摊开，返回每张左上角和旋转角；fan 为 true 时成扇形 */
@@ -488,11 +525,23 @@ function bottomIdx(d, bottom) {
 const JET_SVG = '<svg viewBox="0 0 64 32" aria-hidden="true"><path fill="#f6dc94" stroke="#6a4a14" stroke-width="1.2" stroke-linejoin="round" d="M4 14.2H15L9 6.5H13.5L21 14.2H30L23 2H29.5L42 14.2H54C60 14.2 63 15.2 63 16S60 17.8 54 17.8H42L29.5 30H23L30 17.8H21L13.5 25.5H9L15 17.8H4Z"/><path fill="#c8983c" d="M44 15h12c2 0 3 .5 3 1s-1 1-3 1H44z"/></svg>';
 const ROCKET_SVG = '<svg viewBox="0 0 36 76" aria-hidden="true"><path fill="#fbf3df" stroke="#6a4a14" stroke-width="1.4" d="M18 2C26 10 28 24 27 44H9C8 24 10 10 18 2Z"/><path fill="#d23a26" stroke="#6a4a14" stroke-width="1.4" d="M18 2C22.5 6.5 25 12 26 18H10C11 12 13.5 6.5 18 2Z"/><circle cx="18" cy="27" r="4.2" fill="#3559b5" stroke="#e6bd5c" stroke-width="1.6"/><path fill="#d23a26" stroke="#6a4a14" stroke-width="1.4" d="M9 34L2 50L9 47ZM27 34L34 50L27 47ZM14 44H22L20.5 50H15.5Z"/></svg>';
 const playKey = (seat, t) => (t && t.cards ? `${seat}:${t.cards.join(',')}` : '');
+/**
+ * 画的是不是「正在进行的最新局面」：对局页传 opts.live 时以它为准；
+ * 否则复盘回放（opts.replay）不是；对局页的 opts.clock 只在实时对局里非空；缩略图等不传 clock 的地方按实时算
+ */
+const isLive = (opts) => ('live' in opts ? !!opts.live
+  : opts.replay ? false
+    : opts.clock && typeof opts.clock === 'object' ? Object.keys(opts.clock).length > 0 || !!opts.movable
+      : true);
 
 export default {
   // 对局页用「牌桌 + 右侧聚光框 + 本局记录」版式：牌桌上已有每家的名牌、剩牌和出牌，两侧不再放选手卡
   hud: true,
-  turnTip: '轮到你了：点选手牌，或按住横着划过一串牌连选，再点「出牌」。拿不准就点「提示」，会依次给出能出的牌。',
+  /** 聚光框里「轮到你」下面的一句说明：叫分时讲叫分，出牌时讲怎么选牌 */
+  turnTip(view) {
+    if (view?.phase === 'bid') return '看手牌决定叫几分：叫得越高输赢越大；不想当地主就点「不叫」。';
+    return '轮到你了：点选手牌，或按住横着划过一串牌连选，再点「出牌」。拿不准就点「提示」，会依次给出能出的牌。';
+  },
 
   /** 聚光框头上的一行：地主/农民、剩几张 */
   seatLine(view, seat) {
@@ -549,6 +598,20 @@ export default {
     };
 
     const redraw = () => last && draw(last.view, last.opts);
+    let resHidden = null; // 收起的是哪一张结算卡：收起后桌角留「结算 ▸」小签
+    // Esc 收起结算卡（牌桌在页面上、没有弹窗挡着时）
+    const onEsc = (e) => {
+      if (!root.isConnected) { document.removeEventListener('keydown', onEsc); return; }
+      if (e.key !== 'Escape' || e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return;
+      const x = box.querySelector('.ddz-x');
+      if (!x || !root.getClientRects().length || document.querySelector('dialog[open], [aria-modal="true"]')) return;
+      e.preventDefault();
+      x.click();
+    };
+    document.addEventListener('keydown', onEsc);
+    // 只能「要不起」时自动出手：{ key: 这一步, timer }
+    let autoPass = { key: '', timer: null };
+    const AUTO_PASS_MS = 1200;
     let hintIdx = -1; // 「提示」给到第几个
     let hintKey = '';
 
@@ -711,23 +774,23 @@ export default {
       return out;
     }
 
-    function plate(view, seat, pos, L, { me = null, bottom = false, t0 = null } = {}) {
+    function plate(view, seat, pos, L, { me = null, bottom = false, t0 = null, live = true } = {}) {
       const role = view.roles?.[seat];
       const count = view.counts?.[seat] ?? 0;
-      const turn = view.turn === seat;
+      // 复盘、回放看的是过去的局面：不挂「思考中」、名牌不发亮
+      const turn = live && !view.result && view.turn === seat;
       const won = view.result && (view.result.landlordWins ? role === '地主' : role === '农民');
       const idx = SEATS.indexOf(seat);
       const name = view.seatNames?.[seat] || seat;
       const cnt = el('b', {}, String(count));
       play(cnt, 'ddz-jump', 520, fx.cnt[seat], 0, 'ease-out');
       const warn = view.phase === 'play' && count > 0 && count <= 2;
-      const roleEl = role === '地主' ? el('span', { class: 'seal', title: '地主' }, '地主') : null;
+      const roleEl = role === '地主' ? el('span', { class: 'seal', title: '地主', 'aria-label': '地主' }, '地') : null;
       const bid = view.bids?.filter((b) => b.seat === seat).at(-1);
       const status = role || (view.phase === 'bid' ? (bid ? (bid.bid ? `叫 ${bid.bid} 分` : '不叫') : view.first === seat ? '首叫' : '等待叫分') : '');
       return el('div', { class: `ddz-plate${turn ? ' on' : ''}${won ? ' win' : ''}`, style: `left:${pos.plate[0]}em;top:${pos.plate[1]}em;width:${L.plateW}em` },
-        el('span', { class: 'coin' }, String(idx + 1)),
+        el('span', { class: 'coin' }, String(idx + 1), roleEl),
         el('div', { class: 'who' }, el('b', { title: name }, name), el('span', {}, status)),
-        roleEl,
         el('div', { class: `cnt${warn ? ' warn' : ''}` }, cnt, el('small', {}, '张')),
         warn ? el('div', { class: 'alarm' }, count === 1 ? '报单' : '报双') : null,
         turn && t0 ? thinkTimer(t0) : null,
@@ -785,9 +848,10 @@ export default {
     /** 一行牌的几何：n 张、牌宽 cw、步长 step，在 spot 里按 al 对齐（'l' 左边齐 x、'r' 右边齐 x） */
     function frontSpot(n, f, L) {
       const cw = L.frontCw;
-      const st = n > 1 ? Math.min(cw * 0.7, (L.frontMaxW - cw) / (n - 1)) : 0;
+      const maxW = f.maxW || L.frontMaxW;
+      const st = n > 1 ? Math.min(cw * 0.56, (maxW - cw) / (n - 1)) : 0;
       const total = cw + st * (n - 1);
-      return { cx: f.al === 'l' ? f.x + total / 2 : f.al === 'r' ? f.x - total / 2 : f.x, y: f.y, cw, maxW: L.frontMaxW };
+      return { cx: f.al === 'l' ? f.x + total / 2 : f.al === 'r' ? f.x - total / 2 : f.x, y: f.y, cw, maxW };
     }
 
     /** 记牌器：每个点数还剩几张没出（玩家视角再扣掉自己手里的）；剩 4 张的标金，可能有炸弹 */
@@ -865,6 +929,8 @@ export default {
       const spots = { [leftS]: L.left, [right]: L.right, [me]: L.bottom };
       const canAct = !!viewer && movable === me && Array.isArray(actions) && actions.length > 0;
       const ids = new Set((actions || []).map((a) => a.id));
+      const liveNow = isLive(opts);
+      let autoKeep = false; // 这一帧还是「只能要不起」的那一步
       root.classList.toggle('can-move', canAct);
 
       const kids = [el('div', { class: 'ddz-rail' }), el('div', { class: 'ddz-top' }), el('div', { class: 'ddz-wm' }, '斗')];
@@ -928,7 +994,7 @@ export default {
         const spot = frontSpot(t.cards.length, f, L);
         // 起点：这手牌在桌心时每张的位置（张数相同，几何一致）
         const cg = spread(t.cards.length, c, { step: c.cw * 0.56, fan: false });
-        center.push(playRow(t, spot, { cls: 'front', step: 0.7, fromPts: cg.map((g) => [g.x + c.cw / 2, g.y + c.cw * 0.7]), fromScale: c.cw / spot.cw, dur: 420, t0: fx.front[s]?.t0 }));
+        center.push(playRow(t, spot, { cls: 'front', step: 0.56, fromPts: cg.map((g) => [g.x + c.cw / 2, g.y + c.cw * 0.7]), fromScale: c.cw / spot.cw, dur: 420, t0: fx.front[s]?.t0 }));
       }
 
       // 定地主：三张底牌在桌心翻开，再飞给地主
@@ -951,7 +1017,7 @@ export default {
       for (const s of SEATS) {
         const pos = spots[s];
         // 真人自己出手时用按钮旁的倒计时，名牌上不再挂计时
-        kids.push(plate(view, s, pos, L, { me: canAct ? me : null, bottom: s === me, t0: canAct && s === me ? null : opts.clock?.[s] || null }));
+        kids.push(plate(view, s, pos, L, { me: canAct ? me : null, bottom: s === me, t0: canAct && s === me ? null : opts.clock?.[s] || null, live: liveNow }));
         const mine = s === me && !!view.hands?.[s];
         // 地主坐在下方、手牌看得见：新到的三张抬起一会儿
         const lift = s === me && s === view.landlord && view.hands?.[s] && Array.isArray(view.bottom) && within(fx.flip, FX.handover + FX.lift + 200) ? (d) => bottomIdx(d, view.bottom) : null;
@@ -987,9 +1053,16 @@ export default {
             el('span', {}, r.spring ? '农民一张没出，地主就出完了 · 倍数 ×2' : '地主只出了一手，农民就出完了 · 倍数 ×2'));
           kids.push(play(ban, 'ddz-ban', FX.banner, fx.over, FX.bannerDelay, 'ease-out'));
         }
-        const card = settleCard(view, r, L);
-        play(card, 'ddz-rise', FX.card, fx.over, special && !calm ? FX.bannerDelay + FX.banner : FX.fly, EASE);
-        kids.push(card);
+        const resKey = `${view.plays?.length || 0}|${r.winner || ''}|${r.score ?? ''}`;
+        if (resHidden === resKey) {
+          // 收起了：桌角留一枚小签，点开再看
+          kids.push(el('button', { class: 'ddz-pill', type: 'button', title: '展开结算', style: `left:${L.pill[0]}em;top:${L.pill[1]}em`, onclick: (e) => { e.stopPropagation(); resHidden = null; redraw(); } }, el('span', {}, '结算 ▸')));
+        } else {
+          const card = settleCard(view, r, L);
+          card.append(el('button', { class: 'ddz-x', type: 'button', title: '收起（Esc）', 'aria-label': '收起结算卡', onclick: (e) => { e.stopPropagation(); resHidden = resKey; redraw(); } }, '✕'));
+          play(card, 'ddz-rise', FX.card, fx.over, special && !calm ? FX.bannerDelay + FX.banner : FX.fly, EASE);
+          kids.push(card);
+        }
       }
 
       // 玩家本人的操作
@@ -1017,13 +1090,28 @@ export default {
           const match = list.find((a) => a.id === chosen);
           // 说明：选了什么、能不能出；一张没选时告诉玩家怎么操作
           let tip, tcls;
-          if (!list.length) { tip = '没有压得过的牌'; tcls = 'muted'; }
+          if (!list.length) { tip = canPass ? '没有压得过的牌，自动「要不起」' : '没有压得过的牌'; tcls = 'muted'; }
           else if (!sel.size) { tip = canPass ? '选牌压过上家，或点「提示」' : '该你领出：选牌，或点「提示」'; tcls = 'muted'; }
           else if (match) { tip = match.label; tcls = 'ok'; }
           else { tip = canPass ? '不成牌型，或压不过上家' : '这几张不成牌型'; tcls = 'bad'; }
           kids.push(el('div', { class: `ddz-tip ${tcls}`, style: `left:${L.ctl.cx}em;top:${ctlY - 2.9}em` }, el('span', {}, tip)));
           if (!list.length) {
-            ctl.append(button('要不起', { primary: true, onClick: () => { sel = new Set(); onAction('不出'); } }));
+            const pass = () => { clearTimeout(autoPass.timer); autoPass = { key: stepKey, t0: autoPass.t0, timer: null, done: true }; sel = new Set(); onAction('不出'); };
+            const b = button('要不起', { primary: true, onClick: () => { if (!autoPass.done || autoPass.key !== stepKey) pass(); } });
+            // 只能「要不起」：停 1.2 秒让人看见，再自动出手；这一步变了（轮到别人、复盘）就取消。点按钮立即出手
+            if (canPass) {
+              if (autoPass.key !== stepKey) {
+                clearTimeout(autoPass.timer);
+                autoPass = { key: stepKey, t0: Date.now(), timer: setTimeout(() => { if (autoPass.key === stepKey && !autoPass.done && root.isConnected) pass(); }, AUTO_PASS_MS), done: false };
+              }
+              autoKeep = true;
+              if (!autoPass.done) {
+                b.classList.add('auto');
+                b.style.setProperty('--auto', `${AUTO_PASS_MS}ms`);
+                b.style.setProperty('--auto-delay', `${-Math.min(AUTO_PASS_MS, Date.now() - autoPass.t0)}ms`);
+              }
+            }
+            ctl.append(b);
           } else {
             ctl.append(...[
               canPass ? button('不出', { onClick: () => { sel = new Set(); onAction('不出'); } }) : null,
@@ -1035,6 +1123,8 @@ export default {
         }
         kids.push(ctl);
       }
+      // 不再是「只能要不起」的那一步：取消还没出手的自动要不起
+      if (!autoKeep && autoPass.key) { clearTimeout(autoPass.timer); autoPass = { key: '', timer: null }; }
       box.replaceChildren(...kids);
       if (box.querySelector('.tmr, .ddz-cd')) startTimerTick(root);
     }

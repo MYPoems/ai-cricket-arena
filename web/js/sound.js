@@ -78,7 +78,8 @@ export function sfx(name, { fast = false } = {}) {
 /** 轮到真人：震一下；后台时标题闪烁，切回来就停 */
 let flash = null;
 export function nudgeTurn() {
-  try { navigator.vibrate?.(60); } catch { /* 不支持 */ }
+  // 用户还没和页面交互过时调用 vibrate 会被浏览器拦下并在控制台报错，先看一眼
+  try { if (navigator.userActivation?.hasBeenActive) navigator.vibrate?.(60); } catch { /* 不支持 */ }
   sfx('turn');
   if (!document.hidden || flash) return;
   const title = document.title;

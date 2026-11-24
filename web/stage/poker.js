@@ -33,20 +33,20 @@ const LAYOUTS = {
   land: {
     w: 80, h: 50,
     table: { cx: 40, cy: 23.4, rx: 31.5, ry: 16.5 },
-    ring: { rx: 35.5, ry: 20.4 }, bets: { rx: 21.5, ry: 9.2, off: -16 }, marks: { rx: 24.5, ry: 11.6, off: 15 },
+    ring: { rx: 35.5, ry: 20.4 },
     seat: { w: 15.4, h: 4.9 }, clampX: [8.4, 71.6], clampY: [8.8, 44.4],
     board: { cx: 40, y: 16.2, cw: 5.3, gap: 0.65 },
     pot: { cx: 40, y: 24.1 }, info: [1.4, 1.2], cmp: { cx: 40, y: 27.8, w: 26 }, act: { cx: 40, y: 31.4 }, push: 27.7, badge: 32.1,
-    ctl: { x: 50.6, y: 39.9, w: 29, h: 9.6 },
+    ctl: { x: 50.6, y: 39.9, w: 29, h: 9.6 }, pill: [1.4, 45.4],
   },
   port: {
     w: 50, h: 70,
     table: { cx: 25, cy: 30.5, rx: 19.5, ry: 25 },
-    ring: { rx: 21, ry: 25.2 }, bets: { rx: 12.5, ry: 16.8, off: -14 }, marks: { rx: 13.6, ry: 18.6, off: 18 },
+    ring: { rx: 21, ry: 25.2 },
     seat: { w: 13.8, h: 4.6 }, clampX: [7.4, 42.6], clampY: [8.8, 54.8],
     board: { cx: 25, y: 22, cw: 4.3, gap: 0.45 },
     pot: { cx: 25, y: 28.6 }, info: [1, 1], cmp: { cx: 25, y: 32.4, w: 28 }, act: { cx: 25, y: 36.4 }, push: 32.2, badge: 36.8,
-    ctl: { x: 1, y: 60.4, w: 48, h: 9.2 },
+    ctl: { x: 1, y: 60.4, w: 48, h: 9.2 }, pill: [1, 65.4],
   },
 };
 
@@ -92,9 +92,14 @@ const CSS = `
 .pk-c .ix b { font: 700 1.6em/1 var(--num); letter-spacing: -.05em; }
 .pk-c .ix i { font-style: normal; font-size: 1.15em; margin-top: .06em; }
 .pk-c .pip { position: absolute; right: .45em; bottom: .3em; font-size: 2.9em; line-height: 1; }
-.pk-c .face { position: absolute; right: .42em; bottom: .38em; width: 2.6em; height: 3.6em; border-radius: .2em; display: grid; place-items: center; border: .05em solid currentColor;
-  background: linear-gradient(180deg, rgb(201 162 74 / .18), rgb(201 162 74 / .05)); box-shadow: inset 0 0 0 .12em rgb(255 255 255 / .6), inset 0 0 0 .17em rgb(201 162 74 / .45); }
-.pk-c .face b { font: 400 2.1em/1 var(--brush); }
+/* 人头牌（J/Q/K）：右下角一块描金双线框，框顶一枚冠饰（K 王冠、Q 后冠、J 羽帽），中间衬线大字母，下面花色 */
+.pk-c .face { position: absolute; right: .4em; bottom: .36em; width: 2.75em; height: 4.05em; border-radius: .22em; display: grid; grid-template-rows: .95em 1fr .95em; justify-items: center; align-items: center;
+  padding: .2em 0 .16em; box-sizing: border-box;
+  background: radial-gradient(90% 60% at 50% 42%, rgb(255 255 255 / .85), transparent 70%), linear-gradient(180deg, rgb(232 196 112 / .3), rgb(201 162 74 / .12));
+  box-shadow: inset 0 0 0 .05em currentColor, inset 0 0 0 .13em #fffaf0, inset 0 0 0 .18em rgb(186 142 52 / .85), 0 .03em .06em rgb(90 60 14 / .25); }
+.pk-c .face svg { width: 1.9em; height: .95em; overflow: visible; }
+.pk-c .face b { font: 900 2.05em/1 var(--serif); letter-spacing: -.02em; text-shadow: 0 .04em 0 rgb(255 255 255 / .9); }
+.pk-c .face i { font-style: normal; font-size: .9em; line-height: 1; }
 .pk-c.bk { background:
     radial-gradient(circle at 50% 50%, #fbe8a6 0 .38em, #b8862e .42em .5em, transparent .54em),
     radial-gradient(circle at 50% 50%, transparent 0 .78em, rgb(240 205 120 / .55) .8em .86em, transparent .9em),
@@ -156,8 +161,14 @@ const CSS = `
   --edge-now: var(--edge); background: var(--glint), var(--surface), var(--edge-now) border-box;
   box-shadow: var(--hi), 0 .18em 0 #3e2a0a, 0 .26em 0 .04em #040100, 0 .55em .8em rgb(0 0 0 / .55); transition: box-shadow .3s, filter .3s; }
 .pk-seat .coin { font-size: 1.4em; width: 2.15em; height: 2.15em; flex: none; font-family: var(--num); font-weight: 600; margin-bottom: .18em; }
-.pk-seat .who { display: grid; gap: .28em; min-width: 0; flex: 1; }
+.pk-seat .who { display: grid; gap: .28em; min-width: 4em; flex: 1 1 auto; }
 .pk-seat .who b { font: 900 1.3em/1.1 var(--serif); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* 竖版名牌窄：收紧留白、铜钱和筹码数，名字放得下四个字；再长就折成两行 */
+.pk.port .pk-seat { gap: .42em; padding: 0 .6em 0 .45em; }
+.pk.port .pk-seat .coin { font-size: 1.22em; }
+.pk.port .pk-seat .stk { font-size: 1.55em; }
+.pk.port .pk-seat .who { gap: .18em; }
+.pk.port .pk-seat .who b { white-space: normal; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-height: 1.04; word-break: break-all; }
 .pk-seat .who span { font: 600 1em/1.1 var(--sans); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pk-seat .who span.hot { color: var(--zhu-2); }
 .pk-seat .who span.gold { color: var(--gold-2); }
@@ -241,6 +252,9 @@ const CSS = `
 @keyframes pk-turn { 50% { box-shadow: var(--hi), 0 0 0 .1em #040100, 0 0 0 .36em rgb(42 11 8 / .9), 0 0 0 .5em #f6dc94, 0 0 3.4em .8em rgb(255 214 120 / .55), 0 .55em .8em rgb(0 0 0 / .55); } }
 .pk-seat .who span.turn { color: #f6dc94; } .pk-seat .who span.turn::after { content: '…'; display: inline-block; animation: pk-dot 1.2s ease-in-out infinite; }
 .pk-seat .who span.me { color: #ff8a6a; font-weight: 800; }
+/* 浅色主题的名牌是宣纸色：金字、朱字换深一档（对比度 ≥ 4.5:1） */
+:root[data-theme="light"] .pk-seat .who span.turn { color: #7a4e0c; }
+:root[data-theme="light"] .pk-seat .who span.me { color: #a3261a; }
 .pk-seat .tag { position: absolute; left: 50%; bottom: calc(100% + .45em); translate: -50% 0; display: flex; align-items: center; gap: .4em; white-space: nowrap; padding: .32em .8em .36em; border-radius: 1em;
   font: 700 1.05em/1 var(--sans); letter-spacing: .1em; color: var(--on-gold); background: var(--gold-metal); box-shadow: var(--gold-key-sh), 0 .3em .6em rgb(0 0 0 / .45); z-index: 3; }
 .pk-seat .tag::after { content: ''; position: absolute; left: 50%; top: 100%; translate: -50% 0; border: .4em solid transparent; border-top-color: #c8983c; }
@@ -297,6 +311,16 @@ const CSS = `
 .pk-sum .rw .nt.up { color: #1f7a4c; } .pk-sum .rw .nt.dn { color: #a8321f; }
 .pk-sum .ft { font: 600 1em/1.4 var(--sans); color: #6a4a2a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pk-sum .rw .pk-c.best { translate: 0 -.35em; }
+/* 结算卡右上角的关闭键；收起后桌角留一枚「结算 ▸」小签，点开再看 */
+.pk-x { position: absolute; right: .5em; top: .5em; width: 2.1em; height: 2.1em; border: 0; border-radius: 50%; display: grid; place-items: center; cursor: pointer; pointer-events: auto; z-index: 2;
+  font: 700 1.05em/1 var(--sans); color: #6a4a2a; background: rgb(120 84 30 / .12); box-shadow: inset 0 0 0 .07em rgb(120 84 30 / .3); transition: background-color .15s, color .15s; }
+.pk-x:hover, .pk-x:focus-visible { color: #8e1b12; background: rgb(120 84 30 / .22); }
+.pk-pill { display: flex; align-items: center; gap: .45em; padding: .5em .95em .55em; border-radius: 1.2em; border: .12em solid transparent; cursor: pointer; z-index: 6; white-space: nowrap;
+  font: 700 1em/1 var(--sans); letter-spacing: .1em; color: var(--on-gold); background: var(--gold-metal) padding-box, linear-gradient(180deg, #fbe8a6, #8e6824) border-box;
+  box-shadow: var(--gold-key-sh), 0 .3em .6em rgb(0 0 0 / .45); animation: pk-rise .3s ${EASE} both; }
+.pk-pill:hover { filter: brightness(1.06); }
+.pk-pill > span { font-size: 1.1em; }
+.pk.port .pk-pill > span { font-size: 1.4em; }
 @keyframes pk-popin { 0% { transform: scale(.82) translateY(.8em); opacity: 0; } 60% { transform: scale(1.02); opacity: 1; } 100% { transform: none; opacity: 1; } }
 @keyframes pk-popout { to { transform: scale(.96) translateY(-.6em); opacity: 0; } }
 @keyframes pk-veil { from { opacity: 0; } }
@@ -364,6 +388,10 @@ const CSS = `
 .pk-sum .tabs { justify-self: center; display: flex; gap: .25em; padding: .22em; border-radius: .8em; background: rgb(120 84 30 / .14); box-shadow: inset 0 .06em .15em rgb(80 50 10 / .25); }
 .pk-sum .tabs button { pointer-events: auto; border: 0; background: transparent; cursor: pointer; padding: .45em 1.1em; border-radius: .6em; font: 700 1em/1 var(--sans); letter-spacing: .12em; color: #7a5a2a; }
 .pk-sum .tabs button.on { color: #8e1b12; background: #fffaf0; box-shadow: 0 .08em .2em rgb(80 50 10 / .35); }
+/* 盖掉全站 .tabs 的下划线、下边距和手机上的 44px 最小高度（这里是一块小分段键） */
+.pk-sum .tabs { margin: 0; border: 0; overflow: visible; }
+.pk-sum .tabs button { min-height: 0; }
+.pk-sum .tabs .on::after { display: none; }
 .pk-stats { width: 56em; }
 .pk-stats .tb { display: grid; gap: .28em; }
 .pk-stats .th, .pk-stats .tr { display: grid; grid-template-columns: 2em minmax(0, 1fr) 5.6em 6.6em 2.8em 3.4em 3.4em 3.8em 5.4em; align-items: center; gap: .55em; padding: .28em .6em; text-align: right; white-space: nowrap; }
@@ -438,7 +466,20 @@ function cardEl(code, x, y, fs, cls = '') {
   const face = r === 'J' || r === 'Q' || r === 'K';
   return el('div', { class: `pk-c${isRed(code) ? ' r' : ''} ${cls}`, style: st },
     el('div', { class: 'ix' }, el('b', {}, r), el('i', {}, s)),
-    face ? el('div', { class: 'face' }, el('b', {}, r)) : el('div', { class: 'pip' }, s));
+    face ? faceEl(r, s) : el('div', { class: 'pip' }, s));
+}
+
+// 人头牌的冠饰：K 王冠、Q 后冠、J 羽帽（金面，描边用牌的红 / 黑）
+const CROWN = {
+  K: '<path d="M2.5 9.2 1.6 2.6l5 3.4L10 .9l3.4 5.1 5-3.4-.9 6.6z"/><path d="M3 9.2h14" stroke-width="1.3"/><circle cx="1.6" cy="2.4" r="1"/><circle cx="10" cy=".8" r="1"/><circle cx="18.4" cy="2.4" r="1"/>',
+  Q: '<path d="M2.6 9.2C2.6 5.4 5.6 2.7 10 2.7s7.4 2.7 7.4 6.5z"/><path d="M3 9.2h14" stroke-width="1.3"/><path d="M6 6.2 10 4.3l4 1.9" fill="none"/><circle cx="10" cy="1.3" r="1.1"/>',
+  J: '<path d="M2.4 9.2c0-2.8 3-4.9 7.6-4.9s7.6 2.1 7.6 4.9z"/><path d="M3 9.2h14" stroke-width="1.3"/><path d="M12.6 4.6C13.8 1.6 16.6.4 19.2 1.1c-1.3 1.1-2.8 2.4-4.4 4" fill="none"/>',
+};
+function faceEl(r, s) {
+  const f = el('div', { class: 'face' });
+  f.innerHTML = `<svg viewBox="0 0 20 10" aria-hidden="true" fill="#e6bd5c" stroke="currentColor" stroke-width=".9" stroke-linejoin="round" stroke-linecap="round">${CROWN[r]}</svg>`;
+  f.append(el('b', {}, r), el('i', {}, s));
+  return f;
 }
 
 /** 一张会翻开的牌：牌背转到 90° 消失，牌面从 −90° 转出来 */
@@ -509,6 +550,14 @@ const pickView = (v) => v && ({
   last: v.last ? { showdown: !!v.last.showdown, boardLen: v.last.board.length, shown: Object.keys(v.last.shown || {}).length, pots: v.last.pots?.length || 1, pot: v.last.pot ?? 0 } : null,
   done: v.result ? { showdown: !!v.result.showdown, boardLen: v.board.length, shown: v.result.shown?.length ?? 0, pots: v.result.pots?.length || 1, pot: v.pot } : null,
 });
+/**
+ * 画的是不是「正在进行的最新局面」：对局页传 opts.live 时以它为准；
+ * 否则复盘回放（opts.replay）不是；对局页的 opts.clock 只在实时对局里非空；缩略图等不传 clock 的地方按实时算
+ */
+const isLive = (opts) => ('live' in opts ? !!opts.live
+  : opts.replay ? false
+    : opts.clock && typeof opts.clock === 'object' ? Object.keys(opts.clock).length > 0 || !!opts.movable
+      : true);
 /** 按大盲数显示：250 → 125BB，25 → 12.5BB */
 const fmtBB = (v, bb) => `${Math.round((v / bb) * 10) / 10}BB`;
 
@@ -769,7 +818,7 @@ export default {
       if (!inHand) pre = { ...pre, kind: null };
       // 「跟注 X」：要跟的数变了就自动取消
       if (pre.kind === 'call' && pre.amt !== preX) pre = { ...pre, kind: null };
-      const show = inHand && !opts.replay && !busy && !!view.toAct && view.toAct !== viewer;
+      const show = inHand && isLive(opts) && !busy && !!view.toAct && view.toAct !== viewer;
       preBox.hidden = !show;
       if (show) {
         const h = 3.9;
@@ -786,6 +835,17 @@ export default {
     const fx = { prev: null, deal: null, board: { n: 0, t0: null, from: 0 }, bets: {}, collect: null, end: null, allin: null, intro: null, act: { key: '', t0: null }, beam: { key: '', t0: null }, wakes: [] };
     const redraw = () => last && draw(last.view, last.opts);
     let sumTab = null; // 终局结算卡看哪一页：null 自动（先看这一手，停够后换到全场统计）
+    let sumHidden = null; // 收起的是哪一张结算卡（`第几手|是否终局`）：收起后桌角留「结算 ▸」小签
+    // Esc 收起结算卡（牌桌在页面上、没有弹窗挡着时）
+    const onEsc = (e) => {
+      if (!root.isConnected) { document.removeEventListener('keydown', onEsc); return; }
+      if (e.key !== 'Escape' || e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return;
+      const x = layer.querySelector('.pk-x');
+      if (!x || !root.getClientRects().length || document.querySelector('dialog[open], [aria-modal="true"]')) return;
+      e.preventDefault();
+      x.click();
+    };
+    document.addEventListener('keydown', onEsc);
 
     if (typeof ResizeObserver === 'function') {
       new ResizeObserver(([e]) => {
@@ -807,14 +867,106 @@ export default {
         const th = ((90 + (k * 360) / n) * Math.PI) / 180;
         const x = Math.max(L.clampX[0], Math.min(L.clampX[1], cx + L.ring.rx * Math.cos(th)));
         const y = Math.max(L.clampY[0], Math.min(L.clampY[1], cy + L.ring.ry * Math.sin(th)));
-        const tb = th + (L.bets.off * Math.PI) / 180;
-        // by 是这摞筹码的底边（筹码往上叠，视觉中心在环上）
-        const bx = cx + L.bets.rx * Math.cos(tb), by = cy + L.bets.ry * Math.sin(tb) + 1.2;
-        const tm = th + (L.marks.off * Math.PI) / 180;
-        const mx = cx + L.marks.rx * Math.cos(tm), my = cy + L.marks.ry * Math.sin(tm);
-        g[p.seat] = { x, y, bx, by, mx, my, th };
+        g[p.seat] = { x, y, th };
       });
       return g;
+    }
+
+    // ---------- 庄位 / 盲注标、面前的注：沿「座位 → 底池」方向找空位 ----------
+    // 先把桌上固定的东西（公共牌、底池、桌心那一手、各家名牌、底牌、胜率条）记成矩形，
+    // 候选位置按偏好排好（注在离座位约 35% 处、标在名牌旁边），挑第一个谁也不压、又在桌面里的；都压到就挑压得最少的。
+    const overlapArea = (a, b) => Math.max(0, Math.min(a[2], b[2]) - Math.max(a[0], b[0])) * Math.max(0, Math.min(a[3], b[3]) - Math.max(a[1], b[1]));
+    /** 一摞注（底部中心 bx, by）和金额标签占的矩形；side 为 1 标签在右、-1 在左 */
+    function betBoxes(bx, by, amount, side) {
+      const cols = breakdown(amount, 3);
+      const n = Math.max(1, cols.length);
+      const k = Math.min(6, Math.max(1, ...cols.map((c) => c[4])));
+      const w = (n - 1) * 1.95 + 2.3;
+      const chipsBox = [bx - w / 2, by - 1.24 - (k - 1) * 0.3 - (n > 1 ? 0.25 : 0), bx + w / 2, by + 0.6];
+      const lw = String(money(amount)).length * 0.72 + 1.4;
+      const lx = bx + side * (1.4 + (n - 1) * 0.98);
+      const ly = by - 0.9;
+      return [chipsBox, side > 0 ? [lx, ly - 0.9, lx + lw, ly + 0.9] : [lx - lw, ly - 0.9, lx, ly + 0.9]];
+    }
+    function chipSpots(view, viewer, g, L, markSeats) {
+      const S = L.seat, T = L.table, P = L.pot, B = L.board;
+      const bw = B.cw * 5 + B.gap * 4;
+      const obs = [
+        [B.cx - bw / 2 - 0.4, B.y - 0.4, B.cx + bw / 2 + 0.4, B.y + B.cw * 1.4 + 0.4], // 公共牌
+        [P.cx - 6.6, P.y - 0.3, P.cx + 6.6, P.y + 3.7], // 底池
+        [L.act.cx - 9.5, L.act.y - 1.5, L.act.cx + 9.5, L.act.y + 1.5], // 桌心那一手
+      ];
+      for (const p of view.players) {
+        const s = g[p.seat];
+        if (!s) continue;
+        const mine = !!viewer && p.seat === viewer;
+        const cfs = (layoutName === 'port' ? 0.66 : 0.74) * (mine ? 1.3 : 1);
+        const cw = cfs * 5, ch = cfs * 7;
+        const cy = s.y - S.h / 2 - ch + (mine ? 0.9 : 1.5);
+        const sp = mine ? 2.2 : 1.25;
+        obs.push([s.x - S.w / 2 - 0.3, s.y - S.h / 2 - 0.3, s.x + S.w / 2 + 0.3, s.y + S.h / 2 + 0.3]); // 名牌
+        obs.push([s.x - 4.4, s.y + S.h / 2, s.x + 4.4, s.y + S.h / 2 + 2]); // 胜率条
+        obs.push([s.x - cw / 2 - sp - 1.2, cy - 0.4, s.x + cw / 2 + sp + 1.2, s.y - S.h / 2]); // 底牌（两张各斜 7°，上角往外探）
+      }
+      const inFelt = (b) => [[b[0], b[1]], [b[2], b[1]], [b[0], b[3]], [b[2], b[3]]]
+        .every(([x, y]) => ((x - T.cx) / (T.rx - 1)) ** 2 + ((y - T.cy) / (T.ry - 1)) ** 2 <= 1);
+      const cost = (boxes, list) => boxes.reduce((a, b) => a + (inFelt(b) ? 0 : 40) + list.reduce((c, o) => c + overlapArea(b, o), 0), 0);
+      const C = [P.cx, P.y + 1.7];
+      /** 从座位朝桌心的方向转 deg 度（屏幕坐标，顺时针为正），走 d 远 */
+      const toward = (s, d, deg) => {
+        const dx = C[0] - s.x, dy = C[1] - s.y, len = Math.hypot(dx, dy) || 1;
+        const a = (deg * Math.PI) / 180, ux = dx / len, uy = dy / len;
+        return [s.x + d * (ux * Math.cos(a) - uy * Math.sin(a)), s.y + d * (ux * Math.sin(a) + uy * Math.cos(a)), len];
+      };
+      const best = (cands, boxesOf, list) => {
+        let pick = null;
+        for (const c of cands.sort((a, b) => a.pen - b.pen)) {
+          const k = cost(boxesOf(c), list);
+          if (k === 0) return c;
+          if (!pick || k < pick.k) pick = { ...c, k };
+        }
+        return pick;
+      };
+      const markBox = (x, y) => [x - 1.3, y - 1.3, x + 1.3, y + 1.65];
+      /** 这个点离别家比离自己家还近（看着像别人的）：降低优先 */
+      const nearer = (x, y, seat) => {
+        const own = Math.hypot(x - g[seat].x, y - g[seat].y);
+        return Object.entries(g).some(([k, o]) => k !== seat && Math.hypot(x - o.x, y - o.y) < own);
+      };
+      const marks = {};
+      const markObs = [];
+      for (const seat of markSeats) {
+        const s = g[seat];
+        if (!s) continue;
+        const cands = [];
+        for (const side of [-1, 1]) for (const d of [9, 10.5, 12, 13.5, 7.5, 6]) for (const deg of [35, 22, 50, 10, 65, 0]) {
+          const [x, y] = toward(s, d, side * deg);
+          cands.push({ x, y, pen: Math.abs(d - 9) / 2 + Math.abs(deg - 30) / 15 + (side > 0 ? 2 : 0) + (nearer(x, y, seat) ? 4 : 0) });
+        }
+        const m = best(cands, (c) => [markBox(c.x, c.y)], [...obs, ...markObs]);
+        marks[seat] = m;
+        markObs.push(markBox(m.x, m.y));
+      }
+      const bets = new Map();
+      return {
+        mark: (seat) => marks[seat],
+        /** 一家面前这摞注放哪：{ bx, by（底部中心）, side（标签在哪边） } */
+        bet(seat, amount) {
+          const key = `${seat}|${amount}`;
+          if (bets.has(key)) return bets.get(key);
+          const s = g[seat];
+          const len = toward(s, 0, 0)[2];
+          const pref = s.x >= T.cx - 0.5 ? 1 : -1;
+          const cands = [];
+          for (const f of [0.35, 0.42, 0.3, 0.5, 0.25, 0.58, 0.2]) for (const deg of [0, 12, 24, 36, 48]) for (const sg of deg ? [1, -1] : [1]) for (const side of [pref, -pref]) {
+            const [x, y] = toward(s, len * f, sg * deg);
+            cands.push({ bx: x, by: y + 1.1, side, pen: Math.abs(f - 0.35) * 10 + deg / 12 + (sg < 0 ? 0.6 : 0) + (side !== pref ? 0.8 : 0) + (nearer(x, y, seat) ? 4 : 0) });
+          }
+          const b = best(cands, (c) => betBoxes(c.bx, c.by, amount, c.side), [...obs, ...markObs]);
+          bets.set(key, b);
+          return b;
+        },
+      };
     }
 
     const liveOf = (v) => v.players.filter((p) => p.inHand && !p.folded);
@@ -1002,9 +1154,10 @@ export default {
       if (!ai && !(fx.end && fx.end.allin)) fx.allin = null;
     }
 
-    function seatEl(view, p, g, L, { E = null, t = 0, winners = new Set(), me = null, t0 = null }) {
+    function seatEl(view, p, g, L, { E = null, t = 0, winners = new Set(), me = null, t0 = null, live = true }) {
       const S = L.seat;
-      const acting = !E && !view.result && view.toAct === p.seat;
+      // 复盘、回放看的是过去的局面：不挂「思考中」、不打光
+      const acting = live && !E && !view.result && view.toAct === p.seat;
       const win = winners.has(p.seat);
       const outNow = p.out && !p.inHand;
       const cls = `pk-seat${acting ? ' on' : ''}${win ? ' win' : ''}${p.folded && p.inHand && !outNow ? ' folded' : ''}${outNow ? ' out' : ''}${bbMode ? ' bbm' : ''}`;
@@ -1136,13 +1289,17 @@ export default {
       const bbv = view.blinds?.bb || 1;
       money = (v) => (bbMode ? fmtBB(v, bbv) : String(v));
       const src = E ? E.src : view; // 结算期间座位上的牌按结算前那一步画
+      const markOf = (seat) => (seat === src.button ? ['d', 'D'] : seat === src.sbSeat ? ['sb', '小盲'] : seat === src.bbSeat ? ['bb', '大盲'] : null);
+      const markSeats = src.over ? [] : src.players.filter((p) => !(p.out && !p.inHand) && markOf(p.seat)).map((p) => p.seat);
+      const spots = chipSpots(src, viewer, g, L, markSeats);
       const kids = [];
 
       // 桌子
       kids.push(el('div', { class: 'pk-rail', style: `${pos(T.cx - T.rx - 1.6, T.cy - T.ry - 1.6)};width:${(T.rx + 1.6) * 2}em;height:${(T.ry + 1.6) * 2}em` }));
       kids.push(el('div', { class: 'pk-felt', style: `${pos(T.cx - T.rx + 0.3, T.cy - T.ry + 0.3)};width:${(T.rx - 0.3) * 2}em;height:${(T.ry - 0.3) * 2}em` }));
       kids.push(el('div', { class: 'pk-wm', style: pos(T.cx, T.cy + T.ry * 0.55) }, el('span', {}, '德州')));
-      if (!E && !view.result && view.toAct && g[view.toAct]) {
+      const liveNow = isLive(opts);
+      if (liveNow && !E && !view.result && view.toAct && g[view.toAct]) {
         const s = g[view.toAct];
         const dx = s.x - T.cx, dy = s.y - T.cy;
         const ang = (Math.atan2(dy, dx) * 180) / Math.PI;
@@ -1239,10 +1396,10 @@ export default {
       const collect = (prev, t0, dur) => {
         for (const q of prev.players) {
           if (!q.bet || !g[q.seat]) continue;
-          const s = g[q.seat];
-          const st = chips(q.bet, s.bx, s.by, { maxCols: 3 });
-          st.style.setProperty('--tx', `${P.cx - s.bx}em`);
-          st.style.setProperty('--ty', `${P.y + 2.5 - s.by}em`);
+          const b = spots.bet(q.seat, q.bet);
+          const st = chips(q.bet, b.bx, b.by, { maxCols: 3, maxPer: 6 });
+          st.style.setProperty('--tx', `${P.cx - b.bx}em`);
+          st.style.setProperty('--ty', `${P.y + 2.5 - b.by}em`);
           kids.push(play(st, 'pk-collect', dur, t0, 0, 'cubic-bezier(.5,0,.7,1)'));
         }
       };
@@ -1251,21 +1408,22 @@ export default {
 
       // 各座位：标记（庄、小盲、大盲）、面前的注、底牌、名牌、胜率
       const players = src.players;
-      const markOf = (seat) => (seat === src.button ? ['d', 'D'] : seat === src.sbSeat ? ['sb', '小盲'] : seat === src.bbSeat ? ['bb', '大盲'] : null);
       for (const p of players) {
         const s = g[p.seat];
         if (!s) continue;
-        const outNow = p.out && !p.inHand;
-        const mk = outNow || src.over ? null : markOf(p.seat);
-        if (mk) kids.push(el('div', { class: `pk-mark ${mk[0]}`, style: pos(s.mx, s.my) }, el('span', {}, mk[1])));
+        const mk = markSeats.includes(p.seat) ? markOf(p.seat) : null;
+        const m = mk ? spots.mark(p.seat) : null;
+        if (m) kids.push(el('div', { class: `pk-mark ${mk[0]}`, style: pos(m.x, m.y) }, el('span', {}, mk[1])));
         if (!E && p.bet > 0) {
-          const st = chips(p.bet, s.bx, s.by, { maxCols: 3, maxPer: 6 });
-          const right = s.bx >= L.table.cx - 0.5;
-          const amt = el('span', { class: `pk-amt${right ? '' : ' l'}`, style: pos(s.bx + (right ? 1.4 + (breakdown(p.bet, 3).length - 1) * 0.98 : -1.4 - (breakdown(p.bet, 3).length - 1) * 0.98), s.by - 0.9) }, el('span', {}, money(p.bet)));
+          const b = spots.bet(p.seat, p.bet);
+          const st = chips(p.bet, b.bx, b.by, { maxCols: 3, maxPer: 6 });
+          const right = b.side > 0;
+          const off = 1.4 + (breakdown(p.bet, 3).length - 1) * 0.98;
+          const amt = el('span', { class: `pk-amt${right ? '' : ' l'}`, style: pos(b.bx + (right ? off : -off), b.by - 0.9) }, el('span', {}, money(p.bet)));
           const t0 = fx.bets[p.seat];
           if (t0 !== undefined) {
-            st.style.setProperty('--fx', `${s.x - s.bx}em`);
-            st.style.setProperty('--fy', `${s.y - s.by}em`);
+            st.style.setProperty('--fx', `${s.x - b.bx}em`);
+            st.style.setProperty('--fy', `${s.y - b.by}em`);
             play(st, 'pk-slide', 420, t0);
             play(amt, 'pk-in', 300, t0, 260);
           }
@@ -1309,7 +1467,7 @@ export default {
             kids.push(node);
           });
         }
-        kids.push(seatEl(view, p, s, L, { E, t, winners, me: movable && movable === viewer ? viewer : null, t0: opts.clock?.[p.seat] || null }));
+        kids.push(seatEl(view, p, s, L, { E, t, winners, me: movable && movable === viewer ? viewer : null, t0: opts.clock?.[p.seat] || null, live: liveNow }));
         // 胜率
         if (!E && p.equity !== null && p.equity !== undefined && p.inHand && !p.folded) {
           const live = liveOf(view);
@@ -1337,13 +1495,19 @@ export default {
 
       // 一手结果：结算卡（分完池之后弹出；摊牌时列出亮出的底牌和牌型）；终局那一手可以切到全场统计
       const sumOn = !!E && at(E.sched.cardAt - 40);
-      if (sumOn) {
+      const sumKey = E ? `${E.no}|${E.final ? 'f' : ''}` : '';
+      if (sumOn && sumHidden === sumKey) {
+        // 收起了：桌角留一枚小签，点开再看
+        kids.push(el('button', { class: 'pk-pill', type: 'button', title: '展开结算', style: pos(L.pill[0], L.pill[1]), onclick: (e) => { e.stopPropagation(); sumHidden = null; redraw(); } },
+          el('span', {}, E.final ? '结算 ▸' : `第 ${E.no} 手结算 ▸`)));
+      } else if (sumOn) {
         const veil = el('div', { class: 'pk-veil' });
         const hasStats = E.final && view.over && !!view.stats;
         const autoStats = E.static || at(E.sched.end);
         const tab = hasStats ? sumTab || (autoStats ? 'stats' : 'hand') : 'hand';
         const tabs = hasStats ? tabsEl(tab) : null;
         const card = tab === 'stats' ? statsCard(view, L, tabs) : summaryCard(summaryOf(E), L, tabs);
+        card.append(el('button', { class: 'pk-x', type: 'button', title: '收起（Esc）', 'aria-label': '收起结算卡', onclick: (e) => { e.stopPropagation(); sumHidden = sumKey; redraw(); } }, '✕'));
         play(veil, 'pk-veil', 380, E.t0, E.sched.cardAt);
         play(card, 'pk-popin', 520, E.t0, E.sched.cardAt, 'cubic-bezier(.2,1.2,.4,1)');
         if (tab === 'stats' && !sumTab) play(card, 'pk-in', 360, E.t0, E.sched.end);

@@ -1,8 +1,14 @@
 // 同题对比：同一个局面交给多个选手，并排比较分析和选择。
 
-import { h, api, post, guard, avatar, modelLine, fmtMs, fmtTokens, pct, fmtTime, listen, pressed, setTitle } from './ui.js';
+import { h, api, post, guard, avatar, modelLine, fmtMs, fmtTokens, pct, fmtTime, listen, pressed, setTitle, cleanName, icon } from './ui.js';
 import { Board } from './board.js';
 import { parseFen, inCheck } from '/games/xiangqi/rules.js';
+
+/** 面包屑：对局记录 / 同题对比 / 当前这一页 */
+const crumbs = (here) => h('nav', { class: 'crumbs', 'aria-label': '位置' },
+  h('a', { href: '#/history' }, '对局记录'), h('span', { class: 'sep', 'aria-hidden': 'true' }, '/'),
+  h('a', { href: '#/history?tab=compare' }, '同题对比'), h('span', { class: 'sep', 'aria-hidden': 'true' }, '/'),
+  h('span', { 'aria-current': 'page' }, here));
 
 function viewFromFen(fen) {
   const pos = parseFen(fen);
@@ -27,11 +33,11 @@ export async function compareNewView(root, { characters, go }) {
   function draw() {
     pz.replaceChildren(...puzzles.map((p) => h('button', { type: 'button', class: `puzzle${sel.puzzle === p && !sel.fen ? ' on' : ''}`, ...pressed(sel.puzzle === p && !sel.fen), onclick: () => { sel.puzzle = p; sel.fen = ''; fenInput.value = ''; draw(); } }, h('b', {}, p.title), h('small', {}, p.desc))));
     picks.replaceChildren(...ai.map((c) => h('button', { type: 'button', class: `pick${sel.ids.has(c.id) ? ' on' : ''}`, ...pressed(sel.ids.has(c.id)), onclick: () => { sel.ids.has(c.id) ? sel.ids.delete(c.id) : sel.ids.add(c.id); draw(); } },
-      avatar(c, 'sm'), h('span', { class: 't' }, h('span', {}, c.name), h('small', {}, c.kind === 'model' ? c.model : modelLine(c))))));
+      sel.ids.has(c.id) ? h('span', { class: 'pick-check' }, icon('check', 16)) : avatar(c, 'sm'), h('span', { class: 't' }, h('span', {}, cleanName(c.name)), h('small', {}, c.kind === 'model' ? c.model : modelLine(c))))));
     drawBoard();
   }
 
-  root.replaceChildren(h('div', { class: 'cmp' },
+  root.replaceChildren(crumbs('新建'), h('div', { class: 'cmp' },
     h('div', { class: 'col' }, h('div', { class: 'card pad' }, board.el)),
     h('div', { class: 'col' },
       h('div', { class: 'card pad col' }, h('h2', {}, '同题对比'), pz, fenInput),
@@ -58,6 +64,10 @@ export async function compareView(root, id, { characters }) {
   const board = new Board();
   const grid = h('div', { class: 'answers' });
   const summary = h('div', { class: 'small muted' });
+  // 图例：颜色和棋盘上的箭头一致（引擎推荐是青绿实箭头，各蛐蛐的选择是半透明褐色箭头）
+  const legend = h('div', { class: 'cmp-legend small muted' },
+    h('span', {}, h('i', { class: 'lg-best', 'aria-hidden': 'true' }), '引擎推荐'),
+    h('span', {}, h('i', { class: 'lg-hint', 'aria-hidden': 'true' }), '蛐蛐的选择（移到卡片上只看这一只）'));
 
   function drawBoard() {
     const arrows = [];
@@ -80,7 +90,7 @@ export async function compareView(root, id, { characters }) {
     }
     const done = a.status === 'done' || a.status === 'failed';
     return h('div', { class: `card answer${hl === a.character_id ? ' hl' : ''}`, onmouseenter: () => { hl = a.character_id; drawBoard(); }, onmouseleave: () => { hl = null; drawBoard(); } },
-      h('div', { class: 'row', style: { flexWrap: 'nowrap' } }, avatar(c, 'sm'), h('div', { class: 'grow', style: { minWidth: 0 } }, h('b', {}, c.name), h('div', { class: 'small muted', style: { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, modelLine(c)))),
+      h('div', { class: 'row', style: { flexWrap: 'nowrap' } }, avatar(c, 'sm'), h('div', { class: 'grow', style: { minWidth: 0 } }, h('b', {}, cleanName(c.name)), h('div', { class: 'small muted', style: { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, modelLine(c)))),
       h('div', { class: 'row', style: { gap: '6px' } },
         a.label ? h('b', { style: { fontSize: '16px' } }, a.label) : h('span', { class: 'muted' }, a.status === 'failed' ? '未给出有效着法' : '思考中…'),
         q ? h('span', { class: `chip ${cls}` }, q.tag, q.loss >= 0.05 ? ` −${Math.round(q.loss * 100)}%` : '') : null,
@@ -98,12 +108,12 @@ export async function compareView(root, id, { characters }) {
     const list = [...answers.values()].sort((x, y) => (x.eval?.loss ?? 9) - (y.eval?.loss ?? 9));
     grid.replaceChildren(...list.map(card));
     const best = list.find((a) => a.eval?.best)?.eval?.best;
-    summary.textContent = best ? `橙色虚线是引擎推荐的着法 · 局面评估：走棋方胜率 ${pct(list.find((a) => a.eval)?.eval.before)}` : '';
+    summary.textContent = best ? `局面评估：走棋方胜率 ${pct(list.find((a) => a.eval)?.eval.before)}` : '';
     drawBoard();
   }
 
-  root.replaceChildren(h('div', { class: 'cmp' },
-    h('div', { class: 'col' }, h('div', { class: 'card pad col' }, h('h2', {}, d.title), board.el, summary)),
+  root.replaceChildren(crumbs(d.title), h('div', { class: 'cmp' },
+    h('div', { class: 'col' }, h('div', { class: 'card pad col' }, h('h2', {}, d.title), board.el, legend, summary)),
     grid,
   ));
   draw();

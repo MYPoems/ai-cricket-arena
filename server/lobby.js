@@ -29,7 +29,7 @@ function liveCard(db, arena, id) {
   const game = getGame(m.game);
   const hiddenLive = !!game.features?.hidden && arena.humanSeats(m).length > 0;
   // 有真人的隐藏信息对局：大厅缩略图只给公共视角（谁的牌都看不到）
-  const view = game.view(replay(game, recordOf(m)), hiddenLive ? PUBLIC_VIEWER : null);
+  const view = game.view(replay(game, recordOf(m)), game.features?.hidden ? PUBLIC_VIEWER : null);
   const last = db.get('SELECT eval FROM turns WHERE match_id = ? AND eval IS NOT NULL ORDER BY ply DESC LIMIT 1', id);
   const rt = arena.live.get(id);
   const lastMove = (view.moves || [])[(view.moves || []).length - 1];

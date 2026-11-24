@@ -1,6 +1,6 @@
 // 大厅：一进来就能看到最精彩的一盘（今日擂台）、场上在发生什么（对局墙）、一键开一盘（快速开始）。
 
-import { h, api, post, guard, toast, listen, fmtTime, MODE_NAMES, resultText, tierBadge, emptyState, linkRow, pressed } from './ui.js';
+import { h, api, post, guard, toast, listen, fmtTime, MODE_NAMES, resultText, tierBadge, emptyState, linkRow, pressed, cleanName, summarizeSeats } from './ui.js';
 import { loadRenderer } from '../stage/index.js';
 
 const renderers = {};
@@ -11,6 +11,19 @@ async function preload(list) {
 const who = (p) => (p?.kind === 'model' ? p.model : p?.kind === 'agent' ? '自带 Agent' : p?.kind === 'human' ? '真人' : p?.kind === 'builtin' ? '内置 AI' : p?.kind === 'engine' ? ({ pikafish: 'Pikafish', rapfi: 'Rapfi', stockfish: 'Stockfish' }[p.provider || 'pikafish'] || '引擎') : '随机');
 const HOT_RE = /炸弹|王炸|全下|将军|将死|\+|绝杀|出局|死亡|背叛|春天/;
 const SORTS = [['hot', '最精彩'], ['new', '最新'], ['tier', '排位优先']];
+/** 隐藏信息游戏（斗地主、德州、狼人杀、卧底…）没有公开的着法，用当前阶段说明进度 */
+function phaseOf(v) {
+  if (!v) return '';
+  if (v.handNo) return `第 ${v.handNo}${v.hands ? `/${v.hands}` : ''} 手${v.streetName ? ` · ${v.streetName}` : ''}`;
+  if (v.day) return `第 ${v.day} ${v.night ? '夜' : '天'}${v.phaseName ? ` · ${v.phaseName}` : ''}`;
+  if (v.phase === 'bid') return '叫地主';
+  if (v.trickNo) return `第 ${v.trickNo} 轮`;
+  if (v.round) return `第 ${v.round} 轮`;
+  return '';
+}
+/** 进度：第 N 手 · 刚走的着法；还没走过就是「等待第一手」 */
+const progress = (m) => (m.lastLabel ? `第 ${m.plies} 手 · ${m.lastLabel}` : phaseOf(m.view) || (m.plies ? `第 ${m.plies} 手` : '等待第一手'));
+const nm = (p) => cleanName(p?.name);
 const pref = (k, v) => { try { if (v === undefined) return localStorage.getItem(`lobby.${k}`); localStorage.setItem(`lobby.${k}`, v); } catch { /* 本机存不了就算了 */ } return null; };
 
 /** 精彩程度：有高光、在思考、胜率胶着、排位赛 */
@@ -60,17 +73,17 @@ export async function lobbyView(root, { go, session, meta }) {
     }
     const seats = Object.keys(pick.players);
     const two = seats.length === 2;
-    const P = (s) => h('div', { class: 'hero-p' }, h('span', { class: 'coin moon' }, pick.players[s]?.avatar || '？'), h('b', { class: 'gold-text' }, pick.players[s]?.name || '？'), h('small', {}, `${pick.seatNames?.[s] || s} · ${who(pick.players[s])}`));
+    const P = (s) => h('div', { class: 'hero-p' }, h('span', { class: 'coin moon' }, pick.players[s]?.avatar || '？'), h('b', { class: 'gold-text' }, nm(pick.players[s])), h('small', {}, `${pick.seatNames?.[s] || s} · ${who(pick.players[s])}`));
     const e = pick.redE ?? 0.5;
     const tug = pick.features?.winbar ? h('div', { class: 'tug' }, h('span', {}, `${Math.round(e * 100)}%`), h('div', { class: 'bar' }, h('i', { class: 'l', style: { width: `${e * 100}%` } }), h('i', { class: 'r' }), h('span', { class: 'knot', style: { left: `${e * 100}%` } })), h('span', {}, `${100 - Math.round(e * 100)}%`)) : null;
     const reason = pick.hot ? '高光时刻' : pick.redE !== null && pick.redE !== undefined && Math.abs(pick.redE - 0.5) < 0.12 ? '胜率胶着' : pick.mode !== 'casual' ? '排位进行中' : '正在进行';
     hero.replaceChildren(h('div', { class: 'lattice' }), h('span', { class: 'wm' }, '擂'),
-      h('div', { class: 'row', style: { justifyContent: 'space-between' } }, h('span', { class: 'hero-tag' }, `今日擂台 · ${reason}`), h('span', { class: 'small muted' }, `${pick.gameName} · ${MODE_NAMES[pick.mode]} · 第 ${pick.plies} 手`)),
+      h('div', { class: 'row', style: { justifyContent: 'space-between' } }, h('span', { class: 'hero-tag' }, `今日擂台 · ${reason}`), h('span', { class: 'small muted' }, `${pick.gameName} · ${MODE_NAMES[pick.mode]}${pick.lastLabel || !phaseOf(pick.view) ? (pick.plies ? ` · 第 ${pick.plies} 手` : '') : ` · ${phaseOf(pick.view)}`}`)),
       two
-        ? h('div', { class: 'hero-vs' }, P(seats[0]), h('div', { class: 'hero-mid' }, h('div', { class: 'vs' }, '对'), tug, h('div', { class: 'state' }, pick.lastLabel ? ['刚走 ', h('b', {}, pick.lastLabel)] : '刚刚开局', pick.thinking ? ` · ${pick.seatNames?.[pick.thinking] || ''}思考中` : ''), h('a', { class: 'btn primary', href: `#/match/${pick.id}` }, '进入观战')), P(seats[1]))
+        ? h('div', { class: 'hero-vs' }, P(seats[0]), h('div', { class: 'hero-mid' }, h('div', { class: 'vs' }, '对'), tug, h('div', { class: 'state' }, pick.lastLabel ? ['刚走 ', h('b', {}, pick.lastLabel)] : phaseOf(pick.view) || (pick.plies ? `第 ${pick.plies} 手` : '等待第一手'), pick.thinking ? ` · ${pick.seatNames?.[pick.thinking] || ''}思考中` : ''), h('a', { class: 'btn primary', href: `#/match/${pick.id}` }, '进入观战')), P(seats[1]))
         : h('div', { class: 'hero-mid', style: { justifySelf: 'stretch' } },
-          h('div', { class: 'row', style: { justifyContent: 'center', gap: '18px' } }, ...seats.map((s) => h('div', { class: 'hero-p' }, h('span', { class: 'coin', style: { width: '56px', height: '56px', fontSize: '30px' } }, pick.players[s]?.avatar || '？'), h('small', {}, pick.players[s]?.name)))),
-          h('div', { class: 'state' }, pick.lastLabel ? ['最新：', h('b', {}, pick.lastLabel)] : '刚刚开局'),
+          h('div', { class: 'row', style: { justifyContent: 'center', gap: '18px' } }, ...seats.map((s) => h('div', { class: 'hero-p' }, h('span', { class: 'coin', style: { width: '56px', height: '56px', fontSize: '30px' } }, pick.players[s]?.avatar || '？'), h('small', {}, nm(pick.players[s]))))),
+          h('div', { class: 'state' }, pick.lastLabel ? ['最新：', h('b', {}, pick.lastLabel)] : phaseOf(pick.view) || (pick.plies ? `第 ${pick.plies} 手` : '等待第一手')),
           h('a', { class: 'btn primary', href: `#/match/${pick.id}` }, '进入观战')));
   }
 
@@ -106,7 +119,7 @@ export async function lobbyView(root, { go, session, meta }) {
           h('a', { class: 'btn', href: '#/rooms' }, '开一个组局'),
           h('a', { class: 'btn', href: '#/agent-guide' }, '让我的 Agent 上场'))),
       data.tops.length ? h('div', { class: 'card quiet pad col', style: { gap: '8px' } }, h('div', { class: 'label' }, '天梯榜首'),
-        h('div', { class: 'side-list' }, ...data.tops.slice(0, 6).map((t) => h('a', { class: 'it', href: `#/characters/${t.id}` }, h('span', { class: 'k' }, t.gameName), h('span', { class: 'row', style: { gap: '8px', flexWrap: 'nowrap', minWidth: 0 } }, h('span', { class: 'coin sm' }, t.avatar), h('b', { style: { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, t.name)), h('span', { class: 'num' }, t.points))))) : null,
+        h('div', { class: 'side-list' }, ...data.tops.slice(0, 6).map((t) => h('a', { class: 'it', href: `#/characters/${t.id}` }, h('span', { class: 'k' }, t.gameName), h('span', { class: 'row', style: { gap: '8px', flexWrap: 'nowrap', minWidth: 0 } }, h('span', { class: 'coin sm' }, t.avatar), h('b', { style: { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, cleanName(t.name))), h('span', { class: 'num' }, t.points))))) : null,
       data.log.length ? h('div', { class: 'card quiet pad col', style: { gap: '8px' } }, h('div', { class: 'label' }, '动态'),
         h('div', { class: 'feed' }, ...data.log.map((x) => h('div', { class: /晋级|王者|连胜|爆冷/.test(x.text) ? 'hot' : '' }, x.text)))) : null);
   }
@@ -117,7 +130,7 @@ export async function lobbyView(root, { go, session, meta }) {
       h('div', { class: 'section-title' }, h('h2', {}, '等人入座的组局'), h('a', { href: '#/rooms', class: 'small' }, '全部组局 →')),
       h('div', { class: 'rooms' }, ...rooms.slice(0, 3).map((r) => h('a', { class: 'card room', href: `#/room/${r.id}` },
         h('div', { class: 'row', style: { justifyContent: 'space-between' } }, h('span', { class: 't' }, r.title), h('span', { class: 'chip' }, r.gameName)),
-        h('div', { class: 'slots' }, ...Object.values(r.seats).map((s) => s ? h('span', { class: 'coin sm', title: s.character.name }, s.character.avatar) : h('span', { class: 'slot-dot' }, '＋'))),
+        h('div', { class: 'slots' }, ...Object.values(r.seats).map((s) => s ? h('span', { class: 'coin sm', title: cleanName(s.character.name) }, s.character.avatar) : h('span', { class: 'slot-dot' }, '＋'))),
         h('div', { class: 'small muted' }, `${r.filled}/${r.players} 人 · 房主 ${r.host?.name || '—'}`))))) : null);
   }
 
@@ -155,10 +168,10 @@ export async function lobbyView(root, { go, session, meta }) {
     c.el.classList.toggle('hot', !!m.hot);
     c.head.replaceChildren(h('span', {}, m.gameName, h('span', { class: 'small muted', style: { marginLeft: '8px', fontFamily: 'var(--sans)', fontWeight: 400 } }, MODE_NAMES[m.mode])),
       m.paused ? h('span', { class: 'small muted' }, '已暂停') : m.thinking ? h('span', { class: 'thinking-dot' }, `${m.seatNames?.[m.thinking] || ''}思考中`) : null);
-    c.hl.textContent = m.lastLabel ? `第 ${m.plies} 手 · ${m.lastLabel}` : '刚刚开局';
+    c.hl.textContent = progress(m);
     const seats = Object.keys(m.players);
-    c.whoRow.replaceChildren(...seats.slice(0, 6).map((s) => h('span', { class: 'coin', title: m.players[s]?.name }, m.players[s]?.avatar || '？')),
-      h('span', {}, seats.length === 2 ? `${m.players[seats[0]]?.name} 对 ${m.players[seats[1]]?.name}` : `${seats.length} 人 · ${seats.map((s) => m.players[s]?.name).join('、')}`));
+    c.whoRow.replaceChildren(...seats.slice(0, 6).map((s) => h('span', { class: 'coin', title: nm(m.players[s]) }, m.players[s]?.avatar || '？')),
+      h('span', { title: seats.map((s) => nm(m.players[s])).join('、') }, seats.length === 2 ? summarizeSeats(seats.map((s) => m.players[s]?.name)) : `${seats.length} 人 · ${summarizeSeats(seats.map((s) => m.players[s]?.name))}`));
     c.sub.textContent = `开局 ${fmtTime(m.started_at)}`;
   }
 
@@ -187,11 +200,15 @@ export async function lobbyView(root, { go, session, meta }) {
   function drawRecent() {
     if (!data.recent.length) { recent.replaceChildren(emptyState('还没有结束的对局。', { wm: '局', action: h('a', { class: 'btn primary', href: '#/new' }, '开一局') })); return; }
     recent.replaceChildren(h('div', { class: 'card table-wrap' }, h('table', { class: 'list recent-list' },
-      ...data.recent.slice(0, 8).map((m) => linkRow(`#/match/${m.id}`, [
-        h('td', { class: 'c-game' }, h('span', { class: 'chip' }, m.gameName)),
-        h('td', { class: 'c-players' }, Object.values(m.players).map((pl) => pl?.name).join(' · ')),
-        h('td', { class: 'c-result muted', style: { whiteSpace: 'normal' } }, resultText(m)),
-        h('td', { class: 'c-time num muted' }, fmtTime(m.finished_at || m.created_at))], { label: `${m.gameName}：${Object.values(m.players).map((pl) => pl?.name).join(Object.keys(m.players).length === 2 ? ' 对 ' : '、')}，${resultText(m)}` })))));
+      ...data.recent.slice(0, 8).map((m) => {
+        const names = Object.values(m.players).map((pl) => pl?.name);
+        const who = summarizeSeats(names);
+        return linkRow(`#/match/${m.id}`, [
+          h('td', { class: 'c-game' }, h('span', { class: 'chip' }, m.gameName)),
+          h('td', { class: 'c-players', title: names.map(cleanName).join('、') }, who),
+          h('td', { class: 'c-result muted', style: { whiteSpace: 'normal' } }, resultText(m)),
+          h('td', { class: 'c-time num muted' }, fmtTime(m.finished_at || m.created_at))], { label: `${m.gameName}：${who}，${resultText(m)}` });
+      }))));
   }
 
   function subscribe() {

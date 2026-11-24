@@ -1,15 +1,15 @@
 // 选手：列表、新建、主页。
 
-import { h, api, post, patch, guard, toast, tierBadge, avatar, modelLine, fmtTime, fmtMs, fmtTokens, MODE_NAMES, resultText, dialog, seatOutcome, pageHead, confirmDialog, promptDialog, setTitle, emptyState, linkRow, pressed, icon } from './ui.js';
+import { h, api, post, patch, guard, toast, tierBadge, avatar, modelLine, fmtTime, fmtMs, fmtTokens, MODE_NAMES, resultText, dialog, seatOutcome, pageHead, confirmDialog, promptDialog, setTitle, emptyState, linkRow, pressed, icon, guardConfirm, cleanName, summarizeSeats, markInvalid } from './ui.js';
 
 const EMOJIS = ['🦊', '🐯', '🐼', '🦁', '🐉', '🦅', '🐺', '🦉', '🐬', '🦄', '🐢', '🐲', '🦈', '🐙', '🦚', '🐝', '🐧', '🦝', '🐸', '🦋', '🐳', '🦜', '🐻', '🐨'];
 /** Agent 接入令牌：只在生成时显示一次 */
 export function tokenDialog(name, token) {
   const box = h('input', { type: 'text', value: token, readonly: true, onclick: (e) => e.target.select(), style: { fontFamily: 'var(--mono)' } });
-  const dlg = dialog(`「${name}」的接入令牌`, h('div', { class: 'col', style: { gap: '12px' } },
-    h('div', { class: 'small' }, '把这个令牌交给你的 agent。令牌只显示这一次，网站只保存它的哈希；丢了就在选手主页重新生成（旧令牌立即失效）。'),
+  const dlg = dialog(`「${cleanName(name)}」的接入令牌`, h('div', { class: 'col', style: { gap: '12px' } },
+    h('div', { class: 'small' }, '把这个令牌交给你的 Agent。令牌只显示这一次，网站只保存它的哈希；丢了就在它的主页重新生成（旧令牌立即失效）。'),
     h('div', { class: 'keyline' }, box, h('button', { class: 'btn sm', type: 'button', onclick: async () => { try { await navigator.clipboard.writeText(token); toast('已复制'); } catch { box.select(); } } }, '复制')),
-    h('div', { class: 'small' }, '接入方法见 ', h('a', { href: '#/agent-guide' }, '「Agent 接入说明」'), '：HTTP 接口或 MCP 都可以，agent 在线时才会被自动匹配。'),
+    h('div', { class: 'small' }, '接入方法见 ', h('a', { href: '#/agent-guide' }, '「Agent 接入」'), '：HTTP 接口或 MCP 都可以，Agent 在线时才会被自动匹配。'),
   ), [h('button', { class: 'btn primary', type: 'button', onclick: () => dlg.close() }, icon('check', 16), '我已保存')]);
   dlg.dataset.keep = '1';
   return dlg;
@@ -23,21 +23,21 @@ export async function charactersView(root, { meta, go, reloadMeta, session }) {
   const sys = list.filter((c) => c.system || (c.mine && c.kind === 'human'));
 
   const card = (c) => h('a', { class: 'card char', href: `#/characters/${c.id}` },
-    h('div', { class: 'top-row' }, avatar(c), h('div', { class: 'grow', style: { minWidth: 0 } }, h('div', { class: 'nm' }, c.name), h('div', { class: 'md' }, modelLine(c)))),
-    c.kind === 'model' ? h('div', { class: 'style' }, c.style || h('span', { class: 'muted' }, '无风格设定')) : null,
+    h('div', { class: 'top-row' }, avatar(c), h('div', { class: 'grow', style: { minWidth: 0 } }, h('div', { class: 'nm' }, cleanName(c.name)), h('div', { class: 'md' }, modelLine(c)))),
+    c.kind === 'model' && c.style ? h('div', { class: 'style' }, c.style) : null,
     h('div', { class: 'foot' },
-      h('div', { class: 'row', style: { gap: '6px' } }, tierBadge(c.tier), h('span', { class: 'small muted' }, `${c.tier.points} 分`)),
-      h('div', { class: 'row', style: { gap: '6px' } },
+      h('div', { class: 'foot-score' }, tierBadge(c.tier), h('span', { class: 'small muted num' }, `${c.tier.points} 分`)),
+      h('div', { class: 'foot-tags' },
         !c.ranked ? h('span', { class: 'chip' }, '仅娱乐赛') : null,
         c.kind === 'agent' ? h('span', { class: `chip ${c.online ? 'good' : ''}` }, c.online ? 'Agent 在线' : 'Agent 离线') : null,
-        c.auto_match ? h('span', { class: 'chip good', title: '今天主动参加的对局 / 每日上限（组局不计）' }, `今日 ${c.today.games}/${c.daily_limit}`) : null)),
+        c.auto_match ? h('span', { class: 'chip', title: '今天主动参加的对局 / 每日上限（组局不计）' }, `今日 ${c.today.games}/${c.daily_limit}`) : null)),
   );
 
   root.replaceChildren(
     pageHead('蛐蛐', '养自己的 AI 蛐蛐：接一个模型，或者让你的 Agent 亲自上场。配置创建后锁定，想换就派生一只新的。', '养'),
     session.user ? h('div', { class: 'section-title' }, h('h2', {}, '我的蛐蛐')) : null,
     session.user ? h('div', { class: 'cards' }, ...mine.map(card), h('button', { class: 'card char new', type: 'button', onclick: () => createDialog({ meta, reloadMeta, onDone: (c) => go(`#/characters/${c.id}`) }) }, icon('plus', 22), '养一只新蛐蛐'))
-      : emptyState('登录后可以养自己的蛐蛐。', { wm: '养', action: h('a', { class: 'btn primary', href: '#/login?next=%23%2Fcharacters' }, '登录') }),
+      : emptyState('登录后可以养自己的蛐蛐。', { wm: null, action: h('a', { class: 'btn primary', href: '#/login?next=%23%2Fcharacters' }, '登录') }),
     h('div', { class: 'section-title section-gap' }, h('h2', {}, '系统选手与我')),
     h('div', { class: 'cards' }, ...sys.map(card)),
   );
@@ -52,6 +52,7 @@ export function createDialog({ meta, reloadMeta, base = null, onDone }) {
   if (meta.dev) meta.presets = meta.presets.some((p) => p.id === 'mock') ? meta.presets : [...meta.presets, { id: 'mock', name: '模拟模型（开发用）', models: ['mock'], baseURL: null, needsKey: false, ranked: true, showsReasoning: true, canDisableThinking: true }];
 
   const body = h('div', { class: 'col', style: { gap: '14px' } });
+  const refs = {};
   const testOut = h('div', { class: 'small' });
   let keys = { ...meta.keys };
 
@@ -61,12 +62,12 @@ export function createDialog({ meta, reloadMeta, base = null, onDone }) {
     const p = preset();
     const keyState = keys[f.provider];
     const datalist = h('datalist', { id: 'model-options' }, ...(p?.models || []).map((m) => h('option', { value: m })));
-    const keyInput = h('input', { type: 'password', placeholder: `${p?.name || ''} API Key`, autocomplete: 'off' });
+    const keyInput = h('input', { type: 'password', 'aria-label': `${p?.name || ''} API Key`, autocomplete: 'off' });
     const kindSeg = h('div', { class: 'seg', role: 'group', 'aria-label': '选手类型' }, ...[['model', 'AI 模型'], ['agent', '自带 Agent'], ['builtin', '内置 AI']].map(([v, l]) => h('button', { type: 'button', class: f.kind === v ? 'on' : '', ...pressed(f.kind === v), onclick: () => { f.kind = v; draw(); } }, l)));
     body.replaceChildren(
       base ? h('div', { class: 'small muted' }, `从「${base.name}」派生：可以修改配置，积分从头算。`) : kindSeg,
       h('div', { class: 'grid2' },
-        h('label', { class: 'field' }, h('span', {}, '名字'), h('input', { type: 'text', value: f.name, maxlength: 24, placeholder: '例如：深思小鹿', oninput: (e) => { f.name = e.target.value; } })),
+        h('label', { class: 'field' }, h('span', {}, '名字'), refs.name = h('input', { type: 'text', value: f.name, maxlength: 24, required: true, placeholder: '例如：深思小鹿', oninput: (e) => { f.name = e.target.value; } })),
         h('div', { class: 'field' }, h('span', {}, '头像'), h('div', { class: 'emoji-pick', role: 'group', 'aria-label': '头像' }, ...EMOJIS.slice(0, 16).map((e) => h('button', { type: 'button', class: f.avatar === e ? 'on' : '', ...pressed(f.avatar === e), onclick: () => { f.avatar = e; draw(); } }, e)))),
       ),
       f.kind === 'model' ? [
@@ -76,7 +77,7 @@ export function createDialog({ meta, reloadMeta, base = null, onDone }) {
               ...meta.presets.map((x) => h('option', { value: x.id, selected: x.id === f.provider }, `${x.name}${keys[x.id] === 'none' ? '（未配置密钥）' : ''}`)))),
           h('label', { class: 'field' }, h('span', {}, '模型 ID'),
             h('div', { class: 'keyline' },
-              h('input', { type: 'text', value: f.model, list: 'model-options', oninput: (e) => { f.model = e.target.value; } }), datalist,
+              refs.model = h('input', { type: 'text', value: f.model, list: 'model-options', required: true, placeholder: `例如：${p?.models?.[0] || 'deepseek-chat'}`, oninput: (e) => { f.model = e.target.value; } }), datalist,
               h('button', { class: 'btn sm', type: 'button', title: '从接口获取可用模型', onclick: guard(async () => {
                 const r = await post('/provider-models', { provider: f.provider, baseURL: f.base_url || '' });
                 datalist.replaceChildren(...r.models.map((m) => h('option', { value: m })));
@@ -90,18 +91,18 @@ export function createDialog({ meta, reloadMeta, base = null, onDone }) {
             keys = r.keys; meta.keys = r.keys; reloadMeta?.(); toast('密钥已加密保存'); draw();
           }) }, '保存'))) : null,
         p.customBaseURL ? h('label', { class: 'field' }, h('span', {}, '接口地址'),
-          h('input', { type: 'text', value: f.base_url || '', placeholder: p.baseURL || 'https://…/v1', oninput: (e) => { f.base_url = e.target.value; } }),
+          refs.base = h('input', { type: 'text', value: f.base_url || '', placeholder: `例如：${p.baseURL || 'https://api.example.com/v1'}`, oninput: (e) => { f.base_url = e.target.value; } }),
           p.note ? h('span', {}, p.note) : null) : null,
         !p.ranked ? h('div', { class: 'small muted' }, '这个平台的选手只能下娱乐赛，不参加排位。') : null,
         h('div', { class: 'field' }, h('span', {}, '推理强度'),
           h('div', { class: 'seg', role: 'group', 'aria-label': '推理强度' }, ...Object.entries(meta.efforts).filter(([v]) => v !== 'off' || p.canDisableThinking).map(([v, l]) => h('button', { type: 'button', class: f.effort === v ? 'on' : '', ...pressed(f.effort === v), onclick: () => { f.effort = v; draw(); } }, l)))),
         h('label', { class: 'field' }, h('span', {}, '风格'),
-          h('textarea', { maxlength: 300, placeholder: STYLE_EXAMPLES[Math.floor(Math.random() * STYLE_EXAMPLES.length)], oninput: (e) => { f.style = e.target.value; } }, f.style || '')),
+          h('textarea', { maxlength: 300, placeholder: `例如：${STYLE_EXAMPLES[Math.floor(Math.random() * STYLE_EXAMPLES.length)]}`, oninput: (e) => { f.style = e.target.value; } }, f.style || '')),
         h('div', { class: 'row', style: { gap: '20px' } },
           h('label', { class: 'switch', title: '每盘结束后写一句复盘笔记，下一盘带上最近 5 条' }, h('input', { type: 'checkbox', checked: f.memory, onchange: (e) => { f.memory = e.target.checked; } }), '跨局记忆'),
           h('label', { class: 'switch' }, h('input', { type: 'checkbox', checked: f.show_legal, onchange: (e) => { f.show_legal = e.target.checked; } }), '提供合法着法列表')),
       ] : f.kind === 'agent' ? [
-        h('div', { class: 'note' }, '选手背后是你自己的 agent（Claude Code、Codex 或你写的程序）：轮到它时，agent 用接入令牌来领回合、想好后提交。思考、记忆都由 agent 自己负责。Agent 选手在单独的 Agent 天梯排名，只在 agent 在线时参加自动匹配。'),
+        h('div', { class: 'note' }, '这只蛐蛐背后是你自己的 Agent（Claude Code、Codex 或你写的程序）：轮到它时，Agent 用接入令牌来领回合、想好后提交。思考、记忆都由 Agent 自己负责。Agent 蛐蛐在单独的 Agent 天梯排名，只在 Agent 在线时参加自动匹配。'),
         h('label', { class: 'field' }, h('span', {}, '每步限时（秒）'), h('input', { type: 'number', min: 30, max: 900, value: f.agent_timeout || 180, oninput: (e) => { f.agent_timeout = Number(e.target.value); } }),
           h('span', {}, '限时内没来领回合判负；领了没交按无效处理（最多重来 3 次）。')),
       ] : h('label', { class: 'field' }, h('span', {}, '搜索深度'),
@@ -125,8 +126,20 @@ export function createDialog({ meta, reloadMeta, base = null, onDone }) {
   const dlg = dialog(base ? '派生一只新蛐蛐' : '养一只新蛐蛐', body, [
     h('button', { class: 'btn', type: 'button', onclick: () => dlg.close() }, '取消'),
     h('button', { class: 'btn primary', type: 'button', onclick: guard(async () => {
+      // 先就地检查必填项：错在哪一栏，就在那一栏下面说，焦点移过去
+      const name = (f.name || '').trim();
+      if (!name) return markInvalid(refs.name, '给它起个名字');
+      if (cleanName(name) !== name) return markInvalid(refs.name, '名字含无法识别的字符');
+      if (f.kind === 'model' && !(f.model || '').trim()) return markInvalid(refs.model, '填一个模型 ID，或点「列表」从接口获取');
+      if (f.kind === 'model' && preset()?.customBaseURL && f.provider === 'custom' && !(f.base_url || '').trim()) return markInvalid(refs.base, '自定义接口需要填写地址');
       const payload = { ...f };
-      const c = base ? await post(`/characters/${base.id}/derive`, payload) : await post('/characters', payload);
+      let c;
+      try {
+        c = base ? await post(`/characters/${base.id}/derive`, payload) : await post('/characters', payload);
+      } catch (e) {
+        if (/名字/.test(e.message) && refs.name) return markInvalid(refs.name, e.message);
+        throw e;
+      }
       dlg.close();
       toast(`已创建「${c.name}」`);
       if (c.agentToken) tokenDialog(c.name, c.agentToken);
@@ -139,14 +152,15 @@ export function createDialog({ meta, reloadMeta, base = null, onDone }) {
 
 function lineChart(points) {
   const W = 520, H = 140, P = 28;
+  if (points.length < 2) {
+    // 空状态用 HTML：字号跟着页面走，底下一根虚线示意曲线的位置
+    const n = 2 - points.length;
+    return h('div', { class: 'chart-empty' }, h('i', { class: 'chart-empty-line', 'aria-hidden': 'true' }), h('p', {}, `再下 ${n} 盘排位赛就能看到积分曲线`));
+  }
   const svgEl = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   svgEl.setAttribute('class', 'chart');
   svgEl.setAttribute('viewBox', `0 0 ${W} ${H}`);
   svgEl.style.width = '100%';
-  if (points.length < 2) {
-    svgEl.innerHTML = `<text x="${W / 2}" y="${H / 2}" text-anchor="middle">下满两盘排位赛后显示积分曲线</text>`;
-    return svgEl;
-  }
   const vals = points.map((p) => p.score);
   const lo = Math.min(...vals) - 20, hi = Math.max(...vals) + 20;
   const X = (i) => P + (i / (points.length - 1)) * (W - P - 8);
@@ -193,9 +207,10 @@ export async function profileView(root, id, { meta, go, reloadMeta }) {
   const g = p.games.slice().sort((a, b) => b.rating.played - a.rating.played)[0]; // 主页显示下得最多的游戏
   const r = g.rating;
   const mySeat = (m) => Object.entries(m.seats).find(([, x]) => x === c.id)?.[0];
-  setTitle(c.name, '蛐蛐');
+  setTitle(cleanName(c.name), '蛐蛐');
 
   const settings = h('div', { class: 'col', style: { gap: '10px' } });
+  let newName = null;
   const drawSettings = () => {
     if (c.system) { settings.replaceChildren(h('div', { class: 'small muted' }, '系统参照选手，用来给新选手定级，让积分有固定参照。')); return; }
     if (c.kind === 'human') { settings.replaceChildren(h('div', { class: 'small muted' }, c.mine ? '你自己。亲自上场时用这个角色。' : '一位真人玩家。')); return; }
@@ -203,11 +218,10 @@ export async function profileView(root, id, { meta, go, reloadMeta }) {
     settings.replaceChildren(
       c.kind === 'agent' ? h('div', { class: 'col', style: { gap: '10px' } },
         h('div', { class: 'row', style: { gap: '8px' } }, h('span', { class: `chip ${c.online ? 'good' : ''}` }, c.online ? '在线' : '离线'),
-          h('span', { class: 'small muted' }, c.last_seen ? `最近来过：${fmtTime(c.last_seen)}` : 'agent 还没有来过')),
+          h('span', { class: 'small muted' }, c.last_seen ? `最近来过：${fmtTime(c.last_seen)}` : 'Agent 还没有来过')),
         h('label', { class: 'field' }, h('span', {}, '每步限时（秒）'), h('input', { type: 'number', min: 30, max: 900, value: c.agent_timeout || 180, onchange: guard(async (e) => { Object.assign(c, await patch(`/characters/${c.id}`, { agent_timeout: Number(e.target.value) })); toast('已保存'); }) })),
         h('div', { class: 'row' },
-          h('button', { class: 'btn sm', type: 'button', onclick: guard(async () => {
-            if (c.hasToken && !await confirmDialog({ title: '重新生成接入令牌', body: '重新生成后旧令牌立即失效，正在用旧令牌的 agent 会断开。', okText: '重新生成', danger: true })) return;
+          h('button', { class: 'btn sm', type: 'button', onclick: guardConfirm(() => !c.hasToken || confirmDialog({ title: '重新生成接入令牌', body: '重新生成后旧令牌立即失效，正在用旧令牌的 Agent 会断开。', okText: '重新生成', danger: true }), async () => {
             const r = await post(`/characters/${c.id}/agent-token`);
             c.hasToken = true;
             tokenDialog(c.name, r.agentToken);
@@ -224,17 +238,16 @@ export async function profileView(root, id, { meta, go, reloadMeta }) {
           toast(t.ok ? `连接成功：${t.text}` : t.error, !t.ok);
         }) }, '测试连接') : null,
         h('button', { class: 'btn sm', type: 'button', onclick: () => createDialog({ meta, reloadMeta, base: c, onDone: (n) => go(`#/characters/${n.id}`) }) }, '派生新选手'),
-        h('button', { class: 'btn sm', type: 'button', onclick: guard(async () => {
-          const name = await promptDialog({ title: '改名', label: '新名字', value: c.name, maxlength: 24, okText: '改名' });
-          if (!name || name === c.name) return;
-          Object.assign(c, await patch(`/characters/${c.id}`, { name }));
+        h('button', { class: 'btn sm', type: 'button', onclick: guardConfirm(async () => {
+          newName = await promptDialog({ title: '改名', label: '新名字', value: cleanName(c.name), maxlength: 24, okText: '改名' });
+          return !!newName && newName !== c.name;
+        }, async () => {
+          Object.assign(c, await patch(`/characters/${c.id}`, { name: newName }));
           profileView(root, id, { meta, go, reloadMeta });
         }) }, '改名'),
-        h('button', { class: `btn sm ${c.archived ? '' : 'ghost danger'}`, type: 'button', onclick: guard(async () => {
-          const ok = await confirmDialog(c.archived
-            ? { title: '恢复选手', body: `恢复「${c.name}」？它会重新出现在列表和排行榜里。`, okText: '恢复' }
-            : { title: '归档选手', body: `归档后「${c.name}」不再出现在列表和排行榜里，历史对局保留。`, okText: '归档', danger: true });
-          if (!ok) return;
+        h('button', { class: `btn sm ${c.archived ? '' : 'ghost danger'}`, type: 'button', onclick: guardConfirm(() => confirmDialog(c.archived
+          ? { title: '恢复蛐蛐', body: `恢复「${cleanName(c.name)}」？它会重新出现在列表和排行榜里。`, okText: '恢复' }
+          : { title: '归档蛐蛐', body: `归档后「${cleanName(c.name)}」不再出现在列表和排行榜里，历史对局保留。`, okText: '归档', danger: true }), async () => {
           await patch(`/characters/${c.id}`, { archived: !c.archived });
           go('#/characters');
         }) }, c.archived ? '恢复' : '归档')),
@@ -244,12 +257,46 @@ export async function profileView(root, id, { meta, go, reloadMeta }) {
 
   const m = p.metrics;
   const tags = Object.entries(m.tags || {});
+  // 复盘笔记：连着好几条一模一样的合成一条「×N」
+  const notes = [];
+  for (const n of p.notes) {
+    const last = notes[notes.length - 1];
+    if (last && last.text === n.text) { last.n++; last.oldest = n.created_at; } else notes.push({ ...n, n: 1, oldest: n.created_at });
+  }
+  const RESULT = { w: ['胜', 'good'], d: ['和', ''], l: ['负', 'bad'] };
+  const PAGE = 20;
+  let shownMatches = PAGE;
+  const matchBox = h('div');
+  const matchRow = (x) => {
+    const s = mySeat(x);
+    const oppNames = Object.entries(x.players).filter(([seat]) => seat !== s).map(([, pl]) => pl?.name);
+    const opp = summarizeSeats(oppNames);
+    const o = x.status === 'running' ? null : x.result?.aborted ? null : seatOutcome(x.result, s);
+    const res = x.status === 'running' ? h('span', { class: 'chip' }, '进行中') : x.result?.aborted ? h('span', { class: 'chip', title: resultText(x) }, '中止') : h('span', { class: `chip res ${RESULT[o][1]}`, title: resultText(x) }, RESULT[o][0]);
+    const resText = x.status === 'running' ? '进行中' : x.result?.aborted ? '中止' : RESULT[o][0];
+    const seatLabel = String(x.seatNames?.[s] || s || '').replace(/号位$/, '号');
+    const delta = x.rating_changes?.[c.id]?.delta;
+    return linkRow(`#/match/${x.id}`, [
+      h('td', { class: 'muted' }, fmtTime(x.created_at)), h('td', { title: oppNames.map(cleanName).join('、') }, oppNames.length ? opp : '—'),
+      h('td', {}, h('span', { class: 'chip' }, x.gameName), ' ', h('span', { class: 'small muted' }, seatLabel)),
+      h('td', {}, MODE_NAMES[x.mode]), h('td', {}, res),
+      h('td', { class: 'num' }, delta === undefined ? '' : h('span', { style: { color: delta >= 0 ? 'var(--good)' : 'var(--bad)' } }, delta >= 0 ? `+${delta}` : delta))],
+    { label: `${fmtTime(x.created_at)} ${x.gameName} 对 ${opp}：${resText}` });
+  };
+  const drawMatches = () => {
+    matchBox.replaceChildren(h('div', { class: 'table-wrap' }, h('table', { class: 'list recent-matches' },
+      h('tr', {}, h('th', {}, '时间'), h('th', {}, '对手'), h('th', {}, '游戏 · 座位'), h('th', {}, '模式'), h('th', {}, '结果'), h('th', { class: 'num' }, '积分')),
+      ...p.matches.slice(0, shownMatches).map(matchRow))),
+    p.matches.length > shownMatches ? h('div', { class: 'more-row' }, h('button', { class: 'btn sm', type: 'button', onclick: () => { shownMatches += PAGE; drawMatches(); } }, `加载更多（还有 ${p.matches.length - shownMatches} 盘）`)) : null);
+  };
+  if (p.matches.length) drawMatches();
   root.replaceChildren(h('div', { class: 'profile' },
     h('div', { class: 'col' },
       h('div', { class: 'card pad col' },
-        h('div', { class: 'row' }, avatar(c, 'lg'), h('div', { class: 'grow' }, h('h2', {}, c.name), h('div', { class: 'small muted' }, modelLine(c)), c.effortName && c.kind === 'model' ? h('div', { class: 'small muted' }, `推理强度：${c.effortName}${c.memory ? ' · 跨局记忆' : ''}${c.show_legal ? '' : ' · 不提供合法着法'}`) : null)),
+        h('div', { class: 'row' }, avatar(c, 'lg'), h('div', { class: 'grow' }, h('h2', {}, cleanName(c.name)), h('div', { class: 'small muted' }, modelLine(c)), c.effortName && c.kind === 'model' ? h('div', { class: 'small muted' }, `推理强度：${c.effortName}${c.memory ? ' · 跨局记忆' : ''}${c.show_legal ? '' : ' · 不提供合法着法'}`) : null)),
         c.style ? h('div', { class: 'note' }, c.style) : null,
         h('div', { class: 'row' }, tierBadge(r.tier), h('b', { style: { fontSize: '20px' } }, `${r.points}`), h('span', { class: 'small muted' }, `最高 ${Math.round(r.peak)}`)),
+        h('div', { class: 'label' }, `排位战绩 · ${g.name}`),
         h('div', { class: 'stat-grid' },
           h('div', { class: 'stat' }, h('b', {}, r.wins), h('small', {}, '胜')),
           h('div', { class: 'stat' }, h('b', {}, r.draws), h('small', {}, '和')),
@@ -258,7 +305,7 @@ export async function profileView(root, id, { meta, go, reloadMeta }) {
         c.parent_id ? h('a', { class: 'small', href: `#/characters/${c.parent_id}` }, '查看派生来源') : null,
       ),
       h('div', { class: 'card pad col' }, h('h3', {}, '设置'), settings),
-      p.notes.length ? h('div', { class: 'card quiet pad col' }, h('h3', {}, '复盘笔记'), ...p.notes.map((n) => h('div', { class: 'note' }, n.text, h('div', { class: 'small muted' }, fmtTime(n.created_at))))) : null,
+      notes.length ? h('div', { class: 'card quiet pad col' }, h('h3', {}, '复盘笔记'), ...notes.map((n) => h('div', { class: 'note' }, n.text, h('div', { class: 'small muted' }, n.n > 1 ? `×${n.n} · ${fmtTime(n.oldest)} – ${fmtTime(n.created_at)}` : fmtTime(n.created_at))))) : null,
     ),
     h('div', { class: 'col' },
       h('div', { class: 'grid2' },
@@ -266,25 +313,13 @@ export async function profileView(root, id, { meta, go, reloadMeta }) {
           h('div', { class: 'small muted' }, `共 ${m.moves} 步 · 平均每步 ${fmtMs(m.avgLatencyMs) || '—'} · ${fmtTokens(m.avgTokens)} tokens`),
           tags.length ? h('div', { class: 'row', style: { gap: '6px' } }, ...tags.map(([t, n]) => h('span', { class: 'chip' }, `${t} ${n}`))) : null),
         h('div', { class: 'card pad col' }, h('h3', {}, `积分曲线 · ${g.name}`), lineChart(g.history),
-          p.masterpiece ? h('div', { class: 'small' }, '代表作：', h('a', { href: `#/match/${p.masterpiece.id}` }, `对 ${Object.values(p.masterpiece.players).find((x) => x.id !== c.id)?.name}（平均损失 ${Math.round(p.masterpiece.avgLoss * 100)}%）`)) : null),
+          p.masterpiece ? h('div', { class: 'small' }, '代表作：', h('a', { href: `#/match/${p.masterpiece.id}` }, `对 ${cleanName(Object.values(p.masterpiece.players).find((x) => x.id !== c.id)?.name)}（平均损失 ${Math.round(p.masterpiece.avgLoss * 100)}%）`)) : null),
       ),
       h('div', { class: 'card quiet' }, h('div', { class: 'pad', style: { paddingBottom: 0 } }, h('h3', {}, '交手记录')),
         p.h2h.length ? h('div', { class: 'table-wrap' }, h('table', { class: 'list' }, h('tr', {}, h('th', {}, '对手'), h('th', { class: 'num' }, '胜'), h('th', { class: 'num' }, '和'), h('th', { class: 'num' }, '负')),
-          ...p.h2h.map((x) => linkRow(`#/characters/${x.opponent.id}`, [h('td', {}, h('span', { class: 'row', style: { gap: '6px', flexWrap: 'nowrap' } }, avatar(x.opponent, 'sm'), x.opponent.name)), h('td', { class: 'num' }, x.w), h('td', { class: 'num' }, x.d), h('td', { class: 'num' }, x.l)], { label: `${x.opponent.name}：${x.w} 胜 ${x.d} 和 ${x.l} 负` })))) : emptyState('还没有交过手。', { wm: '战', card: false })),
+          ...p.h2h.map((x) => linkRow(`#/characters/${x.opponent.id}`, [h('td', {}, h('span', { class: 'row', style: { gap: '6px', flexWrap: 'nowrap' } }, avatar(x.opponent, 'sm'), cleanName(x.opponent.name))), h('td', { class: 'num' }, x.w), h('td', { class: 'num' }, x.d), h('td', { class: 'num' }, x.l)], { label: `${x.opponent.name}：${x.w} 胜 ${x.d} 和 ${x.l} 负` })))) : emptyState('还没有交过手。', { wm: '战', card: false })),
       h('div', { class: 'card quiet' }, h('div', { class: 'pad', style: { paddingBottom: 0 } }, h('h3', {}, '最近对局')),
-        p.matches.length ? h('div', { class: 'table-wrap' }, h('table', { class: 'list' },
-          h('tr', {}, h('th', {}, '时间'), h('th', {}, '对手'), h('th', {}, '执'), h('th', {}, '模式'), h('th', {}, '结果'), h('th', { class: 'num' }, '积分')),
-          ...p.matches.map((x) => {
-            const s = mySeat(x);
-            const opp = { name: Object.entries(x.players).filter(([seat]) => seat !== s).map(([, pl]) => pl?.name).join('、') };
-            const res = x.status === 'running' ? '进行中' : x.result?.aborted ? '中止' : ({ w: '胜', d: '和', l: '负' })[seatOutcome(x.result, s)];
-            const delta = x.rating_changes?.[c.id]?.delta;
-            return linkRow(`#/match/${x.id}`, [
-              h('td', { class: 'muted' }, fmtTime(x.created_at)), h('td', {}, opp?.name || ''), h('td', {}, x.seatNames?.[s] || s),
-              h('td', {}, MODE_NAMES[x.mode]), h('td', { title: resultText(x) }, res),
-              h('td', { class: 'num' }, delta === undefined ? '' : h('span', { style: { color: delta >= 0 ? 'var(--good)' : 'var(--bad)' } }, delta >= 0 ? `+${delta}` : delta))],
-            { label: `${fmtTime(x.created_at)} 对 ${opp?.name || ''}：${res}` });
-          }))) : emptyState('还没有对局。', { wm: '局', card: false, action: c.mine && c.kind !== 'human' ? h('a', { class: 'btn primary', href: '#/new' }, '让它下一盘') : null })),
+        p.matches.length ? matchBox : emptyState('还没有对局。', { wm: '局', card: false, action: c.mine && c.kind !== 'human' ? h('a', { class: 'btn primary', href: '#/new' }, '让它下一盘') : null })),
     ),
   ));
 }

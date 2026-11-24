@@ -1,6 +1,6 @@
 // 天梯：角色榜 / 模型榜 / Agent 榜（积分的不确定性、不对称游戏的阵营战绩、出手统计）、对位热力图，自动匹配设置和动态。
 
-import { h, api, post, guard, toast, tierBadge, avatar, listen, pageHead, dialog, fmtMs, fmtTokens, fmtTime, pct, setTitle, emptyState, linkRow, pressed } from './ui.js';
+import { h, api, post, guard, toast, tierBadge, avatar, listen, pageHead, dialog, fmtMs, fmtTokens, fmtTime, pct, setTitle, emptyState, linkRow, pressed, cleanName } from './ui.js';
 
 const SIGMA0 = 25 / 3; // 新选手的 σ
 const VIEWS = [['characters', '角色榜'], ['models', '模型榜'], ['agents', 'Agent 榜']];
@@ -22,21 +22,24 @@ async function loadBoard(game, view) {
 
 /** 不确定性：服务端没给时按 μ、σ 自己算 */
 const uncOf = (r) => r.unc || { mid: Math.round(1000 + 40 * r.mu), pm: Math.round(40 * r.sigma), unsure: r.tierInfo?.tier === '定级中', placing: r.tierInfo?.tier === '定级中' };
-const nameOf = (r, view) => (view === 'models' ? r.model : r.name);
+const nameOf = (r, view) => (view === 'models' ? r.model : cleanName(r.name));
 
 function explain(sides) {
   dialog('积分怎么看', h('div', { class: 'col ladder-explain' },
     h('p', {}, '每位选手有两个数：', h('b', {}, '估计实力'), '，和它的', h('b', {}, '误差'), '（± 后面的数）。下得越多，误差越小。'),
     h('p', {}, '榜上的积分是保守分 = 估计实力 − 3 × 误差，也就是「很有把握真实水平不低于这个分」。新选手估计实力 2000 ± 333，所以从 1000 分起步，越下越往估计实力靠。'),
-    h('p', {}, h('span', { class: 'chip warn' }, '定级中'), ' 还没下满 5 盘，或者下满了成绩起伏还大、误差没降下来，名次先看个大概。'),
+    h('p', {}, '分数后面带「?」（如 1032?）或标着 ', h('span', { class: 'chip warn' }, '定级中'), ' 的，还没下满 5 盘，或者下满了成绩起伏还大、误差没降下来，名次先看个大概。'),
+    h('p', {}, '「参照」选手是系统放上来给大家定级用的，不参与排名，排在榜单最后。'),
     sides ? h('p', {}, `这个游戏两边强弱不同：${sides.map((s) => SIDE_LABEL[s]).join('、')}分开算胜率，也各算一份阵营分（停在格子上可以看）。`) : null));
 }
 
-/** 积分格：保守分 + 估计实力 ± 误差，底下一根「把握」条 */
+/** 积分格：保守分 + 估计实力 ± 误差，底下一根「把握」条。还在定级的写成「1032?」，误差放进悬停说明 */
 function scoreCell(r) {
   const u = uncOf(r);
   const sure = Math.max(0, Math.min(1, 1 - r.sigma / SIGMA0));
-  return h('td', { class: 'num score', title: `估计实力 ${u.mid} ± ${u.pm}；榜上积分 = ${u.mid} − 3 × ${u.pm}` },
+  const title = `估计实力 ${u.mid} ± ${u.pm}；榜上积分 = ${u.mid} − 3 × ${u.pm}${u.unsure ? '。还在定级，分数不稳' : ''}`;
+  if (u.unsure) return h('td', { class: 'num score prov', title }, h('b', {}, r.points, h('span', { class: 'q', 'aria-label': '（定级中）' }, '?')));
+  return h('td', { class: 'num score', title },
     h('b', {}, r.points),
     h('span', { class: 'unc' }, h('i', { class: 'sure', style: { '--s': sure.toFixed(3) } }), `${u.mid}±${u.pm}`));
 }
@@ -53,9 +56,11 @@ const dash = () => h('span', { class: 'muted' }, '—');
 function boardTable(board, view, hideIdle, showAll) {
   const sides = board.sides || [];
   const ext = !board.basic;
+  // 参照选手（系统选手）不参与排名，统一放到最后一组；真名次从 1 起
   let rank = 0;
-  const ranked = board.rows.map((r) => ({ r, n: r.system ? 0 : ++rank }));
+  const ranked = [...board.rows.filter((r) => !r.system).map((r) => ({ r, n: ++rank })), ...board.rows.filter((r) => r.system).map((r) => ({ r, n: 0 }))];
   const shown = ext && hideIdle ? ranked.filter(({ r }) => r.stats.recent >= board.active.min) : ranked;
+  const cols = 5 + sides.length + (view === 'models' ? 1 : 0) + (ext ? 3 : 0);
   const info = h('button', { class: 'info-dot', type: 'button', title: '积分怎么看', 'aria-label': '积分怎么看', onclick: (e) => { e.stopPropagation(); explain(board.sides); } }, 'i');
   const head = h('tr', {},
     h('th', { class: 'who' }, view === 'models' ? '模型' : '选手'),
@@ -66,17 +71,18 @@ function boardTable(board, view, hideIdle, showAll) {
     view === 'models' ? h('th', { class: 'num' }, '选手数') : null,
     h('th', { class: 'num', title: '胜–和–负' }, '胜–和–负'),
     ext ? [h('th', { class: 'num' }, '均步时'), h('th', { class: 'num' }, 'Token/局'), h('th', { class: 'num' }, '犯规率')] : null);
-  const body = shown.map(({ r, n }) => {
+  const firstRef = shown.findIndex(({ r }) => r.system);
+  const body = shown.map(({ r, n }, i) => {
     const u = uncOf(r);
     const s = r.stats;
-    return linkRow(`#/characters/${r.character_id}`, [
+    const groupHead = i === firstRef ? h('tr', { class: 'grp' }, h('td', { colspan: cols }, '参照（不参与排名）')) : null;
+    return [groupHead, linkRow(`#/characters/${r.character_id}`, [
       h('td', { class: 'who' }, h('span', { class: 'who-in' },
-        h('span', { class: `rank-no${n && n <= 3 ? ` top${n}` : ''}` }, n || '·'),
+        h('span', { class: `rank-no${n && n <= 3 ? ` top${n}` : ''}` }, n || '—'),
         avatar(r, 'sm'),
         h('span', { class: 'nm', title: nameOf(r, view) }, nameOf(r, view)),
-        r.system ? h('span', { class: 'chip' }, '参照') : null,
         u.unsure && !u.placing ? h('span', { class: 'chip warn', title: '下满了定级局，但误差还大，分数还不稳' }, '定级中') : null,
-        view === 'models' ? h('span', { class: 'small muted' }, `最佳：${r.name}`) : null)),
+        view === 'models' ? h('span', { class: 'small muted' }, `最佳：${cleanName(r.name)}`) : null)),
       h('td', {}, tierBadge(r.tierInfo)),
       scoreCell(r),
       ...sides.map((side) => sideCell(r.sides?.[side])),
@@ -87,7 +93,10 @@ function boardTable(board, view, hideIdle, showAll) {
         h('td', { class: 'num' }, s.avgMoveMs === null ? dash() : fmtMs(s.avgMoveMs)),
         h('td', { class: 'num' }, s.avgTokens === null ? dash() : fmtTokens(s.avgTokens)),
         h('td', { class: 'num' }, s.invalidRate === null ? dash() : h('span', { class: s.invalidRate > 0.1 ? 'warn' : '' }, pct(s.invalidRate))),
-      ] : null], { label: `第 ${n || '—'} 名 ${nameOf(r, view)}，${r.points} 分` });
+      ] : null,
+      // 手机：第二行只放战绩、场次和段位，其余数据点进主页看
+      h('td', { class: 'm-meta' }, h('span', { class: 'w' }, `${r.wins}胜`), ` ${r.draws}和 `, h('span', { class: 'l' }, `${r.losses}负`), ` · ${r.played} 局`, r.tierInfo ? [' · ', r.tierInfo.label || r.tierInfo.tier] : null)],
+    { label: `${n ? `第 ${n} 名` : '参照'} ${nameOf(r, view)}，${r.points} 分${u.unsure ? '（定级中）' : ''}` })];
   });
   const empty = shown.length ? null : emptyState(`最近 ${board.active?.days} 天没有下满 ${board.active?.min} 局的选手。`, { wm: '梯', card: false, action: h('button', { class: 'btn primary', type: 'button', onclick: showAll }, '看全部') });
   return [h('div', { class: 'table-scroll' }, h('table', { class: 'list ladder-table' }, head, body)), empty];
@@ -112,7 +121,7 @@ function pairDialog(ra, rb, c, view) {
       h('span', { class: `chip ${OUTCOME[g.o][1]}` }, OUTCOME[g.o][0]),
       h('span', { class: 'go' }, '回放 →')))),
     n > c.games.length ? h('div', { class: 'small muted' }, `只列出最近 ${c.games.length} 盘`) : null),
-  [h('a', { class: 'btn', href: `#/characters/${ra.character_id}` }, `${ra.name} 的主页`)]);
+  [h('a', { class: 'btn', href: `#/characters/${ra.character_id}` }, `${cleanName(ra.name)} 的主页`)]);
 }
 
 function heatCard(board, view) {
@@ -176,7 +185,7 @@ export async function ladderView(root, { go, meta, session }) {
     const head = h('div', { class: 'pad section-title ladder-head', style: { margin: 0 } }, h('div', { class: 'row' }, h('h2', {}, '排名'), gameTabs), h('div', { class: 'row' }, tabs, idle));
     if (!board.rows.length) {
       table.replaceChildren(head, view === 'agents'
-        ? emptyState('还没有 Agent 排位对局。', { wm: '梯', card: false, action: h('a', { class: 'btn primary', href: '#/agent-guide' }, '让你的 agent 当选手') })
+        ? emptyState('还没有 Agent 排位对局。', { wm: '梯', card: false, action: h('a', { class: 'btn primary', href: '#/agent-guide' }, '让你的 Agent 当蛐蛐') })
         : emptyState('这个游戏还没有排位对局。', { wm: '梯', card: false, action: session.user ? h('a', { class: 'btn primary', href: '#/characters' }, '给蛐蛐开自动匹配') : null }));
       heat.replaceChildren();
       return;
@@ -192,7 +201,7 @@ export async function ladderView(root, { go, meta, session }) {
       // 自动匹配的开关和节奏是全站设置，只有庄家能改；其他人看状态
       side.replaceChildren(
         h('div', { class: 'card quiet pad col' }, h('h3', {}, '自动匹配'), h('div', { class: 'small muted' }, s.enabled ? `运行中：同时最多 ${s.concurrency} 盘，段位相差 ${s.maxTierGap} 个大段以内才匹配。` : '庄家暂时关闭了自动匹配。'), h('div', { class: 'small muted' }, '想让你的蛐蛐参加：在它的主页打开「参加天梯自动匹配」。')),
-        h('div', { class: 'card quiet pad col' }, h('h3', {}, `今天可出战（${l.eligible.length}）`), l.eligible.length ? h('div', { class: 'row', style: { gap: '6px' } }, ...l.eligible.map((c) => h('span', { class: 'chip', title: `今日 ${c.today}/${c.limit}` }, c.avatar, ' ', c.name))) : h('div', { class: 'small muted' }, '暂无')),
+        h('div', { class: 'card quiet pad col' }, h('h3', {}, `今天可出战（${l.eligible.length}）`), l.eligible.length ? h('div', { class: 'row', style: { gap: '6px' } }, ...l.eligible.map((c) => h('span', { class: 'chip', title: `今日 ${c.today}/${c.limit}` }, c.avatar, ' ', cleanName(c.name)))) : h('div', { class: 'small muted' }, '暂无')),
         h('div', { class: 'card quiet pad col' }, h('h3', {}, '动态'), l.log.length ? h('div', { class: 'log' }, ...l.log.map((x) => h('div', {}, x.text))) : h('div', { class: 'small muted' }, '暂无')));
       return;
     }
@@ -223,7 +232,7 @@ export async function ladderView(root, { go, meta, session }) {
           h('span', { class: 'small muted' }, `进行中 ${l.running} 盘`)),
       ),
       h('div', { class: 'card quiet pad col' }, h('h3', {}, `今天可出战（${l.eligible.length}）`),
-        l.eligible.length ? h('div', { class: 'row', style: { gap: '6px' } }, ...l.eligible.map((c) => h('span', { class: 'chip', title: `今日 ${c.today}/${c.limit}` }, c.avatar, ' ', c.name))) : h('div', { class: 'small muted' }, '没有选手开启自动匹配，或今天的额度已用完')),
+        l.eligible.length ? h('div', { class: 'row', style: { gap: '6px' } }, ...l.eligible.map((c) => h('span', { class: 'chip', title: `今日 ${c.today}/${c.limit}` }, c.avatar, ' ', cleanName(c.name)))) : h('div', { class: 'small muted' }, '没有选手开启自动匹配，或今天的额度已用完')),
       h('div', { class: 'card quiet pad col' }, h('h3', {}, '动态'),
         l.log.length ? h('div', { class: 'log' }, ...l.log.map((x) => h('div', {}, x.text))) : h('div', { class: 'small muted' }, '暂无')),
     );
