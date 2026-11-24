@@ -5,6 +5,8 @@
 // 选目标（刀人、查验、投票、开枪、下毒）一律点左右的座位卡，由 duoView 给座位的 pick。
 // 隐藏信息：只用 view 里有的东西（view 已按视角裁剪过），玩家视角不会出现别人的身份和夜间行动。
 
+import { CARD_MS } from '../../games/speech.js'; // 相对路径：浏览器里是 /games/speech.js，测试里 Node 也能加载
+
 // 座位色：不用朱红，朱红留给狼人和死亡
 const COLORS = ['var(--black-side)', '#3559b5', '#9a5d24', '#2f7a70', '#7d3c98', '#a17a12', '#6b6b6b', '#4f6b2f', '#8a4f6b'];
 const ROLE_COLOR = { 狼人: '#b4241a', 预言家: '#2e4f86', 女巫: '#763c86', 猎人: '#a2632a', 村民: '#5d6b4e' };
@@ -112,6 +114,17 @@ function voteOutcome(v) {
   if (v.next === 'tie') return `${nums(v.tied || [])}平票，平票者再各说一句`;
   if (!Object.keys(v.counts || {}).length) return '全部弃票，无人出局';
   return '再次平票，无人出局';
+}
+
+/** 公告卡上的票型：每个被投的人一行「4 号 5 票 ← 1、2、3、6、8 号」，弃票单列一行 */
+function voteLines(v) {
+  const by = {};
+  for (const [voter, t] of Object.entries(v.votes || {})) (by[t] ||= []).push(voter);
+  const who = (list) => list.map(no).sort((a, b) => a - b).join('、');
+  const order = Object.keys(by).filter((t) => t !== 'none').sort((a, b) => by[b].length - by[a].length || no(a) - no(b));
+  const rows = order.map((t) => `${no(t)} 号 ${by[t].length} 票 ← ${who(by[t])} 号`);
+  if (by.none) rows.push(`弃票 ${by.none.length} 人：${who(by.none)} 号`);
+  return rows;
 }
 
 /** 一夜行动的简述（只含 view 里给了的字段） */
@@ -326,9 +339,10 @@ export default {
     return last ? { key: `log|${view.voteLog.length}`, links: pick(last.votes), out: last.out || null } : null;
   },
 
-  /** 回放时公告卡也要演完：多停 2.6 秒 */
-  pauseAfter(prev, view) { return this.announce(prev, view) ? 2600 : 0; },
+  /** 回放时公告卡也要演完：停公告卡的时长 */
+  pauseAfter(prev, view) { return this.announce(prev, view)?.ms || 0; },
 
+  /** 场上公告卡：{ kind, title, sub, lines（详情，一行一条）, ms（停多久，服务端按同样时长停顿） } */
   announce(prev, view) {
     if (!prev || !view) return null;
     const no = (s) => `${String(s).replace(/^\D+/, '')} 号`;
@@ -336,17 +350,25 @@ export default {
     const ck = view.checks || [];
     if (!view.god && ck.length > (prev.checks || []).length) {
       const c = ck.at(-1);
-      return { kind: `seer${c.wolf ? ' wolf' : ''}`, title: `${no(c.target)}是${c.wolf ? '狼人' : '好人'}`, sub: `第 ${c.day} 夜查验结果 · 只有你看得到` };
+      return { kind: `seer${c.wolf ? ' wolf' : ''}`, title: `${no(c.target)}是${c.wolf ? '狼人' : '好人'}`, sub: `第 ${c.day} 夜查验结果 · 只有你看得到`, ms: 3000 };
     }
+    // 天亮：昨夜谁出局；上帝视角另外写出昨夜的刀口、查验、用药（玩家视角只写自己知道的）
     if (view.dawn && view.dawn.day !== prev.dawn?.day) {
       const dead = view.dawn.dead || [];
-      return { kind: 'dawn', title: `第 ${view.dawn.day} 天 · 天亮了`, sub: dead.length ? `昨夜 ${dead.map(no).join('、')} 出局` : '昨夜平安夜，没有人出局' };
+      const night = view.lastNight && view.lastNight.day === view.dawn.day ? nightParts(view.lastNight) : [];
+      return { kind: 'dawn', title: `第 ${view.dawn.day} 天 · 天亮了`, sub: dead.length ? `昨夜 ${dead.map(no).join('、')}出局` : '昨夜平安夜，没有人出局', lines: night, ms: CARD_MS };
+    }
+    // 计票：不论有没有人出局都弹，带上票型
+    const vl = view.voteLog || [];
+    if (vl.length > (prev.voteLog || []).length) {
+      const v = vl.at(-1);
+      return { kind: v.out ? 'out' : 'vote', title: voteOutcome(v), sub: `第 ${v.day} 天 · ${v.stage === 'revote' ? '平票重投' : '放逐投票'}`, lines: voteLines(v), ms: CARD_MS };
     }
     const before = new Set((prev.deaths || []).map((d) => d.seat));
     const fresh = (view.deaths || []).filter((d) => !before.has(d.seat) && d.time === 'day');
     if (fresh.length) {
       const why = { vote: '被投票放逐', shot: '被猎人带走' };
-      return { kind: 'out', title: fresh.map((d) => no(d.seat)).join('、') + ' 出局', sub: fresh.map((d) => why[d.cause] || '出局').join('；') };
+      return { kind: 'out', title: fresh.map((d) => no(d.seat)).join('、') + ' 出局', sub: fresh.map((d) => why[d.cause] || '出局').join('；'), ms: CARD_MS };
     }
     return null;
   },
@@ -416,7 +438,7 @@ export default {
 
     // 操作区：常驻节点，输入框不随每次重画丢失内容和焦点
     const ctrlHead = el('div', { class: 'head' });
-    const input = el('input', { type: 'text', maxlength: 120, autocomplete: 'off' });
+    const input = el('input', { type: 'text', maxlength: 400, autocomplete: 'off' }); // 真正的上限按 view.maxLen 数字
     const count = el('span', { class: 'n' });
     const send = el('button', { type: 'submit', class: 'btn primary sm' });
     const form = el('form', { class: 'ww-form' }, input, count, send);

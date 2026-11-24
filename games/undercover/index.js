@@ -4,10 +4,12 @@
 // 平票时平票者各再说一句，其余存活者在平票者中重投；再平票本轮无人出局。
 
 import { PAIRS, HINTS } from './words.js';
-import { newSpeech, speechPause } from '../speech.js';
+import { newSpeech, speechPause, fitSpeech, CARD_MS } from '../speech.js';
 
 export const MAX_ROUNDS = 8;
-export const MAX_LEN = 30;
+/** 描述：提示里请选手控制在 SAY_LEN 字以内；真正的上限是 MAX_LEN（写长一点照样收下，超过上限在句号处收尾） */
+export const SAY_LEN = 40;
+export const MAX_LEN = 60;
 const ALL_SEATS = ['p1', 'p2', 'p3', 'p4', 'p5', 'p6', 'p7', 'p8'];
 export const PHASE_NAMES = { speak: '描述', vote: '投票', tiespeak: '平票发言', revote: '平票重投', over: '结束' };
 const CN_NUM = { 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8 };
@@ -48,7 +50,7 @@ export function cleanSpeech(text) {
   return t;
 }
 
-/** 发言是否合法：非空、不超过 30 字、不能包含自己的词（词里的字全部出现就算） */
+/** 发言是否合法：非空、不超过 MAX_LEN 字、不能包含自己的词（词里的字全部出现就算） */
 export function speechError(text, word) {
   if (!text) return '发言不能为空';
   const len = [...text].length;
@@ -346,7 +348,7 @@ export default {
       `你在玩「谁是卧底」，你是 ${seatName(seat)}，本局共 ${n} 人（1 号到 ${n} 号），其中 ${k} 名卧底。`,
       '',
       `【规则】大多数人（平民）拿到同一个词，卧底拿到一个相近但不同的词。你只知道自己的词，不知道自己是平民还是卧底。`,
-      `每一轮先按顺序每人用一句话描述自己的词：不超过 ${MAX_LEN} 字，不能说出这个词本身（词里的字不能全部出现）。`,
+      `每一轮先按顺序每人用一句话描述自己的词：不超过 ${SAY_LEN} 字，不能说出这个词本身（词里的字不能全部出现）。`,
       '所有人说完后，存活玩家同时投票（不能投自己），得票最多的人出局并公开身份。平票时平票者各再说一句，其余存活者在平票者中重新投票；再平票则本轮无人出局。',
       `胜负：卧底全部出局，平民胜；存活人数不超过 3 人且还有卧底，或存活卧底人数不少于平民，卧底胜；最多 ${MAX_ROUNDS} 轮，到时还有卧底存活也算卧底胜。`,
       '提示：描述太直白会帮卧底猜到平民的词，太含糊会被怀疑。如果多数人的描述和你的词对不上，你很可能就是卧底，要跟着多数人的方向说，别暴露。',
@@ -359,7 +361,7 @@ export default {
       '推断：谁可能是卧底、我是不是卧底',
       '理由：一句话说明你为什么这样描述',
       '胜率：你估计自己所在阵营获胜的概率，写成 0–100 的整数加 %',
-      `发言：你要说的一句话（不超过 ${MAX_LEN} 字）`,
+      `发言：你要说的一句话（不超过 ${SAY_LEN} 字）`,
       '投票阶段前四行同上，最后一行写投票对象，例如：',
       '投票：3号',
       style ? `\n【你的风格】${style}\n（风格只影响你的发言和判断取向，不能改变上面的规则和输出格式。）` : '',
@@ -380,7 +382,7 @@ export default {
     ];
     let ask;
     if (state.phase === 'speak') {
-      ask = `现在轮到你发言：用一句话描述你的词（不超过 ${MAX_LEN} 字，不能出现「${word}」本身），按五行格式回答，最后一行「发言：……」。`;
+      ask = `现在轮到你发言：用一句话描述你的词（不超过 ${SAY_LEN} 字，不能出现「${word}」本身），按五行格式回答，最后一行「发言：……」。`;
     } else if (state.phase === 'tiespeak') {
       ask = `上一轮投票 ${list(state.tied)} 平票。请你再说一句话（规则同上，不要重复说过的话），按五行格式回答，最后一行「发言：……」。`;
     } else if (state.phase === 'vote') {
@@ -402,7 +404,9 @@ export default {
       if (!m) return { action: null, attempted: null, winrate, error: '没有找到发言（最后一行应为「发言：……」）' };
       let raw = m[1];
       if (!raw.trim()) raw = t.slice(m.index + m[0].length).split('\n').find((l) => l.trim()) || '';
-      const sp = [...cleanSpeech(raw)].slice(0, MAX_LEN).join(''); // 模型写长了就截断，不算无效
+      // 发言是最后一项：冒号后面一直到回答结束都算（分几行写也不丢）
+      const rest = t.slice(m.index + m[0].length - m[1].length);
+      const sp = fitSpeech(cleanSpeech(rest.trim() ? rest : raw), MAX_LEN); // 超过上限在句号处收尾，不算无效
       if (state.queue[0] !== seat) return { action: null, attempted: sp, winrate, error: '现在不是你发言' };
       const err = speechError(sp, state.words[seat]);
       return err ? { action: null, attempted: sp, winrate, error: err } : { action: sp, attempted: sp, winrate, error: null };
@@ -451,11 +455,11 @@ export default {
   evalSpec: () => null,
 
   /** viewer 为座位时只给该座位能看到的信息；null 为上帝视角。对局结束后全部公开 */
-  /** 有人被投出时停一下，让画面中央的公告卡演完；有人刚发完言：按字数停（对局页逐字打出来，见 games/speech.js） */
+  /** 计票后（不论有没有人出局）停一下，让画面中央的票型公告卡演完；有人刚发完言：按字数停（对局页逐字打出来，见 games/speech.js） */
   interlude(prev, next) {
     if (!prev || !next) return 0;
     const sp = newSpeech(prev, next);
-    return (next.out.length > prev.out.length ? 2600 : 0) + (sp ? speechPause(sp.text) : 0);
+    return (next.voteLog.length > prev.voteLog.length || next.out.length > prev.out.length ? CARD_MS : 0) + (sp ? speechPause(sp.text) : 0);
   },
 
   view(state, viewer = null) {

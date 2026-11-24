@@ -1022,10 +1022,14 @@ export async function matchView(root, id, { characters, session }) {
     const col = root.querySelector('.arena .stage');
     if (!col) return;
     col.querySelector('.announce')?.remove();
-    const card = h('div', { class: `announce ${a.kind || ''}`, role: 'status' }, h('b', {}, a.title), a.sub ? h('span', {}, a.sub) : null);
+    // a.ms：卡停多久（服务端按同样时长停顿，见 games/speech.js 的 CARD_MS）；a.lines：详情（票型、昨夜的刀口查验用药）
+    const ms = a.ms || 2700;
+    const lines = (a.lines || []).filter(Boolean);
+    const card = h('div', { class: `announce ${a.kind || ''}`, role: 'status', style: { '--ann-ms': `${ms}ms` } }, h('b', {}, a.title), a.sub ? h('span', {}, a.sub) : null,
+      lines.length ? h('div', { class: 'ann-rows' }, ...lines.map((l) => h('i', {}, l))) : null);
     col.append(card);
     sfx('out');
-    setTimeout(() => card.remove(), 2700);
+    setTimeout(() => card.remove(), ms + 100);
   }
   // 手机上轮到自己（狼人杀、谁是卧底）：操作区钉在屏幕底部，第一次轮到时滚过去一次
   let turnSeen = null;

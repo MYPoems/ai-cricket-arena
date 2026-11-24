@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import game, { parseSeatRef, cleanSpeech, speechError, SETUPS, setupOf, MAX_DAYS, MAX_LEN } from '../games/werewolf/index.js';
-import { speechPause, typeMs, SPEECH } from '../games/speech.js';
+import { speechPause, typeMs, SPEECH, CARD_MS } from '../games/speech.js';
 import { replay } from '../games/index.js';
 
 /** 固定身份的局面：roles 按座位顺序给出，例如 'wwsthvvv'（w 狼 s 预言家 t 女巫 h 猎人 v 村民） */
@@ -311,7 +311,8 @@ test('解析模型回答：各阶段格式宽松，非法目标报错', () => {
   s = game.apply(s, 'p4', 'save');
   r = game.parseReply(s, 'p1', w('发言：「我是好人，大家听我说。」'));
   assert.equal(r.action, '我是好人，大家听我说。');
-  assert.equal(game.parseReply(s, 'p1', w(`发言：${'长'.repeat(61)}`)).action, '长'.repeat(60)); // 写长了截断
+  assert.equal(game.parseReply(s, 'p1', w(`发言：${'长'.repeat(61)}`)).action, '长'.repeat(61)); // 比以前的 60 字长也照样收下
+  assert.equal(game.parseReply(s, 'p1', w(`发言：${'长'.repeat(MAX_LEN + 5)}`)).action, `${'长'.repeat(MAX_LEN - 1)}…`); // 超过上限、没有句号：截断加省略号
   assert.equal(game.parseReply(s, 'p1', '判断：x\n胜率：50%\n发言：\n我是好人').action, '我是好人');
   s = talk(s);
   assert.equal(game.parseReply(s, 'p1', w('投票：弃票')).action, 'none');
@@ -652,4 +653,24 @@ test('有人发完言：按字数停顿（打字 + 打完后停留），其余�
   assert.equal(game.interlude(a, b), speechPause(b.speeches[0].text));
   assert.equal(game.interlude(b, { ...b }), 0);
   assert.equal(game.interlude(null, b), 0);
+});
+
+test('发言放宽：分几行写不丢，写长了在句号处收尾；计票后不论有没有人出局都停一张公告卡', () => {
+  let s = game.create({ players: 6, seed: 2, setup: game.newSetup });
+  // 走到第一天发言
+  for (let guard = 0; s.phase !== 'speak' && guard < 50; guard++) {
+    const seat = game.pending(s)[0];
+    s = game.apply(s, seat, game.autoAction(s, seat) ?? game.builtinMove(s, seat));
+  }
+  assert.equal(s.phase, 'speak');
+  const seat = s.queue[0];
+  const r = game.parseReply(s, seat, '判断：还早。\n推断：不好说。\n胜率：50%\n发言：我是好人。\n昨晚平安，先听后面的人怎么说。');
+  assert.equal(r.action, '我是好人。昨晚平安，先听后面的人怎么说。');
+  const long = `${'好'.repeat(150)}。${'好'.repeat(100)}`;
+  assert.equal(game.parseReply(s, seat, `发言：${long}`).action, `${'好'.repeat(150)}。`);
+  assert.equal([...game.parseReply(s, seat, `发言：${'好'.repeat(300)}`).action].length, MAX_LEN);
+  // 计票：平票、无人出局也停
+  const before = { ...s, voteLog: [] };
+  const after = { ...s, voteLog: [{ day: 1, stage: 'vote', votes: { p1: 'p2', p2: 'p1' }, counts: { p1: 1, p2: 1 }, out: null, tied: ['p1', 'p2'], next: 'tie' }] };
+  assert.equal(game.interlude(before, after), CARD_MS);
 });

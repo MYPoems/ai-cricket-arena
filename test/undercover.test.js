@@ -79,14 +79,14 @@ test('带种子开局可重现；卧底人数和词分配正确', () => {
   assert.ok(many.some((s) => PAIRS[s.pairIdx][0] === s.pair.spy) && many.some((s) => PAIRS[s.pairIdx][0] === s.pair.civ));
 });
 
-test('发言校验：非空、30 字以内、不能包含自己的词，去掉换行', () => {
+test('发言校验：非空、60 字以内、不能包含自己的词，去掉换行', () => {
   let s = fixed(5, ['p3']);
   assert.deepEqual(game.pending(s), ['p1']);
   assert.equal(game.actions(s, 'p1'), null, '发言是自由文本');
   assert.deepEqual(game.actions(s, 'p2'), []);
   assert.throws(() => game.apply(s, 'p2', '抢着说'), /轮到1 号发言/);
   assert.throws(() => game.apply(s, 'p1', '   '), /不能为空/);
-  assert.throws(() => game.apply(s, 'p1', '一'.repeat(31)), /31 个字/);
+  assert.throws(() => game.apply(s, 'p1', '一'.repeat(61)), /61 个字/);
   assert.throws(() => game.apply(s, 'p1', '我最爱吃饺子了'), /不能出现你的词/);
   assert.throws(() => game.apply(s, 'p1', '子是馅的，饺皮很薄'), /不能出现你的词/, '拆开写也不行');
   const ok = game.apply(s, 'p1', '过年\n一家人\r\n围着包');
@@ -239,7 +239,9 @@ test('解析模型回答：发言', () => {
   assert.equal(game.parseReply(s, 'p1', '胜率：55%\n发言：\n  北方人爱吃  ').action, '北方人爱吃');
   assert.match(game.parseReply(s, 'p1', '判断：……\n胜率：50%').error, /没有找到发言/);
   assert.match(game.parseReply(s, 'p1', '发言：饺子真好吃').error, /不能出现你的词/);
-  assert.equal(game.parseReply(s, 'p1', `发言：${'好'.repeat(40)}`).action, '好'.repeat(30)); // 写长了截断
+  assert.equal(game.parseReply(s, 'p1', `发言：${'好'.repeat(50)}`).action, '好'.repeat(50)); // 比提示的 40 字长一点照样收下
+  assert.equal(game.parseReply(s, 'p1', `发言：${'好'.repeat(40)}。${'好'.repeat(40)}`).action, `${'好'.repeat(40)}。`); // 超过上限在句号处收尾
+  assert.equal(game.parseReply(s, 'p1', '胜率：50%\n发言：北方人\n过年爱吃').action, '北方人过年爱吃'); // 分几行写也不丢
   assert.match(game.parseReply(s, 'p2', '发言：轮不到我').error, /不是你发言/);
   assert.equal(game.parseReply(s, 'p1', '发言：蒸的').winrate, null);
 });

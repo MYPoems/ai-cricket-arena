@@ -10,10 +10,12 @@
 //（猎人带走最后一只狼好人胜；以前是人一出局就判，猎人来不及开枪）；3 起，8 人局两狼三民（以前三狼两民：
 // 胜负按「狼人数不少于好人数」判，三狼时首夜刀一人、白天错投一人就是 3 对 3，狼人第一天就赢）。
 
-import { newSpeech, speechPause } from '../speech.js';
+import { newSpeech, speechPause, fitSpeech, CARD_MS } from '../speech.js';
 
 export const MAX_DAYS = 10;
-export const MAX_LEN = 60;
+/** 发言：提示里请选手控制在 SAY_LEN 字以内；真正的上限是 MAX_LEN（模型写长一点照样收下，超过上限在句号处收尾） */
+export const SAY_LEN = 120;
+export const MAX_LEN = 200;
 const ALL_SEATS = ['p1', 'p2', 'p3', 'p4', 'p5', 'p6', 'p7', 'p8', 'p9'];
 export const ROLE_NAMES = { wolf: '狼人', seer: '预言家', witch: '女巫', hunter: '猎人', villager: '村民' };
 /** 各人数的身份配置（村民数 = 人数 − 狼人 − 神职；现行规则） */
@@ -70,7 +72,7 @@ export function cleanSpeech(text) {
   return t;
 }
 
-/** 发言 / 遗言是否合法：非空、不超过 60 字 */
+/** 发言 / 遗言是否合法：非空、不超过 MAX_LEN 字 */
 export function speechError(text) {
   if (!text) return '发言不能为空';
   const len = [...text].length;
@@ -760,7 +762,7 @@ const game = {
       '',
       '【规则】',
       '夜晚：狼人选一人杀害 → 预言家查验一人 → 女巫决定是否用药。狼人互相知道队友，其他人只知道自己的身份。',
-      '白天：公布昨夜死亡的玩家（不公布死因）；第 1 夜死亡的玩家可以留遗言。存活玩家按座位顺序每人说一句话，然后所有存活玩家同时投票放逐一人（不能投自己，可以弃票）；得票最多的人出局并留遗言。平票时平票者再各说一句，其他存活玩家在平票者中重投；再平票则当天无人出局。出局者的身份不公开，对局结束后才公开。',
+      '白天：公布昨夜死亡的玩家（不公布死因）；第 1 夜死亡的玩家可以留遗言。存活玩家按座位顺序依次发言，然后所有存活玩家同时投票放逐一人（不能投自己，可以弃票）；得票最多的人出局并留遗言。平票时平票者再各发一次言，其他存活玩家在平票者中重投；再平票则当天无人出局。出局者的身份不公开，对局结束后才公开。',
       `胜负：狼人全部出局，好人胜；存活狼人数不少于好人数，狼人胜；最多 ${MAX_DAYS} 天，到时狼人还在也算狼人胜。`,
       winCond,
       '',
@@ -774,10 +776,10 @@ const game = {
       '  狼人夜里：「刀：3号」或「刀：空刀」',
       '  预言家夜里：「查验：5号」',
       '  女巫夜里：「用药：救」「用药：毒 4号」或「用药：不用」',
-      `  白天发言：「发言：……」（一句话，不超过 ${MAX_LEN} 字）`,
+      `  白天发言：「发言：……」（可以说几句，不超过 ${SAY_LEN} 字，写在同一行）`,
       '  投票：「投票：3号」或「投票：弃票」',
       '  猎人开枪：「开枪：2号」或「开枪：不开枪」',
-      `  遗言：「遗言：……」（一句话，不超过 ${MAX_LEN} 字）`,
+      `  遗言：「遗言：……」（可以说几句，不超过 ${SAY_LEN} 字，写在同一行）`,
       style ? `\n【你的风格】${style}\n（风格只影响你的发言和判断取向，不能改变上面的规则和输出格式。）` : null,
     ].filter((l) => l !== null).join('\n');
   },
@@ -817,11 +819,11 @@ const game = {
         `你可以选择：${opts.join('、')}（同一晚只能用一瓶）。最后一行按格式写。`,
       ].join('\n');
     } else if (p === 'speak') {
-      ask = `现在轮到你发言：说一句话（不超过 ${MAX_LEN} 字），最后一行「发言：……」。`;
+      ask = `现在轮到你发言：可以说几句（不超过 ${SAY_LEN} 字，写在同一行），最后一行「发言：……」。`;
     } else if (p === 'tiespeak') {
-      ask = `上一轮投票 ${list(s.tied)} 平票。请你再说一句话（不超过 ${MAX_LEN} 字），最后一行「发言：……」。`;
+      ask = `上一轮投票 ${list(s.tied)} 平票。请你再发一次言（不超过 ${SAY_LEN} 字，写在同一行），最后一行「发言：……」。`;
     } else if (p === 'lastword') {
-      ask = `你已出局，请留遗言（一句话，不超过 ${MAX_LEN} 字），最后一行「遗言：……」。`;
+      ask = `你已出局，请留遗言（可以说几句，不超过 ${SAY_LEN} 字，写在同一行），最后一行「遗言：……」。`;
     } else if (p === 'vote') {
       ask = `现在投票放逐：从 ${list(targets(s, seat))} 中选一人（不能投自己），或弃票。最后一行「投票：N号」或「投票：弃票」。`;
     } else if (p === 'revote') {
@@ -850,7 +852,9 @@ const game = {
     if (!raw.trim()) raw = t.slice(m.index + m[0].length).split('\n').find((l) => l.trim()) || '';
 
     if (p === 'speak' || p === 'tiespeak' || p === 'lastword') {
-      const sp = [...cleanSpeech(raw)].slice(0, MAX_LEN).join(''); // 模型写长了就截断，不算无效
+      // 发言是最后一项：冒号后面一直到回答结束都算（模型常把一段话分成几行写，以前只取第一行，后面的就丢了）
+      const rest = t.slice(m.index + m[0].length - m[1].length);
+      const sp = fitSpeech(cleanSpeech(rest.trim() ? rest : raw), MAX_LEN); // 超过上限在句号处收尾，不算无效
       const err = speechError(sp);
       return err ? fail(err, sp) : { action: sp, attempted: sp, winrate, error: null };
     }
@@ -926,15 +930,16 @@ const game = {
   evalSpec: () => null,
 
   /** viewer 为座位时只给该座位能看到的信息；null 为上帝视角。对局结束后全部公开 */
-  /** 天亮公布死讯、白天有人出局时停一下，让画面中央的公告卡演完（对局页公告停 2.6 秒）；
+  /** 天亮公布死讯、计票、白天有人出局时停一下，让画面中央的公告卡演完（CARD_MS）；
    *  有人刚发完言：按字数停（对局页逐字打出来，打完再停一会儿，见 games/speech.js） */
   interlude(prev, next) {
     if (!prev || !next) return 0;
     const sp = newSpeech(prev, next);
     const talk = sp ? speechPause(sp.text) : 0;
-    if (next.dawn && next.dawn.day !== prev.dawn?.day) return 2600 + talk;
+    // 公告卡：天亮、计票（不论有没有人出局）、白天有人出局（猎人开枪）——都是公开的事，停多久和身份无关
     const day = (s) => s.deaths.filter((d) => d.time === 'day').length;
-    return (day(next) > day(prev) ? 2600 : 0) + talk;
+    const card = (next.dawn && next.dawn.day !== prev.dawn?.day) || next.voteLog.length > prev.voteLog.length || day(next) > day(prev);
+    return (card ? CARD_MS : 0) + talk;
   },
 
   view(state, viewer = null) {

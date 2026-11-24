@@ -4,6 +4,8 @@
 // 隐藏信息：只用 view 里有的东西（view 已按视角裁剪过），玩家视角不会出现别人的词和身份（出局者身份公开）。
 
 // 座位色：不用朱红，朱红留给卧底和出局
+import { CARD_MS } from '../../games/speech.js'; // 相对路径：浏览器里是 /games/speech.js，测试里 Node 也能加载
+
 const COLORS = ['var(--black-side)', '#3559b5', '#9a5d24', '#2f7a70', '#7d3c98', '#a17a12', '#6b6b6b', '#4f6b2f'];
 const ROLE_COLOR = { 卧底: '#b4241a', 平民: '#5d6b4e' };
 const PHASE = { speak: '描述', vote: '投票', tiespeak: '平票发言', revote: '平票重投', over: '结束' };
@@ -92,6 +94,17 @@ function voteOutcome(v) {
   if (v.out) return `${no(v.out)} 号出局（${v.role || '？'}）`;
   if (v.next === 'tie') return `${nums(v.tied || [])}平票，平票者加赛`;
   return v.stage === 'revote' ? '再次平票，本轮无人出局' : '所有人平票，本轮无人出局';
+}
+
+/** 公告卡上的票型：每个被投的人一行「4 号 5 票 ← 1、2、3、6、8 号」，弃票单列一行 */
+function voteLines(v) {
+  const by = {};
+  for (const [voter, t] of Object.entries(v.votes || {})) (by[t] ||= []).push(voter);
+  const who = (list) => list.map(no).sort((a, b) => a - b).join('、');
+  const order = Object.keys(by).filter((t) => t !== 'none').sort((a, b) => by[b].length - by[a].length || no(a) - no(b));
+  const rows = order.map((t) => `${no(t)} 号 ${by[t].length} 票 ← ${who(by[t])} 号`);
+  if (by.none) rows.push(`弃票 ${by.none.length} 人：${who(by.none)} 号`);
+  return rows;
 }
 
 /** 本轮发言顺序：从本轮先发言的人起按座位轮转的存活者 */
@@ -214,11 +227,18 @@ export default {
     return last ? { key: `log|${view.voteLog.length}`, links: pick(last.votes), out: last.out || null } : null;
   },
 
-  /** 回放时公告卡也要演完：多停 2.6 秒 */
-  pauseAfter(prev, view) { return this.announce(prev, view) ? 2600 : 0; },
+  /** 回放时公告卡也要演完：停公告卡的时长 */
+  pauseAfter(prev, view) { return this.announce(prev, view)?.ms || 0; },
 
+  /** 场上公告卡：计票后（不论有没有人出局）弹一张带票型的卡；出局时公开身份 */
   announce(prev, view) {
-    if (!prev || !view?.outInfo) return null;
+    if (!prev || !view) return null;
+    const vl = view.voteLog || [];
+    if (vl.length > (prev.voteLog || []).length) {
+      const v = vl.at(-1);
+      return { kind: v.out ? 'out' : 'vote', title: voteOutcome(v), sub: `第 ${v.round} 轮 · ${v.stage === 'revote' ? '平票重投' : '投票'}`, lines: voteLines(v), ms: CARD_MS };
+    }
+    if (!view.outInfo) return null;
     const before = new Set((prev.outInfo || []).map((o) => o.seat));
     const fresh = view.outInfo.filter((o) => !before.has(o.seat));
     if (!fresh.length) return null;
@@ -274,7 +294,7 @@ export default {
 
     // 操作区：常驻节点，输入框不随每次重画丢失内容和焦点
     const ctrlHead = el('div', { class: 'head' });
-    const input = el('input', { type: 'text', maxlength: 60, autocomplete: 'off', placeholder: '一句话描述你的词' });
+    const input = el('input', { type: 'text', maxlength: 120, autocomplete: 'off', placeholder: '一句话描述你的词' });
     const count = el('span', { class: 'n' });
     const send = el('button', { type: 'submit', class: 'btn primary sm' }, '发言');
     const form = el('form', { class: 'uc-form' }, input, count, send);
