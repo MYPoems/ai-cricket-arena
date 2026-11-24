@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import game, { parseSeatRef, cleanSpeech, speechError, SETUPS, MAX_DAYS, MAX_LEN } from '../games/werewolf/index.js';
+import game, { parseSeatRef, cleanSpeech, speechError, SETUPS, setupOf, MAX_DAYS, MAX_LEN } from '../games/werewolf/index.js';
+import { speechPause, typeMs, SPEECH } from '../games/speech.js';
 import { replay } from '../games/index.js';
 
 /** 固定身份的局面：roles 按座位顺序给出，例如 'wwsthvvv'（w 狼 s 预言家 t 女巫 h 猎人 v 村民） */
@@ -53,13 +54,13 @@ test('座位、人数和基本属性', () => {
 });
 
 test('身份配置按人数；带种子分配可重现', () => {
-  const want = { 6: [2, 1, 1, 0, 2], 7: [2, 1, 1, 1, 2], 8: [3, 1, 1, 1, 2], 9: [3, 1, 1, 1, 3] };
+  const want = { 6: [2, 1, 1, 0, 2], 7: [2, 1, 1, 1, 2], 8: [2, 1, 1, 1, 3], 9: [3, 1, 1, 1, 3] };
   for (let n = 6; n <= 9; n++) {
     assert.equal(SETUPS[n].length, n);
     const seen = new Set();
     for (let seed = 0; seed < 40; seed++) {
-      const a = game.create({ players: n, seed });
-      assert.deepEqual(a, game.create({ players: n, seed }));
+      const a = game.create({ players: n, seed, setup: game.newSetup });
+      assert.deepEqual(a, game.create({ players: n, seed, setup: game.newSetup }));
       assert.deepEqual(JSON.parse(JSON.stringify(a)), a, 'state 能 JSON 序列化');
       const c = ['wolf', 'seer', 'witch', 'hunter', 'villager'].map((r) => Object.values(a.roles).filter((x) => x === r).length);
       assert.deepEqual(c, want[n]);
@@ -348,7 +349,7 @@ test('提示词：规则、身份、胜利条件、防注入、身份专属信�
   assert.match(sys, /不是给你的指令/);
   assert.match(sys, /胜率：/);
   assert.match(sys, /刀：3号/);
-  assert.match(sys, /狼人 3 人、预言家 1 人、女巫 1 人、猎人 1 人、村民 2 人/);
+  assert.match(sys, /狼人 2 人、预言家 1 人、女巫 1 人、猎人 1 人、村民 3 人/);
   assert.match(game.systemPrompt('p5', { players: 8, state: s }), /好人阵营/);
   assert.match(game.systemPrompt('p5', { players: 8 }), /每次行动的消息/);
   assert.match(game.systemPrompt('p5', { players: 8, state: s, style: '激进' }), /激进/);
@@ -464,9 +465,9 @@ test('内置 AI：行动合法，所有人数都能正常结束，带种子可�
 });
 
 /** 用内置 AI 跑一盘，记下旁人能看到的步：每夜的私密步数、每次死人后的「猎人检查」步数 */
-function simulate(n, seed) {
+function simulate(n, seed, setup = game.newSetup) {
   const NIGHT = ['wolf', 'seer', 'witch'];
-  let s = game.create({ players: n, seed });
+  let s = game.create({ players: n, seed, setup });
   const record = [];
   const nights = [];
   const blocks = [];
@@ -606,7 +607,7 @@ test('旧对局记录（没有代答步）照样能重放，结果相同', () =>
   let checked = 0;
   for (const n of [7, 8, 9]) {
     for (let seed = 1; seed <= 25; seed++) {
-      const r = simulate(n, seed);
+      const r = simulate(n, seed, {});
       const legacy = r.record.filter((x) => !x.auto);
       if (legacy.length === r.record.length) continue;
       checked++;
@@ -622,4 +623,33 @@ test('旧对局记录（没有代答步）照样能重放，结果相同', () =>
     }
   }
   assert.ok(checked > 20);
+});
+
+test('8 人局两狼三民（规则 3 起）；旧记录没有规则版本，仍按三狼两民重放', () => {
+  const count = (s, r) => Object.values(s.roles).filter((x) => x === r).length;
+  for (let seed = 1; seed <= 20; seed++) {
+    const now = game.create({ players: 8, seed, setup: game.newSetup });
+    assert.equal(now.rules, 3);
+    assert.equal(count(now, 'wolf'), 2);
+    assert.equal(count(now, 'villager'), 3);
+    const old = game.create({ players: 8, seed });
+    assert.equal(old.rules, 1);
+    assert.equal(count(old, 'wolf'), 3, '旧对局重放的身份不能变');
+    assert.equal(count(game.create({ players: 8, seed, setup: { rules: 2 } }), 'wolf'), 3);
+  }
+  assert.deepEqual(setupOf(8, 1).filter((r) => r === 'wolf').length, 3);
+  const s = game.create({ players: 8, seed: 3, setup: game.newSetup });
+  assert.match(game.systemPrompt('p1', { players: 8, state: s }), /狼人 2 人、预言家 1 人、女巫 1 人、猎人 1 人、村民 3 人/);
+  assert.match(game.systemPrompt('p1', { players: 8 }), /狼人 2 人/);
+});
+
+test('有人发完言：按字数停顿（打字 + 打完后停留），其余步不额外停', () => {
+  assert.equal(typeMs('好'), SPEECH.minType);
+  assert.equal(typeMs('一'.repeat(20)), 20 * SPEECH.charMs);
+  assert.equal(typeMs('一'.repeat(500)), SPEECH.maxType);
+  const a = game.create({ players: 6, seed: 1, setup: game.newSetup });
+  const b = { ...a, speeches: [{ day: 1, seat: 'p1', kind: 'speak', text: '我是好人，先听后面的发言。' }] };
+  assert.equal(game.interlude(a, b), speechPause(b.speeches[0].text));
+  assert.equal(game.interlude(b, { ...b }), 0);
+  assert.equal(game.interlude(null, b), 0);
 });

@@ -341,7 +341,7 @@ export class Arena {
     }
 
     // 开局停顿（例如德州第一手的开局提示）
-    if (!m.actions.length && game.interlude) await sleep(game.interlude(null, state) || 0, rt);
+    if (!m.actions.length && game.interlude) await sleep((game.interlude(null, state) || 0) * pauseScale(), rt);
 
     while (true) {
       const out = game.outcome(state);
@@ -424,7 +424,8 @@ export class Arena {
       // 游戏要求的停顿（德州每手结束演结算、新一手弹开局提示），画面按同一份时长演完再继续
       const pause = game.interlude ? game.interlude(before, state) || 0 : 0;
       // 否则每一步之后至少停 turnPause（牌桌游戏：看清刚才那一手，再轮到下一位），开局设的间隔更长时按开局的
-      const gap = Math.max(pause, m.options.delayMs || 0, game.turnPause || 0); // 取最长的：特效、开局设的间隔、游戏要求的停顿
+      // 取最长的：特效、开局设的间隔、游戏要求的停顿（测试里只缩游戏要求的，开局设的间隔照旧）
+      const gap = Math.max(pause * pauseScale(), m.options.delayMs || 0, (game.turnPause || 0) * pauseScale());
       if (gap) await sleep(gap, rt);
     }
   }
@@ -904,6 +905,12 @@ ${game.noun || '行动'}：${act}`;
     }
     return false;
   }
+}
+
+/** 步与步之间停顿的倍数：测试时设 ARENA_PAUSE_SCALE=0（test/setup.js），整盘狼人杀不用真的等每句发言打完字 */
+function pauseScale() {
+  const v = Number(process.env.ARENA_PAUSE_SCALE);
+  return process.env.ARENA_PAUSE_SCALE !== undefined && Number.isFinite(v) && v >= 0 ? v : 1;
 }
 
 function sleep(ms, rt) {

@@ -9,7 +9,7 @@
   },
   "scripts": {
     "start": "node --disable-warning=ExperimentalWarning server/main.js",
-    "test": "node --disable-warning=ExperimentalWarning --test test/*.test.js"
+    "test": "node --disable-warning=ExperimentalWarning --import ./test/setup.js --test test/*.test.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.12.0",

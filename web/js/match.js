@@ -7,6 +7,7 @@ import { loadRenderer, PALETTE } from '../stage/index.js';
 import { createFold } from './fold.js';
 import { createSpot } from './spot.js';
 import { sfx, nudgeTurn, soundOn, setSound } from './sound.js';
+import { typeMs, speechPause, newSpeech } from '/games/speech.js';
 
 const LINE_KEYS = ['判断', '威胁', '理由', '推断', '计划'];
 const QUALITY_CLASS = { 最佳: 'good', 好棋: 'good', 缓着: 'warn', 失误: 'warn', 大漏着: 'bad' };
@@ -130,6 +131,9 @@ export async function matchView(root, id, { characters, session }) {
   const duo = typeof renderer.duoView === 'function';
   let duoInfo = { scene: null, seats: {} };
   let focusSeat = null; // 点座位卡切换焦点；null 表示跟随当前行动者
+  // 刚落地的一句发言（狼人杀、谁是卧底）：焦点区停在说话的人身上，把这句逐字打出来，打完再停一会儿才换到下一位。
+  // 服务端按 games/speech.js 的同一份时长停顿；回放按倍速打。ply 记下是在哪一步演的（null 是直播），翻到别的步就不算
+  let presenting = null; // { seat, text, ply, t0, typeDur, until, timer }
   let pickSel = null; // 选目标分两步：先点座位选中（pickSel），再点「确认」才提交，防误触
   // 牌桌版式（德州）：牌桌上已有每个人的名牌和动作，两侧不放选手卡；右上是聚光框（只显示轮到的人），右下是本手记录
   const hud = !duo && !!renderer.hud;
@@ -359,8 +363,50 @@ export async function matchView(root, id, { characters, session }) {
 
   // ---------- 对称座位版式 ----------
   /** 当前焦点：点过的座位，否则是正在行动的人，再否则是最近一步的人 */
+  /** 正在演的那句发言（没有、已经演完、或画面已经翻到别的步时为 null） */
+  function presentingNow() {
+    const p = presenting;
+    return p && p.ply === viewPly && performance.now() < p.until ? p : null;
+  }
+  /** 开始演一句发言：rate 是倍速（回放）；自己刚说的话不用再打一遍字 */
+  function present(sp, rate = 1) {
+    if (presenting?.timer) clearInterval(presenting.timer);
+    const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const t0 = performance.now();
+    const typeDur = reduce || (sp.seat === humanSeat && viewPly === null) ? 0 : typeMs(sp.text) / rate;
+    const p = { seat: sp.seat, text: sp.text, ply: viewPly, t0, typeDur, until: t0 + speechPause(sp.text) / rate, timer: 0 };
+    presenting = p;
+    p.timer = setInterval(() => {
+      if (presenting !== p) { clearInterval(p.timer); return; }
+      const now = performance.now();
+      const line = focusEl.querySelector('.said-list .sp.typing');
+      if (line) {
+        const done = now - p.t0 >= p.typeDur;
+        line.querySelector('.tx').textContent = typedPart(p, now);
+        if (done) line.classList.remove('typing');
+        const list = line.parentElement;
+        if (list) list.scrollTop = list.scrollHeight;
+      }
+      if (now >= p.until) {
+        clearInterval(p.timer);
+        presenting = null;
+        // 演完了：焦点、座位高亮交还给正在行动的人
+        if (p.ply === viewPly) { seats.forEach(renderSeat); renderFocus(); if (viewPly === null) renderStatus(); }
+      }
+    }, 70);
+  }
+  /** 此刻该露出来的那一截 */
+  function typedPart(p, now = performance.now()) {
+    if (!p.typeDur || now - p.t0 >= p.typeDur) return p.text;
+    const chars = [...p.text];
+    return chars.slice(0, Math.max(1, Math.ceil((chars.length * (now - p.t0)) / p.typeDur))).join('');
+  }
+  cleanups.push(() => { if (presenting?.timer) clearInterval(presenting.timer); presenting = null; });
+
   function focusOf() {
     if (focusSeat) return focusSeat;
+    const pres = presentingNow();
+    if (pres) return pres.seat;
     if (viewPly === null && d.status === 'running') {
       // 跟随行动者：正在发言的人；否则最新开始想的人；否则轮到的真人、还没轮上的待行动者
       const live = [...partials.keys()];
@@ -384,7 +430,9 @@ export async function matchView(root, id, { characters, session }) {
     const thinking = live && (partials.has(seat) || waitingHuman === seat);
     const actors = live ? new Set([...partials.keys(), waitingHuman].filter(Boolean)) : new Set();
     // 单人行动（发言、夜里单人用技能）：整块亮起 + 声波；多人同时行动（投票）：每个在想的人都套一圈细金线，不一起闪
-    const speaking = st.includes('speaking') || (thinking && actors.size <= 1);
+    // 刚说完的那位还在「说」（逐字打字、打完停一会儿）：亮的是他，不是下一位
+    const pres = presentingNow();
+    const speaking = pres ? pres.seat === seat : st.includes('speaking') || (thinking && actors.size <= 1);
     const acting = !speaking && thinking && actors.size > 1;
     // 选目标：只有合法目标能点（.pickable），其余压暗；先选中（.picked）再点「确认」
     const picking = Object.values(duoInfo.seats || {}).some((x) => x?.pick);
@@ -476,7 +524,12 @@ export async function matchView(root, id, { characters, session }) {
     // 最后一步不是发言（投票、夜里的行动）：整局最新的一步才叫「刚才」，更早的按内容标「投票」「行动」，免得白天还挂着一行「刚才 刀 6 号」
     const lastPly = Math.max(0, ...[...turns.values()].filter((x) => x.label && x.ply <= limit).map((x) => x.ply));
     const recentTag = recent ? (t.ply === lastPly && !upNext ? '刚才' : /^投|弃票|弃权/.test(recent) ? '投票' : '行动') : '';
-    const lines = said.map((x, i) => h('div', { class: `sp${i === said.length - 1 && !recent && !live && !upNext ? ' last' : ''}` }, h('span', { class: 'tg' }, x.tag), h('span', { class: 'tx' }, x.text)));
+    // 这个人刚说的一句正在逐字打出来：最后一行跟着打字（presenting 的定时器只改这一行的字，不整块重画）
+    const pres = presentingNow();
+    const typingIdx = pres && pres.seat === seat && said.at(-1)?.text === pres.text ? said.length - 1 : -1;
+    const lines = said.map((x, i) => i === typingIdx
+      ? h('div', { class: `sp last${performance.now() - pres.t0 < pres.typeDur ? ' typing' : ''}` }, h('span', { class: 'tg' }, x.tag), h('span', { class: 'tx' }, typedPart(pres)))
+      : h('div', { class: `sp${i === said.length - 1 && !recent && !live && !upNext ? ' last' : ''}` }, h('span', { class: 'tg' }, x.tag), h('span', { class: 'tx' }, x.text)));
     if (recent) lines.push(h('div', { class: `sp act${upNext ? '' : ' last'}` }, h('span', { class: 'tg' }, recentTag), h('span', { class: 'tx' }, recent)));
     if (live) lines.push(h('div', { class: 'sp live' }, h('span', { class: 'tg' }, '此刻'), h('span', { class: 'tx' }, spDots(), '正在想')));
     else if (upNext) lines.push(h('div', { class: 'sp live' }, h('span', { class: 'tg' }, '此刻'), h('span', { class: 'tx' }, spDots(), '准备发言')));
@@ -723,6 +776,9 @@ export async function matchView(root, id, { characters, session }) {
     const thinking = [...partials.keys()];
     const nm = (s) => (duo ? `${seats.indexOf(s) + 1} 号` : humanSeat && two && s !== humanSeat ? '对手' : seatName(s));
     if (duo) {
+      // 刚说完的那句还在逐字打出来、打完停一会儿：状态条跟着焦点区写他，不提前写下一位
+      const pres = presentingNow();
+      if (pres) return `${nm(pres.seat)}发言中`;
       const phase = String(v.phase || '');
       if (/vote/.test(phase)) {
         const total = (v.voters || []).length;
@@ -1400,6 +1456,9 @@ export async function matchView(root, id, { characters, session }) {
         return;
       }
       goto(viewPly + 1);
+      // 发言：按倍速逐字打出来，打完再停一会儿（停顿也按倍速缩短）
+      const sp = duo ? newSpeech(viewAt(viewPly - 1), viewAt(viewPly)) : null;
+      if (sp) { present(sp, speed); seats.forEach(renderSeat); renderFocus(); }
       const t = turns.get(viewPly);
       stampFx(stampFor(t?.label, viewAt(viewPly)));
       const so = soundFor(t?.label, viewAt(viewPly));
@@ -1407,7 +1466,7 @@ export async function matchView(root, id, { characters, session }) {
       const base = Math.min(5000, Math.max(900, (t?.latency_ms || 900) * 0.6 + (t?.analysis ? 600 : 0)));
       // 游戏要求的停顿（德州每手结算、开局提示）不随倍速缩短，画面要演完
       const extra = renderer.pauseAfter ? renderer.pauseAfter(viewAt(viewPly - 1), viewAt(viewPly)) || 0 : 0;
-      replaying.timer = setTimeout(step, base / speed + extra);
+      replaying.timer = setTimeout(step, base / speed + extra + (sp ? speechPause(sp.text) / speed : 0));
     };
     const intro = from === 0 && renderer.pauseAfter ? renderer.pauseAfter(null, viewAt(0)) || 0 : 0;
     replaying.timer = setTimeout(step, 900 / speed + intro);
@@ -1562,6 +1621,7 @@ export async function matchView(root, id, { characters, session }) {
         }
         if (waitingHuman === e.seat) waitingHuman = null;
         const p = partials.get(e.seat);
+        const prevView = d.view;
         turns.set(e.ply, {
           ply: e.ply, seat: e.seat, character_id: e.characterId, action: e.action, label: e.label,
           analysis: e.analysis, reasoning: d.options?.hideThoughts ? null : p?.reasoning || null,
@@ -1572,6 +1632,8 @@ export async function matchView(root, id, { characters, session }) {
         if (e.view) d.view = e.view;
         else await refresh();
         if (viewPly === null) {
+          const sp = duo ? newSpeech(prevView, d.view) : null;
+          if (sp) present(sp);
           renderAll(); stampFx(stampFor(e.label, d.view)); const so = soundFor(e.label, d.view); if (so) sfx(so);
           const st = duo || hud ? null : stampFor(e.label, d.view);
           const lb = String(e.label || '');

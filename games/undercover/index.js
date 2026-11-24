@@ -4,6 +4,7 @@
 // 平票时平票者各再说一句，其余存活者在平票者中重投；再平票本轮无人出局。
 
 import { PAIRS, HINTS } from './words.js';
+import { newSpeech, speechPause } from '../speech.js';
 
 export const MAX_ROUNDS = 8;
 export const MAX_LEN = 30;
@@ -450,9 +451,11 @@ export default {
   evalSpec: () => null,
 
   /** viewer 为座位时只给该座位能看到的信息；null 为上帝视角。对局结束后全部公开 */
-  /** 有人被投出时停一下，让画面中央的公告卡演完 */
+  /** 有人被投出时停一下，让画面中央的公告卡演完；有人刚发完言：按字数停（对局页逐字打出来，见 games/speech.js） */
   interlude(prev, next) {
-    return prev && next && next.out.length > prev.out.length ? 2600 : 0;
+    if (!prev || !next) return 0;
+    const sp = newSpeech(prev, next);
+    return (next.out.length > prev.out.length ? 2600 : 0) + (sp ? speechPause(sp.text) : 0);
   },
 
   view(state, viewer = null) {

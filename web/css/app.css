@@ -1074,6 +1074,9 @@ pre.code { margin: 0; padding: 14px 80px 14px 16px; overflow-x: auto; border-rad
 .said-list .sp.last .tx { font-weight: 700; }
 .said-list .sp.act .tx { color: #8e2414; }
 .said-list .sp.live .tx { color: rgb(110 72 22 / .85); }
+/* 刚落地的一句正在逐字打出来：光标挂在字的末尾（不挂在整行的格子上，否则会占一格） */
+.said-list .sp.typing::after { content: none; }
+.said-list .sp.typing .tx::after { content: '▍'; margin-left: 1px; color: var(--zhu-2); animation: pulse 1s infinite; }
 .said-list .none { font: 500 14px/1.6 var(--serif); color: rgb(90 60 20 / .6); padding-top: 4px; }
 .arena.duo .stage > .focus > .thought2 { white-space: normal; }
 .thought2 .tt { flex: 1; min-height: 0; overflow-y: auto; white-space: pre-wrap; scrollbar-width: thin; }

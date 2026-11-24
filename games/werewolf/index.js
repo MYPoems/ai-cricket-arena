@@ -6,20 +6,27 @@
 // 白天：公布昨夜死亡（不公布死因）；首夜死者留遗言；猎人被狼杀或被放逐时可以开枪；
 // 存活者按座位顺序发言 → 同时投票放逐（可以弃票）→ 出局者留遗言；平票者再各说一句后重投，再平票无人出局。
 // 胜负：狼人全部出局好人胜；狼人数不少于好人数狼人胜；最多 10 天，到时狼人还在算狼人胜。
-// 规则版本（setup.rules，新开的对局是 2，旧记录没有它、按 1 重放）：2 起，刚出局的人里有能开枪的猎人时，等他开完枪再判胜负
-//（猎人带走最后一只狼好人胜；以前是人一出局就判，猎人来不及开枪）。
+// 规则版本（setup.rules，新开的对局是 3，旧记录没有它、按 1 重放）：2 起，刚出局的人里有能开枪的猎人时，等他开完枪再判胜负
+//（猎人带走最后一只狼好人胜；以前是人一出局就判，猎人来不及开枪）；3 起，8 人局两狼三民（以前三狼两民：
+// 胜负按「狼人数不少于好人数」判，三狼时首夜刀一人、白天错投一人就是 3 对 3，狼人第一天就赢）。
+
+import { newSpeech, speechPause } from '../speech.js';
 
 export const MAX_DAYS = 10;
 export const MAX_LEN = 60;
 const ALL_SEATS = ['p1', 'p2', 'p3', 'p4', 'p5', 'p6', 'p7', 'p8', 'p9'];
 export const ROLE_NAMES = { wolf: '狼人', seer: '预言家', witch: '女巫', hunter: '猎人', villager: '村民' };
-/** 各人数的身份配置（村民数 = 人数 − 狼人 − 神职） */
+/** 各人数的身份配置（村民数 = 人数 − 狼人 − 神职；现行规则） */
 export const SETUPS = {
   6: ['wolf', 'wolf', 'seer', 'witch', 'villager', 'villager'],
   7: ['wolf', 'wolf', 'seer', 'witch', 'hunter', 'villager', 'villager'],
-  8: ['wolf', 'wolf', 'wolf', 'seer', 'witch', 'hunter', 'villager', 'villager'],
+  8: ['wolf', 'wolf', 'seer', 'witch', 'hunter', 'villager', 'villager', 'villager'],
   9: ['wolf', 'wolf', 'wolf', 'seer', 'witch', 'hunter', 'villager', 'villager', 'villager'],
 };
+/** 规则版本 3 以前的 8 人局：三狼两民（旧记录按它重放） */
+const LEGACY_8 = ['wolf', 'wolf', 'wolf', 'seer', 'witch', 'hunter', 'villager', 'villager'];
+/** 某个规则版本下 n 人局的身份配置 */
+export const setupOf = (n, rules = 3) => (n === 8 && rules < 3 ? LEGACY_8 : SETUPS[n]);
 export const PHASE_NAMES = {
   wolf: '狼人行动', seer: '预言家查验', witch: '女巫用药', lastword: '遗言', hunter: '猎人开枪',
   speak: '发言', vote: '投票', tiespeak: '平票发言', revote: '平票重投', over: '结束', night: '夜晚', wait: '结算',
@@ -512,9 +519,9 @@ function roleIntro(s, seat) {
   return ROLE_NAMES[role];
 }
 
-const setupText = (n) => {
+const setupText = (n, s = null) => {
   const c = {};
-  for (const r of SETUPS[n]) c[r] = (c[r] || 0) + 1;
+  for (const r of s?.roles ? Object.values(s.roles) : setupOf(n)) c[r] = (c[r] || 0) + 1;
   return ['wolf', 'seer', 'witch', 'hunter', 'villager'].filter((r) => c[r]).map((r) => `${ROLE_NAMES[r]} ${c[r]} 人`).join('、');
 };
 
@@ -579,21 +586,22 @@ const game = {
   seatName,
 
   /** 新开的对局用的规则版本（框架开局时写进开局参数；旧记录没有，按版本 1 重放） */
-  newSetup: { rules: 2 },
+  newSetup: { rules: 3 },
 
   create({ players = 8, seed = 0, setup = {} } = {}) {
     const n = Number(players);
     if (!Number.isInteger(n) || n < 6 || n > 9) throw new Error('狼人杀需要 6–9 人');
     const rng = mulberry32(Number(seed) || 0);
     const seats = ALL_SEATS.slice(0, n);
-    const deck = SETUPS[n].slice();
+    const rules = Math.min(3, Math.max(1, Math.floor(Number(setup?.rules)) || 1));
+    const deck = setupOf(n, rules).slice();
     for (let i = deck.length - 1; i > 0; i--) {
       const j = Math.floor(rng() * (i + 1));
       [deck[i], deck[j]] = [deck[j], deck[i]];
     }
     const roles = Object.fromEntries(seats.map((s, i) => [s, deck[i]]));
     const state = {
-      n, seats, roles, rules: Number(setup?.rules) >= 2 ? 2 : 1,
+      n, seats, roles, rules,
       alive: seats.slice(), deaths: [],
       day: 1, phase: 'wolf',
       wolfVotes: {}, wolfSkip: [], night: emptyNight(), nights: [], checks: [],
@@ -735,7 +743,7 @@ const game = {
   systemPrompt(seat, { style = '', players, state } = {}) {
     const n = players || state?.n || 8;
     const role = state?.roles?.[seat];
-    const wolves = SETUPS[n].filter((r) => r === 'wolf').length;
+    const wolves = (state?.roles ? Object.values(state.roles) : setupOf(n)).filter((r) => r === 'wolf').length;
     const winCond = !role ? null : role === 'wolf'
       ? '【你的胜利条件】你属于狼人阵营：让存活狼人数不少于好人数，或撑到第 10 天结束。白天要伪装成好人，别暴露自己和队友。'
       : `【你的胜利条件】你属于好人阵营：找出并放逐全部 ${wolves} 名狼人。`;
@@ -747,7 +755,7 @@ const game = {
       villager: '你没有夜间技能，靠白天的发言和投票找出狼人。',
     }[role];
     return [
-      `你在玩「狼人杀」，你是 ${seatName(seat)}，本局共 ${n} 人（1 号到 ${n} 号）：${setupText(n)}。`,
+      `你在玩「狼人杀」，你是 ${seatName(seat)}，本局共 ${n} 人（1 号到 ${n} 号）：${setupText(n, state)}。`,
       role ? `你的身份：${roleIntro(state, seat)}。${skill}` : '你的身份会在每次行动的消息里告诉你。',
       '',
       '【规则】',
@@ -918,12 +926,15 @@ const game = {
   evalSpec: () => null,
 
   /** viewer 为座位时只给该座位能看到的信息；null 为上帝视角。对局结束后全部公开 */
-  /** 天亮公布死讯、白天有人出局时停一下，让画面中央的公告卡演完（对局页公告停 2.6 秒） */
+  /** 天亮公布死讯、白天有人出局时停一下，让画面中央的公告卡演完（对局页公告停 2.6 秒）；
+   *  有人刚发完言：按字数停（对局页逐字打出来，打完再停一会儿，见 games/speech.js） */
   interlude(prev, next) {
     if (!prev || !next) return 0;
-    if (next.dawn && next.dawn.day !== prev.dawn?.day) return 2600;
+    const sp = newSpeech(prev, next);
+    const talk = sp ? speechPause(sp.text) : 0;
+    if (next.dawn && next.dawn.day !== prev.dawn?.day) return 2600 + talk;
     const day = (s) => s.deaths.filter((d) => d.time === 'day').length;
-    return day(next) > day(prev) ? 2600 : 0;
+    return (day(next) > day(prev) ? 2600 : 0) + talk;
   },
 
   view(state, viewer = null) {

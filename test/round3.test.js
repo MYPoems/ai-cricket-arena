@@ -245,17 +245,17 @@ test('真人超时：有默认行动用默认行动；多人局没有默认行�
   assert.equal(await timeoutAction(xq, x, xq.pending(x)[0], 2), null, '两人棋类超时判负');
 });
 
-test('新开的狼人杀对局带规则版本 2（旧记录没有，按版本 1 重放）', async () => {
+test('新开的狼人杀对局带现行规则版本 3（旧记录没有，按版本 1 重放）', async () => {
   const ww = getGame('werewolf');
   let seed = 1;
   while (ww.create({ players: 6, seed }).roles.p1 !== 'villager') seed++;
   const seats = { p1: me.id, p2: builtin.id, p3: builtin.id, p4: builtin.id, p5: builtin.id, p6: builtin.id };
   const id = arena.createMatch({ game: 'werewolf', seats, mode: 'casual', options: { delayMs: 0, seed } });
   const row = db.get('SELECT setup FROM matches WHERE id = ?', id);
-  assert.equal(row.setup.setup.rules, 2);
+  assert.equal(row.setup.setup.rules, 3);
   assert.equal(arena.detail(id, null, 'local').view.n, 6);
   await stop(id);
-  assert.equal(arena.detail(id).record.setup.rules, 2, '结束后浏览器重放也用同一版本');
+  assert.equal(arena.detail(id).record.setup.rules, 3, '结束后浏览器重放也用同一版本');
   assert.equal(ww.create({ players: 6, seed }).rules, 1);
 });
 
