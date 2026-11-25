@@ -107,7 +107,9 @@ export function createFold({ arena, stageCol, focusEl, panelRoot, logBox, moves,
   const layoutSig = () => [innerWidth, innerHeight, phone(), medium(),
     arena.querySelectorAll(':scope > .seats > .seat').length,
     panels().map(keyOf).join(','),
-    Math.max(0, ...[...arena.querySelectorAll(':scope > .seats > .seat .side')].map((s) => s.querySelectorAll(':scope > :not(.wave)').length))].join('|');
+    Math.max(0, ...[...arena.querySelectorAll(':scope > .seats > .seat .side')].map((s) => s.querySelectorAll(':scope > :not(.wave)').length)),
+    // 玩家本人的操作区出没出现、是哪一种（发言框、投票、汤主作答……）：出现时焦点区会被挤，要重新量
+    [...(panelRoot?.querySelectorAll('.uc-ctrl:not([hidden])') || [])].map((c) => c.className).join(' ')].join('|');
 
   // 量过的签名记下结果（放大倍数、收起哪些面板）：投票开始又结束、夜里白天来回切，签名回到见过的样子时直接套用，不再量
   const memo = new Map();

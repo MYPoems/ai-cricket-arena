@@ -124,6 +124,47 @@ test('只写点数时能凑成同花顺去压炸弹', () => {
   assert.match(r.action, /=sflush:6$/);
 });
 
+test('模型的各种不规范写法：markdown、「对3」「三个5」、手牌式「5♠ 5♣」、「×2」、「♥7当5」、只写点数时逢人配补哪个点数', () => {
+  const s = game.create({ seed: 1, setup: { level: 7, first: 'p1', deal: {
+    p1: '配 配 ♠5 ♣5 ♠6 ♣6 ♠3 ♦3 ♠A ♦A ♠K ♣K ♦K 小王 小王', p2: '♠4', p3: '♠2', p4: '♦2' } } });
+  const act = (line) => { const r = game.parseReply(s, 'p1', `判断：x\n胜率：50%\n${line}`); assert.equal(r.error, null, `${line}：${r.error}`); return r.action; };
+  assert.equal(act('**出牌：** 3 3'), '♠3 ♦3=pair:3');
+  assert.equal(act('**出牌**：3 3'), '♠3 ♦3=pair:3');
+  assert.equal(act('出牌：对3'), '♠3 ♦3=pair:3');
+  assert.equal(act('出牌：一对小王'), '小王 小王=pair:16');
+  assert.equal(act('出牌：小王×2'), '小王 小王=pair:16');
+  assert.equal(act('出牌：三个K'), '♠K ♣K ♦K=triple:13');
+  assert.equal(act('出牌：A♠♦'), '♠A ♦A=pair:14');
+  assert.equal(act('出牌：5♠ 5♣ 6♠ 6♣ 逢人配♥7'), '♠5 ♣5 ♠6 ♣6 ♥7=fullhouse:6', '「逢人配♥7」是一张');
+  assert.equal(act('出牌：♥7当5 5 5 6 6'), '♠5 ♣5 ♠6 ♣6 ♥7=fullhouse:5', '写了当几就按它');
+  assert.equal(act('出牌：5 5 6 6 ♥7（当5）'), '♠5 ♣5 ♠6 ♣6 ♥7=fullhouse:5', '括号里的「当5」也认');
+  assert.equal(act('出牌：5 5 5 6 6'), '♠5 ♣5 ♠6 ♣6 ♥7=fullhouse:5', '只写点数、5 不够由逢人配补：逢人配当 5');
+  assert.equal(act('出牌：三带二 6 6 6 5 5（♥7当6）'), '♠5 ♣5 ♠6 ♣6 ♥7=fullhouse:6', '照抄记录里的写法');
+  assert.equal(act('出牌：1'), '♠A=single:14', '1 当 A');
+  assert.equal(act('出牌：级牌7'), '♥7=single:15');
+  // 还贡：解析失败时列出能还的牌
+  let t = game.create({ seed: 1, setup: { hands: 2, first: 'p1', deal: { p1: '♠3', p2: '♠4 ♠5 ♦9', p3: '♠6', p4: '♠7 ♠8 ♦10' } } });
+  for (let i = 0; i < 40 && t.phase !== 'back'; i++) t = run(t);
+  assert.equal(t.phase, 'back');
+  const giver = game.pending(t)[0];
+  const r = game.parseReply(t, giver, '**还贡：** 一张大王');
+  assert.match(r.error, /能还的牌：/);
+  const ok = game.actions(t, giver)[0].id.replace(/^还贡\s*/, '');
+  assert.equal(game.parseReply(t, giver, `**还贡**：${ok}`).action, `还贡 ${ok}`);
+  assert.ok(game.turnPrompt(t, giver).includes(`例如「还贡：${game.actions(t, giver)[0].id.replace(/^还贡\s*/, '')}」`), '例子用能还的牌');
+});
+
+test('要不起时自动不出（autoAction），领出和压得过时照常问', () => {
+  let s = game.create({ seed: 1, setup: { level: 2, first: 'p1', deal: {
+    p1: '♠A ♠3', p2: '♠4 ♠5', p3: '♠6 小王', p4: '♠7 ♠8' } } });
+  assert.equal(game.autoAction(s, 'p1'), null, '领出不代答');
+  s = game.apply(s, 'p1', 'A');
+  assert.equal(game.autoAction(s, 'p2'), 'pass', '2 号位没有大过 A 的牌');
+  s = game.apply(s, 'p2', 'pass');
+  assert.equal(game.autoAction(s, 'p3'), null, '3 号位有小王，要问');
+  assert.equal(game.autoAction(s, 'p4'), null, '不是他的回合');
+});
+
 test('一轮：都不出时最后出牌的人领出；他已出完由队友接风', () => {
   let s = game.create({ seed: 3, setup: { level: 2, first: 'p1', deal: {
     p1: '♠A', p2: '♠3 ♠4', p3: '♠5 ♠6', p4: '♠7 ♠8' } } });
@@ -192,6 +233,7 @@ test('不能越过 A；打 A 拿头游且队友不是末游就过 A、结束整�
   assert.equal(o.over, true);
   assert.deepEqual(o.ranks, { p1: 1, p2: 2, p3: 1, p4: 2 });
   assert.match(o.reason, /打过 A/);
+  assert.equal(o.winnerTeam, '1·3 队', '对局页写「1·3 队胜」');
   assert.ok(o.teams && Object.values(o.teams).some((t) => t.includes('p1') && t.includes('p3')));
   // 打 A 拿头游但队友末游：不算过，记一次失败
   s = game.create({ seed: 5, setup: { hands: 5, first: 'p1', levels: { A: 14 }, levelTeam: 'A', deal: { p1: '♠5', p2: '♠3', p3: '♠Q ♠K', p4: '♠6' } } });
@@ -210,6 +252,10 @@ test('打满盘数结束：级数高的队赢，同级看最后一盘头游', ()
   assert.equal(o.ranks.p1, 1);
   assert.equal(o.ranks.p2, 2);
   assert.match(o.reason, /打满 1 盘/);
+  assert.equal(o.winnerTeam, '1·3 队');
+  // 终局时桌面上还留着最后一手，记录里也有
+  assert.equal(game.view(s, '*').lead.seat, 'p3');
+  assert.equal(game.view(s, '*').result.last.last.type, '单张');
   assert.deepEqual(game.pending(s), []);
   assert.deepEqual(game.actions(s, 'p1'), []);
 });
@@ -368,6 +414,7 @@ test('forfeit：犯规一方整队判负', () => {
   const s = game.create({ seed: 1 });
   const o = game.forfeit(s, 'p2', '2 号位超时');
   assert.deepEqual(o.ranks, { p1: 1, p2: 2, p3: 1, p4: 2 });
+  assert.equal(o.winnerTeam, '1·3 队');
   assert.ok(o.teams);
 });
 

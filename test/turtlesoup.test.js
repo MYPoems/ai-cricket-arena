@@ -74,6 +74,12 @@ test('谜题库：至少 24 道原创题，难度、红汤清汤、本格变格�
     const yes = p.probes.filter((q) => ['yes', 'both'].includes(builtinAnswer(p, q))).join('；');
     assert.equal(judgeHits(p, yes).length, p.points.length, `${p.title} 的问题问不全要点`);
     assert.ok(p.probes.some((q) => builtinAnswer(p, q) === 'no'), `${p.title} 没有答「不是」的问题`);
+    // 每条要点的原话命中它自己；本题问题里前几条（对应要点）答「是」，后面的（错误方向）答「不是」
+    p.points.forEach((pt, i) => assert.ok(judgeHits(p, pt.text).includes(i + 1), `${p.title} 要点 ${i + 1} 的原话不命中自己`));
+    p.probes.forEach((q, i) => assert.equal(builtinAnswer(p, q), i < p.points.length ? 'yes' : 'no', `${p.title}：${q}`));
+    // 主角性别：hero 必填；性别词不放进 yes / no 词表（问到配角的性别会答反）
+    assert.ok(['m', 'f'].includes(p.hero) && p.heroNames, `${p.title} 缺 hero`);
+    assert.ok(!/男的|男人|男性|女的|女人|女性/.test(`${p.yes}|${p.no}`), `${p.title} 的词表里有性别词`);
   }
   for (const t of [1, 2, 3]) assert.ok(PUZZLES.filter((p) => p.tier === t).length >= 6, `难度 ${t} 太少`);
   assert.ok(PUZZLES.some((p) => p.soup === 'red') && PUZZLES.some((p) => p.soup === 'clear'));
@@ -278,9 +284,24 @@ test('内置汤主：按关键词答题，答不上答「无关」；红汤问�
   const pot = PUZZLES.find((p) => p.id === 4);
   assert.equal(builtinAnswer(pot, '有人死了吗？'), 'yes');
   const parrot = PUZZLES.find((p) => p.id === 13);
+  const whistleOf = () => PUZZLES.find((p) => p.id === 7);
   assert.equal(builtinAnswer(parrot, '老人是病死的吗？'), 'no', '更具体的「病死」压过「死」');
   const ghost = PUZZLES.find((p) => p.id === 24);
   assert.equal(builtinAnswer(ghost, '故事里有超自然的力量吗？'), 'yes');
+  // 性别只按主角答；问配角的性别答「无关」，不被「女人」「男的」这些词带偏
+  assert.equal(builtinAnswer(sun, '主角是女的吗？'), 'yes');
+  assert.equal(builtinAnswer(sun, '小林是男的吗'), 'no');
+  assert.equal(builtinAnswer(sun, '她是女性吗？'), 'yes');
+  assert.equal(builtinAnswer(parrot, '凶手是男的吗？'), 'irrelevant');
+  assert.equal(builtinAnswer(pot, '那个男人是故意的吗？'), 'yes', '只是提到「男人」，不是问性别');
+  const photo = PUZZLES.find((p) => p.id === 12);
+  assert.equal(builtinAnswer(photo, '照片里的女人和他有血缘关系吗？'), 'yes');
+  assert.equal(builtinAnswer(photo, '那个女人是他的前女友吗？'), 'no');
+  // 「还有别人吗」：别的词都没对上时按题目的 others 答；对上了别的词就听别的词的
+  assert.equal(builtinAnswer(PUZZLES.find((p) => p.id === 14), '店里还有别人吗？'), 'yes');
+  assert.equal(builtinAnswer(PUZZLES.find((p) => p.id === 16), '还有别人参与了这件事吗？'), 'no');
+  assert.equal(builtinAnswer(whistleOf(), '口哨是别人在开玩笑吗？'), 'no');
+  assert.equal(builtinAnswer(PUZZLES.find((p) => p.id === 21), '她在等去世的丈夫吗？'), 'no');
   // 多组关键词的要点：要同时说到
   const whistle = PUZZLES.find((p) => p.id === 7);
   assert.deepEqual(judgeHits(whistle, '队友吹了口哨'), []);
@@ -413,6 +434,9 @@ test('画面模块：座位卡的发言和 view.speeches 一致（逐字打字�
   assert.deepEqual(v.speeches.map((x) => x.text), ['她在等人吗？', '不是 · 不是等人', '我觉得是这样的故事', '命中 1 · 1/3']);
   assert.equal(d.seats.p1.role.text, '汤主');
   assert.equal(d.seats.p3.role.text, '命中 1/3');
+  // 还原交上去、汤主还没判定：座位卡上不先挂「命中 0/k」
+  const pend = game.apply(s, game.pending(s)[0], '还原：再猜一次');
+  assert.equal(stage.duoView(game.view(pend, '*')).seats.p4.role, null);
   assert.equal(d.seats.p4.state, 'speaking');
   assert.match(d.scene.title, /第 2 问 · 轮到 4 号/);
   s = solve(s, [1, 2, 3]);

@@ -286,7 +286,7 @@ const FORMAT_LINES = [
   '推断：一句话推断别家可能还有什么牌',
   '理由：一句话说明为什么这样出（配合队友、留炸弹等）',
   '胜率：你估计本队赢下这一盘的概率，写成 0–100 的整数加 %',
-  '最后一行：出牌阶段写「出牌：」加要出的牌，牌之间用空格分开，可以只写点数（「出牌：5 5 5 8 8」），要指定花色或用逢人配时写花色（「出牌：♠10 ♠J ♠Q ♠K ♠A」「出牌：♥7 5 5 8 8」），不出写「出牌：不出」；还贡阶段写「还贡：♣5」。',
+  '最后一行：出牌阶段写「出牌：」加要出的牌，牌之间用空格分开，可以只写点数（「出牌：5 5 5 8 8」），要指定花色或用逢人配时写花色（「出牌：♠10 ♠J ♠Q ♠K ♠A」「出牌：♥7 5 5 8 8」），逢人配有几种当法时可写「♥7当5」，不出写「出牌：不出」；还贡阶段写「还贡：♣5」。',
 ];
 
 // ---------- 游戏定义 ----------
@@ -318,6 +318,12 @@ const game = {
   interlude(prev, next) {
     const d = fxDuration(fxSummary(prev), fxSummary(next));
     return d ? Math.max(game.turnPause, d + 300) : 0;
+  },
+
+  /** 要不起（手里没有能压过上家的牌）时不问选手，直接「不出」——省一次模型调用，真人也不用点 */
+  autoAction(state, seat) {
+    if (state.phase !== 'play' || state.turn !== seat || !state.trick.last) return null;
+    return legalPlays(state.cards[seat], state.level, state.trick.last).length ? null : PASS;
   },
 
   /** 还贡是私密行动（还的牌只有双方知道） */
@@ -406,15 +412,15 @@ const game = {
     if (state.passA) reason = `${TEAM_NAMES[W]}第 ${last.hand} 盘打过 A（${POS_NAMES[0]} + ${POS_NAMES[last.partnerPos - 1]}）`;
     else {
       const tie = state.levels.A === state.levels.B;
-      reason = `打满 ${state.total} 盘：${TEAM_NAMES.A}打到 ${lv('A')}，${TEAM_NAMES.B}打到 ${lv('B')}${tie ? `，同级按最后一盘名次，${TEAM_NAMES[W]}拿到头游` : `，${TEAM_NAMES[W]}级数高`}`;
+      reason = `打满 ${state.total} 盘：${TEAM_NAMES.A}打到 ${lv('A')}，${TEAM_NAMES.B}打到 ${lv('B')}${tie ? `，同级看最后一盘头游` : ''}`;
     }
-    return { over: true, winner, ranks, teams: { [TEAM_NAMES.A]: teamSeats('A'), [TEAM_NAMES.B]: teamSeats('B') }, reason };
+    return { over: true, winner, winnerTeam: TEAM_NAMES[W], ranks, teams: { [TEAM_NAMES.A]: teamSeats('A'), [TEAM_NAMES.B]: teamSeats('B') }, reason };
   },
 
   forfeit(state, seat, reason) {
     const lose = teamOf(seat);
     const ranks = Object.fromEntries(SEATS.map((x) => [x, teamOf(x) === lose ? 2 : 1]));
-    return { over: true, winner: SEATS.find((x) => ranks[x] === 1), ranks, teams: { [TEAM_NAMES.A]: teamSeats('A'), [TEAM_NAMES.B]: teamSeats('B') }, reason };
+    return { over: true, winner: SEATS.find((x) => ranks[x] === 1), winnerTeam: TEAM_NAMES[otherTeam(lose)], ranks, teams: { [TEAM_NAMES.A]: teamSeats('A'), [TEAM_NAMES.B]: teamSeats('B') }, reason };
   },
 
   label(state, seat, action) {
@@ -468,7 +474,7 @@ const game = {
         hand,
         `可以还：${backChoices(s, seat).map(cardName).join(' ')}`,
         '',
-        '请按五行格式回答，最后一行写「还贡：…」，例如「还贡：♣5」。',
+        `请按五行格式回答，最后一行写「还贡：…」，例如「还贡：${cardName(backChoices(s, seat)[0])}」。`,
       ].join('\n');
     }
     const last = s.trick.last;
@@ -497,7 +503,7 @@ const game = {
   retryPrompt: (reason, attempt, max) => `你上一个回答无效：${reason}。请重新回答（这是第 ${attempt} 次重来，最多 ${max} 次，再无效判负），仍按五行格式回答。`,
 
   parseReply(state, seat, text) {
-    const t = String(text || '').normalize('NFKC');
+    const t = String(text || '').normalize('NFKC').replace(/[*`#]/g, '');
     const win = /胜率\s*[:：]\s*(\d{1,3})/.exec(t);
     const winrate = win ? Math.min(100, Number(win[1])) : null;
     const res = (r) => ({ action: r.error ? null : r.action, attempted: r.attempted ?? null, winrate, error: r.error || null });
@@ -508,9 +514,9 @@ const game = {
       if (!line) return res({ error: '现在是还贡阶段，最后一行应写「还贡：♣5」这样的格式（一张点数不超过 10 的牌）' });
       const raw = line[1].trim().replace(/[。.！!]+$/, '');
       const r = resolveOne(raw, state.cards[seat], state.level);
-      if (r.error) return res({ attempted: raw.slice(0, 20), error: `${r.error}，请写一张牌，例如「还贡：♣5」` });
+      if (r.error) return res({ attempted: raw.slice(0, 20), error: `${r.error}，请写一张能还的牌：${backChoices(state, seat).map(cardName).join(' ')}` });
       const id = `${BACK} ${cardName(r.card)}`;
-      try { game.apply(state, seat, id); } catch (e) { return res({ attempted: id, error: e.message }); }
+      try { game.apply(state, seat, id); } catch (e) { return res({ attempted: id, error: `${e.message}，能还的牌：${backChoices(state, seat).map(cardName).join(' ')}` }); }
       return res({ action: id, attempted: id });
     }
     const line = [...t.matchAll(/出牌\s*[:：]\s*([^\n]*)/g)].pop();
@@ -529,7 +535,10 @@ const game = {
   mockReply(state, seat, action) {
     if (state.phase === 'back') return `判断：要还一张小牌。\n推断：对方手里大牌不少。\n理由：还最没用的单张。\n胜率：50%\n还贡：${String(action).replace(/^还贡\s*/, '')}`;
     const pass = action === PASS;
-    const cardsPart = pass ? '不出' : String(action).split('=')[0];
+    // 逢人配写成「♥7当5」，组法不会被认成别的
+    let cardsPart = pass ? '不出' : String(action).split('=')[0];
+    const r = pass ? null : resolvePlay(String(action), state.cards[seat], state.level, state.trick.last);
+    if (r && !r.error) cardsPart = layout(r.cards, r.combo, state.level).map((x) => `${cardName(x.c)}${x.as ? `当${rankName(x.as)}` : ''}`).join(' ');
     return `判断：局面胶着。\n推断：对手还握着炸弹。\n理由：${pass ? '这手不值得压' : '先把这手牌走掉'}。\n胜率：50%\n出牌：${cardsPart}`;
   },
 

@@ -1633,6 +1633,11 @@ dialog.closing::backdrop { animation: dlg-veil-out 160ms var(--in) both; }
 .stage-bar .bar-info .bar-plies { order: 4; margin-left: auto; }
 /* 结果一行写不下就省略（全文在终局卡和悬停提示里）：换行会把状态栏撑高、整块场地往下跳 */
 .stage-bar .bar-info .stage-state.done { order: 3; flex: 1 1 0; }
+@media (max-width: 1100px) {
+  .stage-bar .bar-info .stage-state { flex: 1 1 auto; }
+  /* 手机、平板：结果单独占一行，最多两行（全文在终局卡和悬停提示里），不把页头撑成五六行 */
+  .stage-bar .bar-info .stage-state.done { order: 9; flex: 1 1 100%; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+}
 .stage-state:empty { display: none; }
 .stage-bar .bar-ctrl { flex-wrap: wrap; overflow: visible; row-gap: 4px; }
 .stage-bar .bar-ctrl .btn.sm { margin-left: 4px; white-space: nowrap; }

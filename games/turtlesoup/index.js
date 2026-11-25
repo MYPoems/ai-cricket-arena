@@ -48,6 +48,10 @@ const RED_YES = '死|去世|遇难|身亡|丧命|牺牲';
 const CLEAR_NO = '死|去世|遇难|身亡|丧命|尸体|被杀|自杀';
 const BEN_NO = '鬼|灵魂|魂魄|超自然|灵异|幽灵|穿越|时间循环|魔法|外星|超能力';
 const BIAN_YES = '超自然|灵异|现实中不可能';
+// 「主角是男的吗」这类问性别的问题：是 / 为 + 男 / 女（+ 的、人、性……）+ 句末
+const SEX_RE = /(?:是|为)(男|女)(?:的|人|性|孩子|孩|生|士)?(?=\s*(?:吗|么|嘛|呢|？|\?|。|$))/;
+// 问「还有没有别人」：题目没写 others: false 的都算有
+const OTHERS = '别人|其他人|别的人|另一个人|另外的人|第三个人|第三者';
 // 内置猜题者的通用问题（先划大范围）
 const GENERIC = [
   '有人死了吗？', '故事里有超自然的力量吗？', '主角是男的吗？', '这件事和主角的家人有关吗？', '主角是故意这么做的吗？',
@@ -107,9 +111,21 @@ export function judgeHits(puzzle, text) {
   return hits;
 }
 
-/** 内置汤主答题：问题和汤底的关键词粗略匹配；匹配不上答「无关」 */
+/**
+ * 内置汤主答题：问题和汤底的关键词粗略匹配；匹配不上答「无关」。
+ * 性别单独处理：只有问主角（主角、主人公、主角的称呼，或者「他 / 她是男的吗」）才按题目的 hero 答，
+ * 问别人的性别一律「无关」——以前把「男的 / 女的」当普通关键词，问到凶手、照片里的女人时会答反。
+ */
 export function builtinAnswer(puzzle, question) {
   const q = String(question || '');
+  const sx = SEX_RE.exec(q);
+  if (sx && puzzle.hero) {
+    const who = q.slice(0, sx.index).replace(/^[\s，,]+|[\s，,]+$/g, '');
+    const names = words(puzzle.heroNames);
+    const aboutHero = /主角|主人公/.test(who) || names.some((n) => who.includes(n)) || /^(?:他|她|这个人|此人|TA)?$/i.test(who);
+    if (!aboutHero) return 'irrelevant';
+    return sx[1] === (puzzle.hero === 'f' ? '女' : '男') ? 'yes' : 'no';
+  }
   let yes = 0;
   let nay = 0;
   for (const p of puzzle.points) {
@@ -121,6 +137,8 @@ export function builtinAnswer(puzzle, question) {
   const noWords = [...words(puzzle.no), ...words(puzzle.soup === 'clear' ? CLEAR_NO : ''), ...words(puzzle.style === 'ben' ? BEN_NO : '')];
   for (const w of yesWords) if (q.includes(w)) yes = Math.max(yes, len(w));
   for (const w of noWords) if (q.includes(w)) nay = Math.max(nay, len(w));
+  // 别的词都没对上、只问「还有没有别人」：按题目的 others 答
+  if (!yes && !nay && words(OTHERS).some((w) => q.includes(w))) return puzzle.others === false ? 'no' : 'yes';
   if (!yes && !nay) return 'irrelevant';
   if (yes > nay) return 'yes';
   if (nay > yes) return 'no';

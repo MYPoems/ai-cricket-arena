@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import game, { revealPlan, pauseBetween, parseCards, T } from '../games/liar/index.js';
+import game, { revealPlan, pauseBetween, parseCards, T, decodePlay, encodePlay } from '../games/liar/index.js';
 import { replay } from '../games/index.js';
 
 /** 改写当前这一轮：桌牌、各家手牌、轮到谁；可选每人子弹位置和已扣次数 */
@@ -16,6 +16,10 @@ function rig(state, { table = 'Q', hands, turn, bullets, pulls, pile = [] }) {
   return s;
 }
 const ids = (s, seat = s.round.turn) => game.actions(s, seat).map((a) => a.id);
+/** 行动列表的牌面（出牌的 id 是暗码，牌面在 cards 里；质疑是 call） */
+const faces = (s, seat = s.round.turn) => game.actions(s, seat).map((a) => a.cards || a.id);
+/** 暗码解回牌面（质疑原样返回） */
+const plain = (s, seat, a) => (a === 'call' || a === null ? a : decodePlay(s, seat, a));
 const run = (s, ...moves) => moves.reduce((st, m) => game.apply(st, st.round.turn, m), s);
 
 test('座位与基本参数', () => {
@@ -49,9 +53,9 @@ test('带种子发牌可重现：20 张牌（Q K A 各 6 + 鬼 2），每人 5 �
   assert.equal(leads.size, 4);
 });
 
-test('每轮第一手不能质疑；出 1–3 张，行动 id 按 Q K A 鬼 排好', () => {
+test('每轮第一手不能质疑；出 1–3 张，牌面按 Q K A 鬼 排好', () => {
   const s = rig(game.create({ players: 3, seed: 1 }), { hands: { p1: 'Q K A 鬼 鬼', p2: 'Q Q Q K K', p3: 'A A A A K' }, turn: 'p1' });
-  const a = ids(s);
+  const a = faces(s);
   assert.ok(!a.includes('call'));
   assert.ok(a.includes('Q K 鬼') && a.includes('鬼 鬼') && a.includes('Q'));
   assert.ok(a.every((x) => x.split(' ').length <= 3));
@@ -68,6 +72,31 @@ test('每轮第一手不能质疑；出 1–3 张，行动 id 按 Q K A 鬼 排�
   assert.deepEqual(s.round.pile, [], 'apply 不修改原 state');
 });
 
+test('出牌暗码：行动 id 看不出牌面，能解回牌面、能重放；旧记录的明文牌面照旧认', () => {
+  const s = rig(game.create({ players: 3, seed: 1 }), { hands: { p1: 'Q K A 鬼 鬼', p2: 'Q Q Q K K', p3: 'A A A A K' }, turn: 'p1' });
+  const acts = game.actions(s, 'p1');
+  const codes = acts.map((a) => a.id);
+  assert.equal(new Set(codes).size, codes.length, '暗码不重复');
+  for (const a of acts) {
+    assert.match(a.id, /^p-[0-9a-z]+$/);
+    assert.doesNotMatch(a.id, /[QKA鬼 ]/);
+    assert.equal(decodePlay(s, 'p1', a.id), a.cards);
+    assert.equal(encodePlay(s, 'p1', a.cards), a.id);
+    assert.deepEqual(game.apply(s, 'p1', a.id), game.apply(s, 'p1', a.cards), '暗码和明文出牌结果一样');
+  }
+  // 同样的牌面换一手、换一个人、换一个种子，暗码都不一样
+  const other = rig(game.create({ players: 3, seed: 2 }), { hands: { p1: 'Q K A 鬼 鬼', p2: 'Q Q Q K K', p3: 'A A A A K' }, turn: 'p1' });
+  assert.notEqual(encodePlay(other, 'p1', 'Q'), encodePlay(s, 'p1', 'Q'));
+  const n = game.apply(s, 'p1', encodePlay(s, 'p1', 'K'));
+  assert.notEqual(encodePlay(n, 'p2', 'Q'), encodePlay({ ...s, round: { ...s.round, turn: 'p2' } }, 'p2', 'Q'));
+  assert.throws(() => game.apply(s, 'p1', 'p-zzzzzzz'), /无法识别/);
+  assert.throws(() => game.apply(n, 'p2', encodePlay(s, 'p1', 'Q')), /无法识别/, '别人的暗码不能用');
+  // 暗码出牌是公开的一步（只露张数），明文牌面才是私密步
+  assert.equal(game.secret(s, 'p1', acts[0].id), false);
+  assert.equal(game.secret(s, 'p1', 'Q 鬼'), true);
+  assert.equal(game.label(s, 'p1', encodePlay(s, 'p1', 'Q 鬼')), `出 2 张，称都是 ${s.round.table}`);
+});
+
 test('质疑：有一张假牌出牌的人扣扳机；全是真牌（鬼牌算真）质疑的人扣；输家先出下一轮', () => {
   const base = rig(game.create({ players: 3, seed: 2 }), { table: 'K', hands: { p1: 'K A Q Q Q', p2: 'K K 鬼 A A', p3: 'Q Q A A A' }, turn: 'p1', bullets: { p1: 6, p2: 6, p3: 6 } });
   // p1 出 K A（说谎），p2 质疑 → p1 扣第 1 枪，没响，p1 先出下一轮
@@ -79,6 +108,10 @@ test('质疑：有一张假牌出牌的人扣扳机；全是真牌（鬼牌算�
   assert.equal(s.round.turn, 'p1');
   assert.equal(s.round.pile.length, 0);
   for (const x of ['p1', 'p2', 'p3']) assert.equal(s.round.hands[x].length, 5, '重新发牌');
+  // 质疑刚结算、新一轮还没人出牌：view.result 表示「结算中」，但整局没结束
+  assert.deepEqual(game.view(s, '*').result, { settling: true });
+  assert.equal(game.view(s, '*').over, false);
+  assert.equal(game.view(game.apply(s, 'p1', game.actions(s, 'p1')[0].id), '*').result, null, '新一轮有人出牌后不再是结算中');
   // p1 出 K（真），p2 出 K 鬼（真），p3 质疑 → p3 扣扳机，p3 先出
   s = run(base, 'K', 'K 鬼', 'call');
   assert.equal(s.history[0].lie, false);
@@ -108,6 +141,8 @@ test('左轮：终局名次与原因', () => {
   s = run(s, 'Q Q', 'K', 'call'); // p3 说谎被 p2 抓
   const o = game.outcome(s);
   assert.equal(o.over, true);
+  assert.equal(game.view(s, '*').over, true);
+  assert.equal(game.view(s, '*').result.winner, 'p2');
   assert.equal(o.winner, 'p2');
   assert.deepEqual(o.ranks, { p2: 1, p3: 2, p1: 3 });
   assert.match(o.reason, /2 号位活到了最后/);
@@ -126,6 +161,7 @@ test('手里没牌的人本轮跳过；只剩一人有牌时他只能质疑', ()
   assert.equal(s.round.turn, 'p3');
   assert.deepEqual(ids(s), ['call']);
   assert.equal(game.view(s, null).mustCall, true);
+  assert.throws(() => game.apply(s, 'p3', 'p-0000000'), /只能质疑/);
   assert.throws(() => game.apply(s, 'p3', 'Q'), /只能质疑/);
   s = run(s, 'call');
   assert.equal(s.history[0].accused, 'p2');
@@ -141,8 +177,12 @@ test('手里没牌的人本轮跳过；只剩一人有牌时他只能质疑', ()
 
 test('解析模型回答：宽松识别出牌和质疑，错误给出具体理由', () => {
   const s = rig(game.create({ players: 3, seed: 5 }), { table: 'K', hands: { p1: 'Q K K A 鬼', p2: 'Q Q Q A A', p3: 'K K A A 鬼' }, turn: 'p1' });
-  const p = (txt, st = s, seat = st.round.turn) => game.parseReply(st, seat, txt);
+  const p = (txt, st = s, seat = st.round.turn) => {
+    const r = game.parseReply(st, seat, txt);
+    return { ...r, action: plain(st, seat, r.action) };
+  };
   assert.equal(p('判断：…\n胜率：40%\n行动：出牌 K K').action, 'K K');
+  assert.equal(game.parseReply(s, 'p1', '行动：出牌 K K').action, encodePlay(s, 'p1', 'K K'), '解析出的是暗码');
   assert.equal(p('判断：…\n胜率：40%\n行动：出牌 K K').winrate, 40);
   assert.equal(p('行动：出牌 鬼 K').action, 'K 鬼');
   assert.equal(p('行动：出牌 KJ').action, 'K 鬼', 'J 当鬼牌');
@@ -155,12 +195,29 @@ test('解析模型回答：宽松识别出牌和质疑，错误给出具体理�
   assert.match(p('行动：质疑').error, /先出/);
   assert.match(p('我想想').error, /没有找到行动/);
   assert.match(p('行动：随便').error, /没有认出牌面/);
+  // 不规范的写法
+  assert.equal(p('**行动**：出牌 K').action, 'K', 'Markdown 加粗');
+  assert.equal(p('- 行动：出牌 K').action, 'K', '列表符号');
+  assert.equal(p('胜率：约 35%\n行动：出牌 K').winrate, 35);
+  assert.equal(p('行动：出牌 [K, 鬼]').action, 'K 鬼', '方括号');
+  assert.equal(p('行动：出牌 Q 称 K').action, 'Q', '「称」后面是声称，不是牌');
+  assert.equal(p('行动：出牌 K，声称都是 K').action, 'K');
+  assert.equal(p('行动：出牌 KK').action, 'K K');
+  assert.equal(p('行动：出牌 Q、K').action, 'Q K');
+  assert.match(p('行动：PASS').error, /没有认出牌面/, '英文词里的 A 不算牌');
+  assert.match(p('行动：出牌 OK').error, /没有认出牌面/);
   const n = game.apply(s, 'p1', 'Q');
   assert.equal(p('判断：…\n行动：质疑', n).action, 'call');
   assert.equal(p('行动：质疑！', n).action, 'call');
   assert.equal(p('行动：LIAR', n).action, 'call');
+  assert.equal(p('行动：不信', n).action, 'call');
+  assert.equal(p('行动：我选择质疑', n).action, 'call');
+  assert.equal(p('行动：不质疑，出牌 Q Q', n).action, 'Q Q', '否定的质疑不算');
+  assert.equal(p('行动：先不质疑，出牌：Q', n).action, 'Q');
+  assert.equal(p('行动：出牌 Q（不质疑）', n).action, 'Q');
   assert.match(p('行动：出牌 K', n, 'p1').error, /不是/);
-  for (const a of ids(n)) assert.equal(p(game.mockReply(n, 'p2', a), n).action, a, `mockReply 能读回 ${a}`);
+  for (const a of ids(n)) assert.equal(game.parseReply(n, 'p2', game.mockReply(n, 'p2', a)).action, a, `mockReply 能读回 ${a}`);
+  assert.match(game.mockReply(n, 'p2', ids(n)[0]), /行动：出牌 [QKA鬼]/, 'mockReply 写的是牌面，不是暗码');
   assert.deepEqual(parseCards('Q q 鬼牌').cards, ['Q', 'Q', '鬼']);
 });
 
@@ -180,7 +237,7 @@ test('内置 AI：各档都出合法的行动；能确定对方说谎时质疑�
   // 有真牌就诚实出（不质疑一张牌的小手）
   const m = game.apply(rig(game.create({ players: 2, seed: 6 }), { table: 'Q', hands: { p1: 'Q A K A K', p2: 'Q Q K A A' }, turn: 'p1' }), 'p1', 'Q');
   const a = game.builtinMove(m, 'p2', { level: 2 });
-  assert.equal(a, 'Q Q');
+  assert.equal(plain(m, 'p2', a), 'Q Q');
   // 只能质疑时 level 1 也质疑（真人超时由系统代打要用它）
   const t = run(rig(game.create({ players: 2, seed: 4 }), { table: 'Q', hands: { p1: 'Q', p2: 'K' }, turn: 'p1' }), 'Q');
   assert.equal(game.builtinMove(t, 'p2', { level: 1 }), 'call');
@@ -213,8 +270,9 @@ test('隐藏信息：玩家只看自己的牌，公共视角谁的牌都看不�
   assert.match(tp, /你的手牌/);
   assert.match(tp, new RegExp(`桌牌：${s.round.table}`));
   assert.match(tp, /下一枪 1\/6/);
-  // 出牌这一步是私密的（行动 id 就是牌面），质疑是公开的；label 不暴露牌面
+  // 明文牌面的出牌是私密的，暗码出牌和质疑是公开的；label 不暴露牌面
   assert.equal(game.secret(s, who, 'Q Q'), true);
+  assert.equal(game.secret(s, who, game.actions(s, s.round.turn)[0].id), false);
   assert.equal(game.secret(s, who, 'call'), false);
   assert.equal(game.secret(s, who, null), false);
   assert.equal(game.label(s, 'p1', 'Q 鬼'), `出 2 张，称都是 ${s.round.table}`);

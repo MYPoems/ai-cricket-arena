@@ -2,6 +2,8 @@
 // 108 张（万条筒各 1–9 各四张），不能吃，可以碰、杠；开局四家同时定缺，手里还有缺的那门牌时只能先打它，也不能胡；
 // 一家胡了不结束，其余继续打，直到三家胡了或牌墙摸完（流局时查花猪、查大叫、退税）。一场打 setup.hands 盘，按累计分排名。
 // 行动 id：que:m|s|p（定缺）、discard:5m（打牌）、zimo（自摸）、angang:5m、bugang:5m、hu、peng、gang、pass（响应别人打的牌 / 抢杠）。
+// 规则 2（setup.rules，新对局默认）：响应窗口里其余没胡的人都在（要不了的由 autoAction 代答「过」），补杠每次都开窗口；
+// 配合 secret()，有真人时旁人分不出谁能碰杠胡。规则 1 是最早的记录，照旧重放。
 
 import {
   SUITS, SUIT_CODE, suitOf, rankOf, tileName, tileCode, fromCode, sortTiles, toCounts, compactText,
@@ -99,9 +101,14 @@ function nextTurn(s, from) {
   draw(s, nextAlive(h, from));
 }
 
-/** 记一条行动（本盘记录；open 为真时别人暂时看不到内容，响应窗口结算后公开） */
-function logIt(h, i, text, open = false) {
-  h.log.push({ seat: i, text, ...(open ? { open: true } : {}) });
+/**
+ * 记一条行动（本盘记录）。extra：
+ * - open：同时行动还没揭晓（定缺时别人看到「已定缺」；响应窗口里别人根本看不到这一条，免得暴露谁能碰杠胡）
+ * - priv：只有本人和上帝视角看得到（喊过、被截走的碰杠——公开就等于告诉别人他手里有一对）
+ * - pub：别人看到的写法（暗杠不说是哪张）
+ */
+function logIt(h, i, text, extra = {}) {
+  h.log.push({ seat: i, text, ...extra });
 }
 
 /** 胡牌结算：from 为点炮（或被抢杠）的人，-1 为自摸 */
@@ -194,12 +201,27 @@ function afterDiscard(s, i, t) {
   }
   if (Object.keys(opts).length) {
     h.phase = 'react';
-    h.react = { kind: 'discard', t, from: i, opts, ans: {}, kong: h.kong, haidi: wallLeft(h) === 0 };
+    h.react = { kind: 'discard', t, from: i, opts, ans: {}, kong: h.kong, haidi: wallLeft(h) === 0, auto: padOthers(s, i, opts) };
     h.drawn = null;
     return;
   }
   nextTurn(s, i);
 }
+
+/**
+ * 规则 2：响应窗口一开，其余没胡的人都进窗口，不能响应的只有「过」、由框架代答（autoAction）。
+ * 有真人时响应步是私密步（secret），代答也随机停一会儿——旁人分不出窗口里谁真能碰杠胡、有几个人能。
+ * 返回代答的座位（序号）。规则 1（旧记录）不加人。
+ */
+function padOthers(s, from, opts) {
+  if ((s.cfg.rules || 1) < 2) return [];
+  const h = H(s);
+  const auto = alive(h).filter((j) => j !== from && !opts[j]);
+  for (const j of auto) opts[j] = ['pass'];
+  return auto;
+}
+
+const isAuto = (h, i) => h.phase === 'react' && !!h.react?.auto?.includes(i);
 
 /** 响应窗口里所有人都答了：胡优先（可以一炮多响），其次杠、碰，都过就照常往下 */
 function resolveReact(s) {
@@ -214,7 +236,9 @@ function resolveReact(s) {
     if (!e.open) continue;
     delete e.open;
     const a = r.ans[e.seat];
-    if (taken && (a === 'peng' || (a === 'gang' && e.seat !== gw))) e.text += hus.length ? '（被胡截走）' : '（被杠截走）';
+    // 只有成了的胡、杠、碰公开；喊过的、被截走的只有本人和上帝视角看得到
+    if (a === 'pass') e.priv = true;
+    else if (taken && (a === 'peng' || (a === 'gang' && e.seat !== gw))) { e.text += hus.length ? '（被胡截走）' : '（被杠截走）'; e.priv = true; }
   }
   const markGone = () => { const rv = h.river[r.from]; if (r.kind === 'discard' && rv.length) rv[rv.length - 1].gone = true; };
   if (hus.length) {
@@ -380,30 +404,48 @@ const FORMAT_LINES = [
 function lastField(t, keys) {
   const re = new RegExp(`(${keys})\\s*[:：]\\s*([^\\n]*)`, 'g');
   const all = [...t.matchAll(re)];
-  return all.length ? { key: all.at(-1)[1], val: all.at(-1)[2].trim().replace(/[。.！!]+$/, '') } : null;
+  return all.length ? { key: all.at(-1)[1], val: clean(all.at(-1)[2]) } : null;
+}
+
+/** 去掉两头的括号、引号和句号 */
+function clean(v) {
+  return v.trim().replace(/^[\s【\[（(「『"“'‘]+/, '').replace(/[\s】\]）)」』"”'’。.！!]+$/, '');
+}
+
+/** 没写键名时退一步：最后一行不是分析行（判断、推断、理由、胜率……）就当作行动 */
+function lastLine(t) {
+  const line = t.trim().split(/\n/).map((x) => x.trim()).filter(Boolean).pop() || '';
+  return /^(判断|推断|威胁|理由|计划|胜率)\s*[:：]/.test(line) ? null : { key: '', val: clean(line) };
 }
 
 function parseQue(t) {
   const f = lastField(t, '定缺|缺|行动');
   if (!f && /出牌\s*[:：]/.test(t)) return { error: '现在是定缺阶段，最后一行应写「定缺：万」「定缺：条」或「定缺：筒」' };
   const src = f ? f.val : (t.trim().split(/\n/).pop() || '');
-  const k = parseSuit(src);
+  let k = parseSuit(src);
+  if (k < 0) {
+    const m = /^(?:缺)?\s*([mspwtb])(?![a-z])/i.exec(src.trim());
+    if (m) k = { m: 0, w: 0, s: 1, t: 1, p: 2, b: 2 }[m[1].toLowerCase()];
+  }
   if (k < 0) return { error: f ? `无法识别定缺「${src.slice(0, 10)}」，请写「定缺：万」「定缺：条」或「定缺：筒」` : '没有找到定缺（最后一行应为「定缺：条」这样的格式）' };
   return { action: `que:${SUIT_CODE[k]}`, attempted: `缺${SUITS[k]}` };
 }
 
 function parseTurn(s, i, t) {
   const h = H(s);
-  const f = lastField(t, '出牌|打出|打牌|行动|动作');
-  if (!f) return { error: '没有找到出牌（最后一行应为「出牌：5万」，或「行动：自摸」「行动：暗杠 5万」）' };
+  const f = lastField(t, '出牌|打出|打牌|行动|动作') || lastLine(t);
+  if (!f || !f.val) return { error: '没有找到出牌（最后一行应为「出牌：5万」，或「行动：自摸」「行动：暗杠 5万」）' };
   const o = turnOptions(h, i);
-  const v = f.val;
-  if (/自摸|胡|和牌/.test(v) && !/不胡/.test(v)) {
+  const v = f.val.replace(/^打\s*(?=[1-9一二两三四五伍六七八九幺么])/, '');
+  const tile = parseTile(v);
+  const discardKey = /出牌|打出|打牌/.test(f.key);
+  // 「出牌：3条（等自摸）」是打牌：只有开头就是自摸 / 胡，或者根本没写牌，才当自摸
+  if ((/^(自摸|胡|和牌)/.test(v) || (tile < 0 && /自摸|胡|和牌/.test(v))) && !/^不/.test(v)) {
     if (o.zimo) return { action: 'zimo', attempted: '自摸' };
     return { attempted: '自摸', error: hasQueTiles(h, i) ? `你手里还有缺的${SUITS[h.que[i]]}，不能胡` : '你的手牌还没有胡，不能自摸，请出一张牌' };
   }
-  const tile = parseTile(v);
-  if (/杠/.test(v)) {
+  // 杠：开头就是杠，或者行动行里说了暗杠 / 补杠（「出牌：5万（先不杠）」是打牌）
+  if (/^(暗杠|补杠|加杠|巴杠|弯杠|明杠|杠)/.test(v) || (!discardKey && /杠/.test(v) && !/不杠/.test(v) && (tile < 0 || /暗杠|补杠|加杠|巴杠|弯杠/.test(v)))) {
     const ang = /暗杠/.test(v), bu = /补杠|加杠|巴杠|弯杠/.test(v);
     let cand = [...o.angang.map((x) => ['angang', x]), ...o.bugang.map((x) => ['bugang', x])];
     if (ang) cand = cand.filter((c) => c[0] === 'angang');
@@ -425,13 +467,15 @@ function parseTurn(s, i, t) {
 function parseReact(s, i, t) {
   const h = H(s);
   const opts = h.react.opts[i];
-  const f = lastField(t, '行动|动作|响应|决定');
-  const src = f ? f.val : (t.trim().split(/\n/).pop() || '');
-  let a = null;
-  if (/过|pass|不要|放弃|不碰|不杠|不胡|跳过/i.test(src)) a = 'pass';
-  else if (/胡|和|点炮|抢杠/.test(src)) a = 'hu';
-  else if (/杠/.test(src)) a = 'gang';
-  else if (/碰/.test(src)) a = 'peng';
+  const f = lastField(t, '行动|动作|响应|决定') || lastLine(t);
+  const src = f ? f.val : '';
+  // 取最先出现的那个词：「碰，过两巡再杠」是碰，「不碰」是过，「抢杠胡」是胡
+  const words = [['pass', /过|pass|不要|放弃|不碰|不杠|不胡|跳过/i], ['hu', /胡|和牌|点炮|抢杠|自摸/], ['gang', /杠/], ['peng', /碰/]];
+  let a = null, at = Infinity;
+  for (const [id, re] of words) {
+    const m = re.exec(src);
+    if (m && m.index < at) { a = id; at = m.index; }
+  }
   const list = opts.map((x) => REACT_LABEL[x]).join('、');
   if (!a) return { error: f ? `无法识别「${src.slice(0, 10)}」，请写「行动：${list.split('、').join('」「行动：')}」之一` : `没有找到行动（最后一行应为「行动：${opts.includes('peng') ? '碰' : '胡'}」或「行动：过」）` };
   if (!opts.includes(a)) return { attempted: REACT_LABEL[a], error: `现在不能${REACT_LABEL[a]}，你可以：${list}` };
@@ -462,17 +506,41 @@ const game = {
     if (!Number.isInteger(hands) || hands < 1 || hands > 16) throw new Error('盘数必须是 1–16 的整数');
     const cap = setup?.cap ?? DEFAULT_CAP;
     if (!Number.isInteger(cap) || cap < 2 || cap > 6) throw new Error('封顶番数必须是 2–6 的整数');
+    // 规则版本：1 = 最早的记录（响应窗口只有能响应的人）；2 = 窗口里其余没胡的人都在（代答「过」），补杠每次都开窗口
+    const rules = setup?.rules ?? 1;
+    if (![1, 2].includes(rules)) throw new Error('规则版本只有 1、2');
     const s = {
       seed: (Number(seed) || 0) >>> 0, rng: (Number(seed) || 0) >>> 0,
-      cfg: { hands, cap }, handNo: 0, firstDealer: 0, totals: [0, 0, 0, 0], history: [], over: false, hand: null, last: null,
+      cfg: { hands, cap, rules }, handNo: 0, firstDealer: 0, totals: [0, 0, 0, 0], history: [], over: false, hand: null, last: null,
     };
     s.firstDealer = Math.floor(rand(s) * N);
     startHand(s);
     return s;
   },
 
+  // 新开的对局用规则 2（旧记录没有 rules，重放时按规则 1）
+  newSetup: { rules: 2 },
+
   pending: (state) => pendingOf(state),
   actions: (state, seat) => actionList(state, seat),
+
+  /** 响应窗口里本来就要不了这张牌的人：框架不问他，代答「过」（有真人时随机停一会儿，旁人看不出谁真在想） */
+  autoAction(state, seat) {
+    if (state.over) return null;
+    const h = H(state), i = seatIdx(seat);
+    return isAuto(h, i) && h.react.ans[i] === undefined ? 'pass' : null;
+  },
+
+  /**
+   * 有真人或自带 agent 时的私密步：定缺（四家同时选，别人先不知道）、响应窗口里的每一步（谁在窗口里、喊了什么都不公开，
+   * 结算后只公开成了的胡碰杠）、暗杠（不说是哪张）。
+   */
+  secret(state, seat, action) {
+    if (state.over) return false;
+    const h = H(state);
+    if (h.phase === 'que' || h.phase === 'react') return true;
+    return typeof action === 'string' && action.startsWith('angang:');
+  },
 
   apply(state, seat, action) {
     if (state.over) throw new Error('对局已经结束');
@@ -485,7 +553,7 @@ const game = {
       const m = /^que:([msp])$/.exec(a);
       if (!m) throw new Error(`定缺阶段的行动应为 que:m / que:s / que:p：${a}`);
       h.que[i] = SUIT_CODE.indexOf(m[1]);
-      logIt(h, i, `定缺 ${SUITS[h.que[i]]}`, true);
+      logIt(h, i, `定缺 ${SUITS[h.que[i]]}`, { open: true });
       if (h.que.every((q) => q !== null)) {
         for (const e of h.log) delete e.open;
         h.phase = 'turn';
@@ -497,7 +565,8 @@ const game = {
     if (h.phase === 'react') {
       if (!h.react.opts[i].includes(a)) throw new Error(`现在不能${REACT_LABEL[a] || a}，可以：${h.react.opts[i].map((x) => REACT_LABEL[x]).join('、')}`);
       h.react.ans[i] = a;
-      logIt(h, i, a === 'pass' ? '过' : `${REACT_LABEL[a]} ${tileName(h.react.t)}`, true);
+      // 代答的「过」不记（他本来就要不了）
+      if (!isAuto(h, i)) logIt(h, i, a === 'pass' ? '过' : `${REACT_LABEL[a]} ${tileName(h.react.t)}`, { open: true });
       if (pendingOf(s).length === 0) resolveReact(s);
       return s;
     }
@@ -524,7 +593,7 @@ const game = {
       h.melds[i].push({ k: 'an', t, from: i });
       h.calls++;
       for (const j of alive(h)) if (j !== i) pay(s, j, i, GANG_PAY.an, 'gang', `暗杠 ${tileName(t)}`);
-      logIt(h, i, `暗杠 ${tileName(t)}`);
+      logIt(h, i, `暗杠 ${tileName(t)}`, { pub: '暗杠' });
       event(h, { type: 'gang', seat, t: tileCode(t), k: 'an' });
       draw(s, i, true);
       return s;
@@ -532,7 +601,7 @@ const game = {
     if (kind === 'bugang') {
       if (!o.bugang.includes(t)) throw new Error('现在不能这样补杠');
       logIt(h, i, `补杠 ${tileName(t)}`);
-      // 抢杠胡：别家能胡这张就先问他们
+      // 抢杠胡：别家能胡这张就先问他们（规则 2：每次补杠都开窗口，不然「停下来问」本身就说明有人在等这张）
       const opts = {};
       for (const j of alive(h)) {
         if (j === i || suitOf(t) === h.que[j]) continue;
@@ -540,9 +609,10 @@ const game = {
         c[t]++;
         if (isWin(c, h.melds[j].length, h.que[j])) opts[j] = ['hu', 'pass'];
       }
+      const auto = padOthers(s, i, opts);
       if (Object.keys(opts).length) {
         h.phase = 'react';
-        h.react = { kind: 'rob', t, from: i, opts, ans: {}, kong: false, haidi: false };
+        h.react = { kind: 'rob', t, from: i, opts, ans: {}, kong: false, haidi: false, auto };
         h.drawn = null;
         return s;
       }
@@ -667,7 +737,7 @@ const game = {
 
   parseReply(state, seat, text) {
     const t = String(text || '').normalize('NFKC').replace(/[*`_]/g, '');
-    const win = /胜率\s*[:：]\s*(\d{1,3})/.exec(t);
+    const win = /胜率\s*[:：]\s*[^\d\n]{0,3}?(\d{1,3})/.exec(t);
     const winrate = win ? Math.min(100, Number(win[1])) : null;
     if (state.over) return { action: null, attempted: null, winrate, error: '对局已经结束' };
     if (!pendingOf(state).includes(seat)) return { action: null, attempted: null, winrate, error: `现在不是${seatName(seat)}行动` };
@@ -736,7 +806,11 @@ const game = {
     if (vi >= 0 && h.phase === 'turn' && h.turn === vi && !hasQueTiles(h, vi)) {
       hints = Object.fromEntries(tingHints(h, vi).map((x) => [tileCode(x.t), { waits: x.waits.map(tileCode), left: x.left }]));
     }
-    const log = h.log.map((e) => ({ seat: SEATS[e.seat], text: e.open && !god && e.seat !== vi ? (h.phase === 'que' ? '已定缺' : '已决定') : e.text }));
+    // 本盘记录：别人的私密条目不给；响应窗口里别人的回答连「已决定」都不给（不然就知道谁在窗口里）
+    const log = h.log.filter((e) => god || e.seat === vi || (!e.priv && !(e.open && h.phase !== 'que')))
+      .map((e) => ({ seat: SEATS[e.seat], text: god || e.seat === vi ? e.text : e.open ? '已定缺' : e.pub || e.text }));
+    // 暗杠的事件不带牌（别人只知道杠了一组）
+    const ev = h.ev && h.ev.k === 'an' && !god && seatIdx(h.ev.seat) !== vi ? { ...h.ev, t: null } : h.ev;
     return {
       viewer: god ? null : viewer,
       seats: SEATS,
@@ -745,7 +819,7 @@ const game = {
       dealer: SEATS[h.dealer], wall: wallLeft(h), queDone, wins: h.wins, calls: h.calls,
       react: r ? { kind: r.kind, t: tileCode(r.t), from: SEATS[r.from] } : null,
       lastDiscard,
-      ev: h.ev,
+      ev,
       players,
       hints,
       log,

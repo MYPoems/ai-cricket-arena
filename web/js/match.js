@@ -125,6 +125,9 @@ export async function matchView(root, id, { characters, session }) {
     await post(`/matches/${id}/move`, { action, offerDraw: offerNext });
     offerNext = false;
     waitingHuman = null;
+    // 交出去就收起操作区：同时行动的游戏（投票、麻将响应）要等别人也答完局面才变，按钮留着会被重复点
+    renderStage(false);
+    renderStatus();
   });
   const stage = renderer.createStage({ onAction: doAction });
   // 对称座位版式（狼人杀、谁是卧底）：游戏模块提供 duoView(view)，返回场景和每个座位的状态
@@ -321,7 +324,11 @@ export async function matchView(root, id, { characters, session }) {
     if (recordMode || left || d.status !== 'finished' || !r || r.aborted) return;
     const mine = humanSeat ? seatOutcome(r, humanSeat) : null;
     const draw = seatOutcome(r, seats[0]) === 'd' && (!mine || mine === 'd');
-    const title = mine ? (mine === 'w' ? '你赢了' : mine === 'l' ? '你输了' : '和局') : endTitle(r);
+    // 名次分三档以上的（麻将、吹牛左轮等）：没拿第一写第几名，不一律写「你输了」
+    const rankVals = Object.values(r.ranks || {});
+    const myRank = humanSeat ? r.ranks?.[humanSeat] : undefined;
+    const placed = mine === 'l' && new Set(rankVals).size > 2 && myRank !== undefined;
+    const title = mine ? (mine === 'w' ? '你赢了' : placed ? `第 ${myRank} 名` : mine === 'l' ? '你输了' : '和局') : endTitle(r);
     const close = () => { el.classList.add('closing'); setTimeout(() => el.remove(), 220); document.removeEventListener('keydown', onEsc, true); };
     const onEsc = (e) => { if (e.key === 'Escape' && el.isConnected && !document.querySelector('dialog[open]')) { e.preventDefault(); e.stopPropagation(); close(); } };
     const again = canRematch();

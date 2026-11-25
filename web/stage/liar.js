@@ -24,16 +24,16 @@ const LAYOUTS = {
     table: { cx: 40, cy: 23, rx: 31, ry: 16.6 },
     ring: { rx: 34.5, ry: 20.6 }, clampX: [10.2, 69.8], clampY: [5.2, 44.6],
     plate: { w: 19, h: 5 },
-    plaque: [32, 21.6], pile: [44.5, 23.6], claim: [44.5, 28.4], show: [40, 18.4], drum: [40, 21.6], stamp: [40, 28.8],
-    hand: { cw: 2.4 }, mine: { cx: 40, y: 34.4, cw: 4.4 }, ctl: { cx: 40, y: 30.6 }, last: [1.2, 1.2], pill: [1.2, 45.6],
+    plaque: [32, 21.6], pile: [44.5, 23.6], claim: [44.5, 28.4], pcount: [50.9, 22.8], show: [45, 18.4], drum: [40, 21.6], stamp: [45, 28.8],
+    hand: { cw: 2.4 }, mine: { cx: 40, y: 34.8, cw: 4.4 }, ctl: { cx: 40, y: 30.1 }, last: [1.2, 1.2], pill: [1.2, 45.6],
   },
   port: {
     w: 50, h: 70,
     table: { cx: 25, cy: 31, rx: 21.5, ry: 25 },
     ring: { rx: 21.5, ry: 27.6 }, clampX: [9.6, 40.4], clampY: [5, 59],
     plate: { w: 18.4, h: 5 },
-    plaque: [25, 19.6], pile: [25, 31.4], claim: [25, 37.4], show: [25, 25], drum: [25, 29], stamp: [25, 37],
-    hand: { cw: 2.3 }, mine: { cx: 25, y: 46.2, cw: 4.4 }, ctl: { cx: 25, y: 41.6 }, last: [1, 63.6], pill: [1, 63.6],
+    plaque: [25, 19.6], pile: [25, 31.4], claim: [25, 37.4], pcount: [25, 34.1], show: [25, 28.4], drum: [25, 29], stamp: [25, 38],
+    hand: { cw: 2.3 }, mine: { cx: 25, y: 47, cw: 4.4 }, ctl: { cx: 25, y: 41 }, last: [1, 64.4], pill: [1, 64.4],
   },
 };
 
@@ -87,8 +87,8 @@ const CSS = `
   box-shadow: inset 0 0 0 .24em #f3e6c4, inset 0 0 0 .31em #d4ab52, inset 0 0 0 .36em #17110e, 0 .06em 0 #e4d7b6, 0 .12em 0 #c6b388, 0 .16em 0 rgb(60 36 8 / .55), 0 .3em .4em -.05em rgb(0 0 0 / .55); }
 .lr-c.pick { cursor: pointer; transition: translate .14s ease-out, box-shadow .14s; }
 .lr-c.pick:hover { translate: 0 -.25em; }
-.lr-c.sel { translate: 0 -.9em; box-shadow: inset 0 0 0 .05em rgb(110 76 28 / .5), inset 0 0 0 .18em #e6bd5c, 0 .12em 0 #c6b388, 0 .9em 1em -.1em rgb(0 0 0 / .5), 0 0 1.2em .2em rgb(255 214 120 / .7); }
-.lr-c.sel:hover { translate: 0 -.9em; }
+.lr-c.sel { translate: 0 -1.1em; box-shadow: inset 0 0 0 .05em rgb(110 76 28 / .5), inset 0 0 0 .18em #e6bd5c, 0 .12em 0 #c6b388, 0 .9em 1em -.1em rgb(0 0 0 / .5), 0 0 1.2em .2em rgb(255 214 120 / .7); }
+.lr-c.sel:hover { translate: 0 -1.1em; }
 .lr-c.lie { box-shadow: inset 0 0 0 .05em rgb(110 76 28 / .5), inset 0 0 0 .22em #e2523d, 0 .16em 0 rgb(60 36 8 / .55), 0 0 1.4em .3em rgb(255 80 50 / .7); }
 .lr-c.ok { box-shadow: inset 0 0 0 .05em rgb(110 76 28 / .5), inset 0 0 0 .2em #e6bd5c, 0 .16em 0 rgb(60 36 8 / .55), 0 0 1.2em .2em rgb(255 214 120 / .6); }
 .lr-c.dim { filter: brightness(.55) saturate(.5); }
@@ -141,6 +141,7 @@ const CSS = `
 .lr-seat .tag i:nth-child(2) { animation-delay: .2s; } .lr-seat .tag i:nth-child(3) { animation-delay: .4s; }
 .lr-seat .tmr { position: absolute; right: -.5em; top: -.85em; font: 700 1em/1 var(--num); padding: .25em .5em .28em; border-radius: .8em; color: #2a1206; z-index: 3;
   background: linear-gradient(180deg, #fff3c8, #f0cd78); box-shadow: 0 .1em 0 #8e6824, 0 .2em .4em rgb(0 0 0 / .4); font-variant-numeric: tabular-nums; }
+.lr-seat .tmr.dn { top: auto; bottom: -.85em; }
 .lr-seat .tmr.warm { background: linear-gradient(180deg, #ffd9a0, #f09a3c); }
 .lr-seat .tmr.hot { color: #fff4e0; background: linear-gradient(180deg, #ff8a6a, #c42d1e); }
 
@@ -280,12 +281,21 @@ const isLive = (opts) => ('live' in opts ? !!opts.live
   : opts.replay ? false
     : opts.clock && typeof opts.clock === 'object' ? Object.keys(opts.clock).length > 0 || !!opts.movable
       : true);
-const summary = (v) => (v && Array.isArray(v.history) ? { challenges: v.history.length, n: v.history.at(-1)?.cards.length || 0, dead: !!v.history.at(-1)?.dead, over: !!v.result } : null);
+/** 整局结束了没有（view.result 在质疑刚结算、下一手还没出时也有值，表示「结算中」；旧版服务端没有 over 字段） */
+const ended = (v) => !!v && (v.over !== undefined ? !!v.over : !!v.result);
+const summary = (v) => (v && Array.isArray(v.history) ? { challenges: v.history.length, n: v.history.at(-1)?.cards.length || 0, dead: !!v.history.at(-1)?.dead, over: ended(v) } : null);
 const fracText = (pulls) => (pulls >= CH - 1 ? '必中' : `1/${CH - pulls}`);
 
+/**
+ * 揭晓还没演到扣扳机时，聚光框头上那一行（seatLine）也按质疑前的局面写，免得框里先写出「已出局」。
+ * 牌桌开演一次揭晓时记下：{ key: 质疑次数, round, src: 质疑前的局面, until: 扣扳机的时刻, end: 演完的时刻（Date.now 毫秒） }。
+ * 本局记录里这次质疑的结果也等演完再写。
+ */
+let hold = null;
+
 /** 思考计时：行动者名牌上的「12s」，每秒自己更新 */
-function thinkTimer(t0) {
-  const n = el('span', { class: 'tmr', 'data-t0': String(t0) });
+function thinkTimer(t0, down = false) {
+  const n = el('span', { class: `tmr${down ? ' dn' : ''}`, 'data-t0': String(t0) });
   paintTimer(n);
   return n;
 }
@@ -368,13 +378,14 @@ export default {
 
   /** 聚光框头上的一行：手牌、左轮 */
   seatLine(view, seat) {
+    if (hold && Date.now() < hold.until && view?.history?.length === hold.key && view.round === hold.round) view = hold.src;
     const r = view?.revolvers?.[seat];
     if (!r) return '';
     if (!r.alive) return `已出局 · 扣了 ${r.pulls} 枪`;
     return `手牌 ${view.counts?.[seat] ?? 0} 张 · 左轮已扣 ${r.pulls} 枪（下一枪 ${fracText(r.pulls)}）`;
   },
 
-  /** 本局记录：每一轮一组。最近一次质疑的结果要等画面演完（下一手出现）才写进来，免得扳机还没扣就剧透 */
+  /** 本局记录：每一轮一组。最近一次质疑的结果要等画面演完（或下一手出现）才写进来，免得扳机还没扣就剧透 */
   handLog(view) {
     if (!Array.isArray(view?.log)) return null;
     const tag = (s) => `${seatNo(s)} 号`;
@@ -391,13 +402,17 @@ export default {
       if (e.kind === 'play') g.items.push({ seat: e.seat, text: `出 ${e.n} 张${e.cards ? `（${e.cards.join(' ')}）` : ''}` });
       else {
         const h = hs[k++];
-        const settled = h && i < view.log.length - 1; // 之后又有人出过牌：揭晓早演完了
+        // 之后又有人出过牌，或者牌桌上这次揭晓已经演完（打开页面时直接看到的结果没有演出）
+        const playing = hold && hold.key === hs.length && k === hs.length && Date.now() < hold.end;
+        const settled = h && (i < view.log.length - 1 || !playing);
         g.items.push({ seat: e.seat, text: settled ? `质疑 ${tag(e.accused)} → ${h.lie ? '说谎' : '是真的'}，${tag(h.loser)}${h.dead ? '中弹出局' : '咔哒'}` : `质疑 ${tag(e.accused)}` });
       }
     });
-    const alive = (view.alive || []).length;
+    // 揭晓还没演完：表头按质疑前的局面写（新一轮的桌牌、还剩几人都先不说）
+    const head = hold && hold.key === hs.length && view.round === hold.round && Date.now() < hold.end ? hold.src : view;
+    const alive = (head.alive || []).length;
     return {
-      label: '本局记录', title: `第 ${view.round} 轮`, sub: `桌牌 ${view.table} · 还剩 ${alive} 人`,
+      label: '本局记录', title: `第 ${head.round} 轮`, sub: `桌牌 ${head.table} · 还剩 ${alive} 人`,
       groups, count: view.log.length, last: null,
       result: null,
     };
@@ -426,6 +441,26 @@ export default {
     let selKey = '';
     let sumHidden = false; // 终局卡收起了
     const redraw = () => last && draw(last.view, last.opts);
+
+    // 对局页结束时会在牌桌上弹自己的终局卡（你赢了 / 再来一局）：它在的时候不叠我们的名次卡；它被收起后，名次卡也收成按钮
+    const SUM_DELAY = 3200; // 刚演完最后一枪，等对局页的终局卡先出来（它在结束后约 2.6 秒弹出）
+    let pageCard = false;
+    let cardObs = null;
+    function watchPageCard() {
+      if (cardObs || typeof MutationObserver !== 'function' || !root.isConnected) return;
+      const host = root.closest('.board-wrap') || root.closest('.stage') || root.parentElement;
+      if (!host) return;
+      const check = () => {
+        const has = !!host.querySelector('.end-card');
+        if (has === pageCard) return;
+        if (pageCard && !has) sumHidden = true;
+        pageCard = has;
+        redraw();
+      };
+      cardObs = new MutationObserver(check);
+      cardObs.observe(host, { childList: true, subtree: false });
+      check();
+    }
 
     if (typeof ResizeObserver === 'function') {
       new ResizeObserver(([e]) => {
@@ -463,7 +498,8 @@ export default {
         const h = view.history.at(-1);
         const plan = revealPlan(h.cards.length, h.dead);
         fx.E = { t0: t, src: p, h, plan, key: hl };
-        fx.intro = view.result ? null : { t0: t + plan.end, round: view.round, table: view.table, lead: view.lead };
+        hold = { key: hl, round: view.round, src: p, until: Date.now() + plan.shotAt, end: Date.now() + plan.end };
+        fx.intro = ended(view) ? null : { t0: t + plan.end, round: view.round, table: view.table, lead: view.lead };
         fx.play = null;
         for (const at of [plan.flipAt, plan.verdictAt, plan.aimAt, plan.aimAt + 320, plan.shotAt, plan.end]) wake(t + at);
         if (fx.intro) wake(fx.intro.t0 + TM.DEAL);
@@ -480,8 +516,8 @@ export default {
       if (anim && p && view.round === p.round && hl === phl && (view.pile?.length || 0) === (p.pile?.length || 0) + 1) {
         fx.play = { t0: t, idx: view.pile.length - 1 };
       }
-      if (!view.result) { sumHidden = false; fx.over = null; }
-      else if (anim && !p.result) fx.over = fx.E ? fx.E.t0 + fx.E.plan.end : t;
+      if (!ended(view)) { sumHidden = false; fx.over = null; }
+      else if (anim && !ended(p)) fx.over = fx.E ? fx.E.t0 + fx.E.plan.end : t;
       fx.prev = view;
     }
 
@@ -504,18 +540,19 @@ export default {
     function plate(view, seat, s, L, { name, gun, turn, me, t0, win, loser, out }) {
       const P = L.plate;
       const cnt = view.counts?.[seat] ?? 0;
-      const status = out ? '已出局' : view.result ? (win ? '活到最后' : '') : cnt ? `手牌 ${cnt} 张` : '出完了';
+      const status = out ? '已出局' : ended(view) ? (win ? '活到最后' : '') : cnt ? `手牌 ${cnt} 张` : '出完了';
       const g = el('div', { class: 'gun', title: `左轮已扣 ${gun.pulls} 枪${out ? '' : `，下一枪中弹概率 ${fracText(gun.pulls)}`}` });
       g.innerHTML = gunSvg({ pulls: gun.pulls, shot: gun.shot });
       g.append(el('small', {}, `${gun.pulls}/${CH}`));
       const mustCall = turn && view.mustCall;
       return el('div', { class: `lr-seat${turn ? ' on' : ''}${win ? ' win' : ''}${loser ? ' loser' : ''}${out ? ' out' : ''}`, style: `${pos(s.x, s.y)};width:${P.w}em;height:${P.h}em` },
         el('span', { class: 'coin' }, String(seatNo(seat))),
-        el('div', { class: 'who' }, el('b', { title: name }, name), el('span', { class: cnt <= 1 && !out && !view.result ? 'hot' : '' }, status)),
+        el('div', { class: 'who' }, el('b', { title: name }, name), el('span', { class: cnt <= 1 && !out && !ended(view) ? 'hot' : '' }, status)),
         g,
         out ? el('span', { class: 'seal' }, '出局') : null,
-        turn && t0 ? thinkTimer(t0) : null,
-        turn ? el('div', { class: `tag${me ? ' me' : ''}${s.top ? ' dn' : ''}` }, me ? (mustCall ? '轮到你：只能质疑' : '轮到你') : mustCall ? '要质疑了' : '思考中', el('i'), el('i'), el('i')) : null);
+        turn && t0 ? thinkTimer(t0, !s.top) : null, // 计时和标签一样放在背对手牌的那一侧
+        // 「思考中 / 轮到你」挂在名牌背对手牌的那一侧，不压牌（上方座位的牌在名牌下面，标签就在上面）
+        turn ? el('div', { class: `tag${me ? ' me' : ''}${s.top ? '' : ' dn'}` }, me ? (mustCall ? '轮到你：只能质疑' : '轮到你') : mustCall ? '要质疑了' : '思考中', el('i'), el('i'), el('i')) : null);
     }
 
     /** 一家的手牌：明牌或牌背，摆在名牌靠桌心一侧（下方座位在名牌上面，上方座位在名牌下面，左右两侧在名牌上面） */
@@ -633,11 +670,11 @@ export default {
       const pileSrc = src.pile || [];
       const { nodes: pileNodes, total } = pileEls(pileSrc, L, g, { skipLast: !!E && at(E.plan.flipAt), t0: !E && fx.play && fx.play.idx === pileSrc.length - 1 ? fx.play.t0 : null, fromSeat: pileSrc.at(-1)?.seat });
       kids.push(...pileNodes);
-      if (total) kids.push(el('div', { class: 'lr-pcount', style: pos(L.pile[0] + 6.4, L.pile[1] - 0.8) }, `牌堆 ${total} 张`));
+      if (total) kids.push(el('div', { class: 'lr-pcount', style: pos(...L.pcount) }, `牌堆 ${total} 张`));
       if (!E) { const c = claimEl(src, L, nameOf); if (c) kids.push(play(c, 'lr-in', 300, fx.play?.t0 ?? null, 380)); }
 
       // 上次质疑的结果（不在揭晓、翻桌牌的时候）
-      if (!E && !intro && !view.result) { const le = lastEl(view, L, nameOf); if (le) kids.push(le); }
+      if (!E && !intro && !ended(view)) { const le = lastEl(view, L, nameOf); if (le) kids.push(le); }
 
       // 各座位：手牌、名牌（弹巢在扣扳机那一刻才更新）
       const shotDone = !E || at(E.plan.shotAt);
@@ -651,10 +688,10 @@ export default {
         const mine = !!viewer && seat === viewer;
         const pick = mine && !E && movable === seat && Array.isArray(actions) && actions.some((a) => a.id !== 'call');
         if (!out) kids.push(...handCards(handView, seat, s, L, { mine, pick }));
-        const turn = !E && liveNow && !view.result && view.turn === seat;
+        const turn = !E && liveNow && !ended(view) && view.turn === seat;
         kids.push(plate(handView, seat, s, L, {
           name: nameOf(seat), gun, turn, me: turn && movable === seat, t0: opts.clock?.[seat] || null,
-          win: view.result?.winner === seat && !E, loser: !!E && at(E.plan.verdictAt) && E.h.loser === seat, out,
+          win: ended(view) && view.result?.winner === seat && !E, loser: !!E && at(E.plan.verdictAt) && E.h.loser === seat, out,
         }));
       }
 
@@ -744,7 +781,9 @@ export default {
       }
 
       // 终局：名次卡（揭晓演完之后）
-      if (view.result && !E) {
+      const sumAt = fx.over !== null && !opts.replay ? fx.over + SUM_DELAY : null;
+      if (sumAt !== null && t < sumAt && !pageCard) wake(sumAt);
+      if (ended(view) && view.result && !E && !pageCard && (sumAt === null || t >= sumAt - 40)) {
         const r = view.result;
         if (sumHidden) {
           kids.push(el('button', { class: 'lr-pill', type: 'button', style: pos(...L.pill), onclick: (e) => { e.stopPropagation(); sumHidden = false; redraw(); } }, '名次 ▸'));
@@ -757,7 +796,7 @@ export default {
               el('span', { class: 'rk' }, String(rk)), el('span', { class: 'nm' }, `${seatNo(s)} 号 ${nameOf(s)}`),
               el('span', { class: 'st' }, s === r.winner ? `扣了 ${view.revolvers[s].pulls} 枪都没响` : `第 ${roundOut(s)?.round ?? '?'} 轮中弹`)))),
             el('button', { class: 'lr-x', type: 'button', title: '收起', 'aria-label': '收起名次卡', onclick: (e) => { e.stopPropagation(); sumHidden = true; redraw(); } }, '✕'));
-          kids.push(play(card, 'lr-popin', 520, fx.over, 0, 'cubic-bezier(.2,1.2,.4,1)'));
+          kids.push(play(card, 'lr-popin', 520, sumAt ?? fx.over, 0, 'cubic-bezier(.2,1.2,.4,1)'));
         }
       }
 
@@ -770,8 +809,10 @@ export default {
         const ids = new Set(actions.map((a) => a.id));
         const chosen = [...sel].map((i) => hand[i]).filter(Boolean);
         const order = ['Q', 'K', 'A', JOKER];
-        const id = chosen.slice().sort((a, b) => order.indexOf(a) - order.indexOf(b)).join(' ');
-        const canPlay = chosen.length >= 1 && ids.has(id);
+        const face = chosen.slice().sort((a, b) => order.indexOf(a) - order.indexOf(b)).join(' ');
+        // 出牌的行动 id 是暗码，牌面在 cards 里（旧版服务端的 id 就是牌面）
+        const id = (actions.find((a) => a.cards === face) || actions.find((a) => a.id === face))?.id;
+        const canPlay = chosen.length >= 1 && !!id;
         const btns = [];
         if (ids.has('call')) {
           const lp = view.pile?.at(-1);
@@ -797,6 +838,7 @@ export default {
       render(view, opts = {}) {
         if (!view || !Array.isArray(view.seats)) return;
         last = { view, opts };
+        watchPageCard();
         track(view, opts);
         draw(view, opts);
       },

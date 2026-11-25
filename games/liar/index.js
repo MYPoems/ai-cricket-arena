@@ -7,7 +7,9 @@
 // 输家扣一次自己的左轮：6 个弹巢 1 发子弹，位置开局由种子定好、整局不重转；扣到子弹那一格出局。
 // 结算后重新洗牌发牌开新一轮，输家先出（输家出局则由他的下家）。最后活着的人赢，名次按出局先后。
 //
-// 行动 id：出牌为牌面按 Q K A 鬼 排好、空格分隔（「Q Q 鬼」），质疑为「call」。
+// 行动 id：质疑为「call」。出牌为「p-」加一串由种子、轮次、手数、座位和牌面算出的暗码（例如 p-3k9x0qa）：
+// 出牌这一步因此可以照常进公共事件流和记录（谁出了几张、称是什么大家都看得到），牌面却只有服务端解得开。
+// 旧记录里的出牌是明文牌面（「Q Q 鬼」，牌面按 Q K A 鬼 排好、空格分隔），apply 仍然接受，这种明文出牌按私密步处理。
 
 const SEATS = ['p1', 'p2', 'p3', 'p4'];
 const SEAT_NAMES = { p1: '1 号位', p2: '2 号位', p3: '3 号位', p4: '4 号位' };
@@ -63,6 +65,47 @@ const clone = (s) => JSON.parse(JSON.stringify(s));
 const isTruth = (card, table) => card === table || card === JOKER;
 const sortCards = (cards) => cards.slice().sort((a, b) => ORDER.indexOf(a) - ORDER.indexOf(b));
 const cardsId = (cards) => sortCards(cards).join(' ');
+const CODE_RE = /^p-[0-9a-z]+$/;
+
+// ---------- 出牌暗码 ----------
+
+/** 53 位字符串哈希（cyrb53） */
+function hash53(str) {
+  let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
+  for (let i = 0; i < str.length; i++) {
+    const ch = str.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return 4294967296 * (2097151 & h2) + (h1 >>> 0);
+}
+
+/**
+ * 这一手所有能出的牌面 → 暗码。暗码由种子、轮次、本轮第几手、座位和牌面算出：同一个局面永远一样（能重放），
+ * 不知道种子的人（对局进行中浏览器拿不到种子）看不出背后是什么牌；同一手里万一撞码，按顺序加后缀错开。
+ */
+function playCodes(s, seat) {
+  const r = s.round;
+  const out = new Map();
+  const used = new Set();
+  for (const c of legalPlays(handOf(s, seat))) {
+    const id = cardsId(c);
+    let code = `p-${hash53(`${s.seed}|${r.no}|${r.pile.length}|${seat}|${id}`).toString(36).padStart(7, '0').slice(-7)}`;
+    while (used.has(code)) code += 'x';
+    used.add(code);
+    out.set(id, code);
+  }
+  return out;
+}
+/** 暗码 → 牌面（解不开返回 null） */
+function decodePlay(s, seat, code) {
+  for (const [id, c] of playCodes(s, seat)) if (c === code) return id;
+  return null;
+}
+/** 牌面 → 暗码（不是合法出牌返回 null） */
+const encodePlay = (s, seat, id) => playCodes(s, seat).get(id) ?? null;
 
 // ---------- 带种子的随机（mulberry32，状态放在 state.rng 里） ----------
 
@@ -179,12 +222,14 @@ const CN_NUM = { 一: 1, 二: 2, 两: 2, 三: 3, 1: 1, 2: 2, 3: 3 };
 /** 把一段文字读成牌：「Q Q 鬼」「QQ」「2 张 Q」「Q×2」「Joker」都认。返回 { cards } 或 { error } */
 export function parseCards(text) {
   let t = String(text ?? '').normalize('NFKC').toUpperCase();
-  t = t.replace(/[（(【[][^）)】\]]*[）)】\]]/g, ' '); // 括号里的补充说明不算
+  t = t.replace(/[（(【][^）)】]*[）)】]/g, ' ').replace(/[[\]]/g, ' '); // 括号里的补充说明不算；方括号只是包着牌
+  t = t.replace(/(声称|自称|称|说是|当作|当成|假装|冒充).*$/s, ''); // 「出牌 K，称是 A」：后面说的是声称，不是牌
   t = t.replace(/JOKERS?|鬼牌|万能牌?|小丑|大王|小王/g, '鬼').replace(/皇后|王后/g, 'Q').replace(/国王/g, 'K');
-  t = t.replace(/J/g, '鬼').replace(/王/g, '鬼');
   // 「2 张 Q」「两张Q」→ Q Q；「Q×2」「Q*2」「Qx2」→ Q Q
-  t = t.replace(/([1-3一二两三])\s*张\s*(Q|K|A|鬼)/g, (_, n, r) => ` ${Array(CN_NUM[n]).fill(r).join(' ')} `);
-  t = t.replace(/(Q|K|A|鬼)\s*[X×*]\s*([1-3])/g, (_, r, n) => ` ${Array(CN_NUM[n]).fill(r).join(' ')} `);
+  t = t.replace(/([1-3一二两三])\s*张\s*(Q|K|A|J|鬼)/g, (_, n, r) => ` ${Array(CN_NUM[n]).fill(r).join(' ')} `);
+  t = t.replace(/(Q|K|A|J|鬼)\s*[X×*]\s*([1-3])/g, (_, r, n) => ` ${Array(CN_NUM[n]).fill(r).join(' ')} `);
+  t = t.replace(/[A-Z]{2,}/g, (w) => (/^[QKAJ]+$/.test(w) ? w : ' ')); // 「QQ」是牌，「PASS」「OK」这类英文词不是
+  t = t.replace(/J/g, '鬼').replace(/王/g, '鬼');
   const cards = [...t.matchAll(/Q|K|A|鬼/g)].map((m) => m[0]);
   if (!cards.length) return { error: '没有认出牌面（牌只有 Q、K、A、鬼）' };
   return { cards: sortCards(cards) };
@@ -378,7 +423,13 @@ const game = {
     if (state.winner || seat !== state.round?.turn) return [];
     const info = callInfo(state, seat);
     const out = [];
-    if (!info.mustCall) for (const c of legalPlays(handOf(state, seat))) out.push({ id: cardsId(c), label: `出 ${c.length} 张（${cardsId(c)}），称都是 ${state.round.table}` });
+    if (!info.mustCall) {
+      const codes = playCodes(state, seat);
+      for (const c of legalPlays(handOf(state, seat))) {
+        const id = cardsId(c);
+        out.push({ id: codes.get(id), cards: id, label: `出 ${c.length} 张（${id}），称都是 ${state.round.table}` });
+      }
+    }
     if (info.canCall) out.push({ id: CALL, label: `质疑${seatName(info.last.seat)}` });
     return out;
   },
@@ -396,7 +447,10 @@ const game = {
       resolveCall(s, seat);
       return s;
     }
-    const p = parseCards(a);
+    // 暗码先解成牌面；旧记录里是明文牌面，照旧认
+    const plain = CODE_RE.test(a) ? decodePlay(s, seat, a) : a;
+    if (plain === null) throw new Error(callInfo(s, seat).mustCall ? '你只能质疑上一手' : `无法识别的出牌：${a}`);
+    const p = parseCards(plain);
     if (p.error) throw new Error(`无法识别的出牌：${a}`);
     const chk = checkPlay(s, seat, p.cards);
     if (chk.error) throw new Error(chk.error);
@@ -408,9 +462,14 @@ const game = {
     return s;
   },
 
-  /** 出的牌是暗牌：有真人或自带 agent 在局时，出牌这一步（行动 id 就是牌面）不进事件流，只有本人看得到；质疑是公开的 */
+  /**
+   * 出牌用暗码（看不出牌面），和质疑一样是公开的一步：谁出了几张、称是什么大家都看得到。
+   * 只有明文牌面的出牌（旧记录、绕过界面直接提交牌面）才是私密步：有真人或自带 agent 在局时不进事件流，只有本人看得到。
+   */
   secret(state, seat, action) {
-    return action !== null && action !== undefined && String(action).trim() !== CALL;
+    if (action === null || action === undefined) return false;
+    const a = String(action).trim();
+    return a !== CALL && !CODE_RE.test(a);
   },
 
   outcome(state) {
@@ -435,8 +494,9 @@ const game = {
       const last = state.round?.pile?.at(-1);
       return last ? `质疑${seatName(last.seat)}` : '质疑';
     }
-    const p = parseCards(a);
-    return p.cards ? `出 ${p.cards.length} 张，称都是 ${state.round?.table || ''}` : a;
+    const plain = CODE_RE.test(a) ? (state.round ? decodePlay(state, seat, a) : null) : a;
+    const p = plain === null ? { error: true } : parseCards(plain);
+    return p.cards ? `出 ${p.cards.length} 张，称都是 ${state.round?.table || ''}` : '出牌';
   },
 
   // ---------- 给模型 ----------
@@ -482,8 +542,9 @@ const game = {
   retryPrompt: (reason, attempt, max) => `你上一个回答无效：${reason}。请重新回答（这是第 ${attempt} 次重来，最多 ${max} 次，再无效判负），仍按五行格式，最后一行写「行动：出牌 …」或「行动：质疑」。`,
 
   parseReply(state, seat, text) {
-    const t = String(text || '').normalize('NFKC');
-    const win = /胜率\s*[:：]\s*(\d{1,3})/.exec(t);
+    // 去掉 Markdown 的加粗、行首的标题号和列表符号：「**行动**：出牌 Q」也认
+    const t = String(text || '').normalize('NFKC').replace(/\*\*|__|`/g, '').replace(/^[ \t]*(?:[#>]+|[-*•]\s)\s*/gm, '');
+    const win = /胜率\s*[:：]\s*[^\d\n]{0,4}(\d{1,3})/.exec(t);
     const winrate = win ? Math.min(100, Number(win[1])) : null;
     const fail = (error, attempted = null) => ({ action: null, attempted, winrate, error });
     if (state.winner) return fail('对局已经结束');
@@ -499,7 +560,13 @@ const game = {
     if (raw === null) return fail('没有找到行动（最后一行应为「行动：出牌 Q Q」或「行动：质疑」）');
     raw = raw.replace(/[。.！!]+$/, '').trim();
     const info = callInfo(state, seat);
-    const head = raw.split(/[，,。；;]/)[0];
+    // 「不质疑，出牌 Q」：否定的质疑不算质疑
+    const kept = raw.replace(/(不|不要|先不|暂不|别|无需|不用|没必要|不必)\s*(质疑|开牌)/g, ' ');
+    const segs = kept.split(/[，,。；;]/).map((x) => x.trim());
+    const i0 = segs.findIndex(Boolean);
+    let head = i0 < 0 ? '' : segs[i0];
+    // 「出牌 K, 鬼」：逗号后面只是接着列牌的，也算进来（「，称都是 K」这类说明不算）
+    for (let i = i0 + 1; i0 >= 0 && i < segs.length && /^[\s[\]（）()QKAJ鬼牌王×X*1-3一二两三张]+$/i.test(segs[i]); i++) head += ` ${segs[i]}`;
     const isCall = /^(质疑|开牌|不信|抓|喊|LIAR|骗子|说谎)/i.test(head) || (/质疑|LIAR/i.test(head) && !/出牌/.test(head));
     if (isCall) {
       if (!info.canCall) return fail('本轮由你先出，还没有上一手可以质疑，必须出 1–3 张牌', '质疑');
@@ -510,7 +577,7 @@ const game = {
     const chk = checkPlay(state, seat, p.cards);
     const id = cardsId(p.cards);
     if (chk.error) return fail(chk.error, id);
-    return { action: chk.action, attempted: id, winrate, error: null };
+    return { action: encodePlay(state, seat, chk.action), attempted: id, winrate, error: null };
   },
 
   mockReply(state, seat, action) {
@@ -519,9 +586,10 @@ const game = {
       const last = state.round.pile.at(-1);
       return `判断：牌堆越叠越高，真牌快不够了。\n推断：${last ? seatName(last.seat) : '上家'}这手多半有假。\n理由：赌他在说谎。\n胜率：45%\n行动：质疑`;
     }
-    const cards = String(action).split(' ');
+    const plain = CODE_RE.test(String(action)) ? decodePlay(state, seat, String(action)) || '' : String(action);
+    const cards = plain.split(' ');
     const honest = cards.every((c) => isTruth(c, table));
-    return `判断：桌牌是 ${table}，局面还算平稳。\n推断：下家未必敢质疑。\n理由：${honest ? '手里有真牌，老实出' : '没有真牌，只能硬着头皮诈一手'}。\n胜率：40%\n行动：出牌 ${action}`;
+    return `判断：桌牌是 ${table}，局面还算平稳。\n推断：下家未必敢质疑。\n理由：${honest ? '手里有真牌，老实出' : '没有真牌，只能硬着头皮诈一手'}。\n胜率：40%\n行动：出牌 ${plain}`;
   },
 
   // ---------- 内置 AI ----------
@@ -530,7 +598,8 @@ const game = {
     const acts = game.actions(state, seat);
     if (!acts.length) throw new Error('没有可行的行动');
     if (random) return acts[Math.floor(rnd() * acts.length)].id;
-    return chooseMove(state, seat, Math.max(1, Math.min(3, Number(level) || 2)), rnd);
+    const a = chooseMove(state, seat, Math.max(1, Math.min(3, Number(level) || 2)), rnd);
+    return a === CALL ? a : encodePlay(state, seat, a);
   },
 
   // ---------- 浏览器数据 ----------
@@ -567,10 +636,12 @@ const game = {
         ? { round: e.round, seat: e.seat, kind: 'call', accused: e.accused }
         : { round: e.round, seat: e.seat, kind: 'play', n: e.cards.length, cards: see(e.seat) ? e.cards.slice() : null })),
       history: s.history.map((h) => ({ ...h, cards: h.cards.slice() })),
-      result: s.winner ? { winner: s.winner, ranks: ranksOf(s), order: s.out.slice() } : null,
+      over: !!s.winner,
+      // 终局：名次；质疑刚结算、新一轮还没人出牌时是 { settling: true }（对局页状态条据此写「结算中」，不提前报下一轮轮到谁）
+      result: s.winner ? { winner: s.winner, ranks: ranksOf(s), order: s.out.slice() } : s.log.at(-1)?.kind === 'call' ? { settling: true } : null,
     };
   },
 };
 
 export default game;
-export { legalPlays, cardsId, CALL, JOKER };
+export { legalPlays, cardsId, CALL, JOKER, decodePlay, encodePlay };

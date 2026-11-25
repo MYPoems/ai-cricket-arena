@@ -15,6 +15,7 @@ const TEAM_COLOR = { A: 'var(--red)', B: '#3559b5' };
 const EASE = 'cubic-bezier(.2,.75,.1,1)';
 const CD_SECS = 30;
 const AUTO_PASS_MS = 1200;
+const END_HOLD = FX.endHold; // 一盘打完先看清最后一手，再升起结算卡
 const RANK_ORDER = ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A'];
 const reduced = () => typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
 const teamOfSeat = (s) => (s === 'p1' || s === 'p3' ? 'A' : 'B');
@@ -31,9 +32,9 @@ const LAYOUTS = {
     top: { plate: [31.25, 1.4], hand: { cx: 40, y: 7.9, cw: 2.6, maxW: 30 }, from: [40, 9], front: { x: 40, y: 12.4, al: 'c', maxW: 22 }, bubble: [49.6, 2.6, 'l'] },
     left: { plate: [1.6, 12.6], hand: { cx: 13.5, y: 19.2, cw: 2.5, maxW: 23.6 }, from: [12, 21], front: { x: 3.4, y: 25.4, al: 'l', maxW: 19 }, bubble: [3.4, 25.6, 'l'] },
     right: { plate: [80 - 1.6 - 17.5, 12.6], hand: { cx: 66.5, y: 19.2, cw: 2.5, maxW: 23.6 }, from: [68, 21], front: { x: 76.6, y: 25.4, al: 'r', maxW: 19 }, bubble: [76.6, 25.6, 'r'] },
-    bottom: { plate: [1.6, 41.8], from: [48, 42], front: { x: 2.4, y: 33.6, al: 'l', maxW: 17 }, bubble: [2.4, 36.2, 'l'] },
+    bottom: { plate: [1.6, 41.8], from: [48, 42], front: { x: 2.4, y: 33.6, al: 'l', maxW: 17 }, bubble: [2.4, 35, 'l'] },
     frontCw: 2.6,
-    mine: { x0: 20.6, x1: 78.6, bottom: 48.4, cwMax: 4.1, colH: 11.2 },
+    mine: { x0: 20.6, x1: 78.6, bottom: 48.4, cwMax: 4.3, colH: 11.2 },
     lead: { cx: 40, y: 17.4, cw: 4.3, maxW: 33 },
     res: { cx: 40, y: 8.2, w: 38 },
     trib: { cx: 40, y: 15.2, w: 34 },
@@ -48,18 +49,19 @@ const LAYOUTS = {
     right: { plate: [25.5, 11.8], hand: { cx: 37.3, y: 17.6, cw: 2.1, maxW: 22.6 }, from: [38, 19], front: { x: 48.6, y: 23.4, al: 'r', maxW: 14 }, bubble: [48.6, 23.6, 'r'] },
     bottom: { plate: [0.9, 38.4], from: [25, 60], front: { x: 48.6, y: 38.6, al: 'r', maxW: 22 }, bubble: [48.6, 39.2, 'r'] },
     frontCw: 2.4,
-    mine: { x0: 0.8, x1: 49.2, bottom: 69.2, cwMax: 3.5, colH: 12.4 },
+    mine: { x0: 0.8, x1: 49.2, bottom: 69.2, cwMax: 5.4, colH: 16 },
     lead: { cx: 25, y: 28.6, cw: 3.8, maxW: 46 },
     res: { cx: 25, y: 14, w: 46 },
     trib: { cx: 25, y: 26.4, w: 44 },
-    res2: { cx: 25, y: 7.4, w: 46 }, trib2: { cx: 25, y: 35.6, w: 40 },
+    res2: { cx: 25, y: 7.4, w: 46 }, trib2: { cx: 25, y: 31.4, w: 42 },
     pill: [49.2, 33],
+    ctlScale: 1.4,
   },
 };
 
 // ---------- 样式 ----------
 const CSS = `
-.gd { position: relative; width: 100%; height: 100%; container-type: size; user-select: none; -webkit-user-select: none; font-family: var(--serif); }
+.gd { position: relative; width: 100%; height: 100%; container-type: size; user-select: none; -webkit-user-select: none; font-family: var(--serif); overflow: clip; overflow-clip-margin: .6em; }
 .gd-box { position: absolute; left: 50%; top: 50%; translate: -50% -50%; width: min(100cqw, 160cqh); height: min(62.5cqw, 100cqh); font-size: min(1.25cqw, 2cqh); }
 .gd.port .gd-box { width: min(100cqw, 71.43cqh); height: min(140cqw, 100cqh); font-size: min(2cqw, 1.4286cqh); }
 .gd-box > * { position: absolute; }
@@ -82,6 +84,7 @@ const CSS = `
   box-shadow: inset 0 0 0 .05em rgb(110 76 28 / .5), inset 0 .07em 0 #fff, 0 .06em 0 #e4d7b6, 0 .12em 0 #c6b388, 0 .16em 0 rgb(60 36 8 / .55), 0 .35em .5em -.05em rgb(0 0 0 / .5); }
 .gd-c.r { color: #c42d1e; }
 .gd-c .ix { position: absolute; left: .32em; top: .26em; display: grid; justify-items: center; line-height: 1; }
+.gd-c.ten .lv { left: 2.05em; }
 .gd-c .ix b { font: 700 1.45em/1 var(--num); letter-spacing: -.04em; }
 .gd-c .ix i { font-style: normal; font-size: 1.05em; margin-top: .08em; }
 .gd-c .ix.br { left: auto; top: auto; right: .32em; bottom: .26em; rotate: 180deg; }
@@ -97,7 +100,8 @@ const CSS = `
   font: 400 1.9em/1 var(--brush); width: 1.55em; height: 1.55em; box-shadow: inset 0 0 0 .07em currentColor, inset 0 0 0 .2em rgb(255 255 255 / .8), inset 0 0 0 .26em rgb(201 162 74 / .7);
   background: radial-gradient(circle at 35% 30%, rgb(255 255 255 / .9), rgb(240 205 120 / .25) 70%); }
 /* 级牌、逢人配的角标；逢人配在桌上时下面写它当的点数 */
-.gd-c .lv { position: absolute; right: .22em; top: .24em; font: 700 .9em/1 var(--sans); padding: .16em .2em; border-radius: .22em; color: #6a4a14; background: linear-gradient(180deg, #fbe8a6, #e0b454); box-shadow: 0 0 0 .05em #8e6824; }
+/* 角标放在点数右边：牌叠着摆（手牌一列列压住、桌上一手横排）时也露在外面 */
+.gd-c .lv { position: absolute; left: 1.72em; top: .3em; font: 700 .82em/1 var(--sans); padding: .16em .2em; border-radius: .22em; color: #6a4a14; background: linear-gradient(180deg, #fbe8a6, #e0b454); box-shadow: 0 0 0 .05em #8e6824; }
 .gd-c .lv.w { color: #fff4e0; background: linear-gradient(180deg, #e2523d, #8e1b12); box-shadow: 0 0 0 .05em #e6bd5c; }
 .gd-c .as { position: absolute; left: .2em; bottom: 1.5em; font: 700 1.05em/1 var(--sans); white-space: nowrap; color: #fff4e0; padding: .18em .35em; border-radius: .5em; background: rgb(142 27 18 / .9); }
 .gd-c.bk { background:
@@ -173,6 +177,15 @@ const CSS = `
 .gd-lbl { translate: -50% 0; display: flex; align-items: center; gap: .7em; font: 600 1em/1 var(--sans); color: rgb(242 227 194 / .78); white-space: nowrap; letter-spacing: .08em; }
 .gd-lbl > span { font-size: 1.15em; }
 .gd-lbl b { font: 400 1.7em/1 var(--brush); color: #f6dc94; }
+.gd-lbl em { font: 700 .95em/1 var(--sans); font-style: normal; letter-spacing: .1em; color: #2a1206; padding: .3em .55em; border-radius: .9em; background: linear-gradient(180deg, #fff3c8, #f0cd78); }
+.gd i.no { flex: none; width: 1.55em; height: 1.55em; border-radius: 50%; display: inline-grid; place-items: center; font: 700 .95em/1 var(--num); font-style: normal; color: #fbe8c8; background: var(--tc); box-shadow: 0 0 0 .08em rgb(255 255 255 / .3); }
+.gd-paper .lastp { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: .3em .55em; font: 600 1.05em/1.2 var(--sans); color: #6a4a2a; }
+.gd-paper .lastp small { font: 700 .9em/1 var(--sans); letter-spacing: .1em; color: #fff4e0; background: #6a4a2a; padding: .3em .5em; border-radius: .3em; }
+.gd-paper .lastp .nm { font: 700 1.05em/1.2 var(--serif); color: #3a1a0c; white-space: nowrap; max-width: 9em; overflow: hidden; text-overflow: ellipsis; }
+.gd-paper .lastp .ty { font: 400 1.4em/1 var(--brush); color: #a3261a; white-space: nowrap; }
+.gd-paper .mini { position: relative; flex: none; height: 3.08em; }
+.gd.ended .gd-paper.final { opacity: 0; visibility: hidden; }
+.gd-paper.final { transition: opacity .3s, visibility .3s; }
 .gd-lbl.boom b { color: #ff8a6a; }
 .gd-glow { translate: -50% -50%; border-radius: 50%; background: radial-gradient(closest-side, rgb(255 214 140 / .2), rgb(255 190 110 / .07) 60%, transparent); }
 .gd-burst { translate: -50% -50%; width: 34em; height: 34em; border-radius: 50%; mix-blend-mode: screen; z-index: 4;
@@ -209,8 +222,9 @@ const CSS = `
 .gd-paper .row .n { width: 1.8em; height: 1.8em; border-radius: 50%; display: grid; place-items: center; font: 700 1em/1 var(--num); color: #fbe8c8; background: var(--tc); }
 .gd-paper .row .nm { font: 700 1.2em/1.2 var(--serif); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .gd-paper .row .lf { font: 600 1em/1 var(--sans); color: #8a6a4a; white-space: nowrap; }
-.gd-paper .tr { display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto; align-items: center; gap: .5em; font: 600 1.1em/1.2 var(--sans); color: #6a4a2a; }
-.gd-paper .tr .nm { font: 700 1.1em/1.2 var(--serif); color: #3a1a0c; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gd-paper .tr { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto; align-items: center; gap: .5em; font: 600 1.1em/1.2 var(--sans); color: #6a4a2a; }
+.gd-paper .tr .nm { display: flex; align-items: center; gap: .35em; min-width: 0; font: 700 1.1em/1.2 var(--serif); color: #3a1a0c; white-space: nowrap; }
+.gd-paper .tr .nm > span { overflow: hidden; text-overflow: ellipsis; }
 .gd-paper .tr .ar { color: #a08060; }
 .gd-paper .tr .k { font: 700 .95em/1 var(--sans); letter-spacing: .1em; padding: .3em .5em; border-radius: .3em; color: #fff4e0; background: #a3261a; }
 .gd-paper .tr .k.back { background: #6a4a2a; }
@@ -226,6 +240,7 @@ const CSS = `
 
 /* 操作区 */
 .gd-ctl { translate: -50% 0; display: flex; gap: .8em; align-items: center; z-index: 6; animation: gd-rise .35s ${EASE} both; }
+.gd-ctl.sent { pointer-events: none; opacity: .55; transition: opacity .2s; }
 .gd-ctl .btn { font-size: 1.35em; padding: .3em 1em; min-width: 4.2em; --d: .18em; }
 .gd-ctl .btn.auto { position: relative; overflow: hidden; }
 .gd-ctl .btn.auto::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: .22em; background: currentColor; opacity: .6; transform-origin: 0 50%; animation: gd-auto var(--auto, 1200ms) linear var(--auto-delay, 0ms) both; }
@@ -329,7 +344,7 @@ function cardEl(name, x, y, fs, { cls = '', level = null, as = '' } = {}) {
     mid.innerHTML = `<svg viewBox="0 0 20 10" aria-hidden="true" fill="#e6bd5c" stroke="currentColor" stroke-width=".9" stroke-linejoin="round" stroke-linecap="round">${CROWN[r]}</svg>`;
     mid.append(el('b', {}, r), el('i', {}, s));
   } else mid = el('div', { class: 'pip' }, s);
-  return el('div', { class: `gd-c${SUIT_OF[s] === 'r' ? ' r' : ''} ${cls}`, style: st },
+  return el('div', { class: `gd-c${SUIT_OF[s] === 'r' ? ' r' : ''}${r === '10' ? ' ten' : ''} ${cls}`, style: st },
     el('div', { class: 'ix' }, el('b', {}, r), el('i', {}, s)), mid, lvTag, as ? el('span', { class: 'as' }, `当${as}`) : null);
 }
 
@@ -400,20 +415,48 @@ const isLive = (opts) => ('live' in opts ? !!opts.live
 const fxSum = (v) => (v && v.seats ? { hand: v.handNo, phase: v.phase, plays: v.plays?.length || 0, bomb: !!v.plays?.at(-1)?.bomb, over: !!v.over } : null);
 const posName = (i) => ['头游', '二游', '三游', '末游'][i];
 
-/** 一盘结算的一句话：「1·3 队 双下，升 3 级（7 → 10）」 */
-function settleLine(h, teamNames) {
-  if (!h) return '';
-  if (h.passA) return `${teamNames[h.team]}打过 A`;
-  const how = h.partnerPos === 2 ? '双下' : h.partnerPos === 3 ? '头游 + 三游' : '头游 + 末游';
-  return `${teamNames[h.team]}${how}${h.up ? `，升 ${h.up} 级（${h.before[h.team]} → ${h.after[h.team]}）` : '，不升级'}`;
+const UP = { 2: 3, 3: 2, 4: 1 };
+const HOW = { 2: '队友二游（双下）', 3: '队友三游', 4: '队友末游' };
+/**
+ * 一盘结算：升几级和原因。返回文字片段（数字加粗），例如
+ * 「1·3 队头游 + 队友二游（双下）：升 3 级 2 → 5 · 下一盘打 5」
+ */
+function settleParts(h, teamNames, next = true) {
+  if (!h) return [];
+  const T = teamNames[h.team];
+  if (h.passA) return [`${T}打 A 拿头游、${HOW[h.partnerPos]}：`, ['b', '打过 A']];
+  const out = [`${T}头游 + ${HOW[h.partnerPos]}：`];
+  if (h.up) {
+    out.push(['b', `升 ${h.up} 级`], ` ${h.before[h.team]} → ${h.after[h.team]}`);
+    if (h.up < UP[h.partnerPos]) out.push('（升到 A 为止）');
+  } else out.push('已经打到 A，不再升级');
+  if (h.aFail) out.push(`；${teamNames[h.aFail]}打 A 未过${h.reset ? '三次，退回 2' : ''}`);
+  if (next) out.push(` · 下一盘打 ${h.after[h.team]}`);
+  return out;
+}
+const settleLine = (h, teamNames, next) => settleParts(h, teamNames, next).map((x) => (Array.isArray(x) ? x[1] : x)).join('');
+const settleSpans = (h, teamNames, next) => settleParts(h, teamNames, next).map((x) => (Array.isArray(x) ? el('b', {}, x[1]) : x));
+/** 座位号小圆片（名字重复时靠它分清是谁） */
+const seatNo = (seat) => el('i', { class: 'no', style: `--tc:${TEAM_COLOR[teamOfSeat(seat)]}` }, String(SEATS.indexOf(seat) + 1));
+/** 结算卡里的一排小牌 */
+function miniRow(t, level) {
+  const step = 1.3;
+  const box = el('span', { class: 'mini', style: `width:${(2.2 + step * (t.cards.length - 1)).toFixed(2)}em` });
+  t.cards.forEach((name, i) => box.append(cardEl(name, i * step, 0, 0.44, { level })));
+  return box;
 }
 
 export default {
   hud: true,
 
   turnTip(view) {
-    if (view?.phase === 'back') return '选一张点数不超过 10 的牌还给进贡的人，再点「还贡」。';
-    return '轮到你了：点选手牌（同点数叠成一列，可以横着划选），再点「出牌」。拿不准就点「提示」；逢人配有几种组法时，在按钮上方选一种。';
+    const nm = (x) => view?.seatNames?.[x] || x;
+    if (view?.phase === 'back') {
+      const b = view.tribute?.backs.find((x) => x.from === view.viewer);
+      return b ? `轮到你还贡：还给${nm(b.to)}一张不超过 10 的牌。` : '轮到你还贡。';
+    }
+    if (view?.lead && !view.stale) return `轮到你：压过${nm(view.lead.seat)}的${view.lead.type}${view.lead.key ? ` ${view.lead.key}` : ''}，或者不出。`;
+    return view?.wind && view.wind === view.viewer ? '轮到你接风领出。' : '轮到你领出。';
   },
 
   seatLine(view, seat) {
@@ -445,7 +488,7 @@ export default {
     return {
       label: '本盘记录', title: `第 ${view.handNo}/${view.total} 盘`, sub: `打 ${view.level} · ${view.teamNames.A} ${view.levels.A} / ${view.teamNames.B} ${view.levels.B}`,
       groups, count: backs + (view.plays?.length || 0),
-      last: prev && !r ? `上一盘：${settleLine(prev, view.teamNames)}` : null,
+      last: prev && !r ? `上一盘：${settleLine(prev, view.teamNames, false)}` : null,
       result: r ? `${view.teamNames[r.winnerTeam]}胜 · ${r.passA ? '打过 A' : `${view.teamNames.A} ${r.levels.A} / ${view.teamNames.B} ${r.levels.B}`}` : null,
     };
   },
@@ -455,7 +498,7 @@ export default {
   get aspect() { return typeof matchMedia === 'function' && matchMedia('(max-width: 700px)').matches ? [10, 14] : [16, 10]; },
   seatColor: (seat) => TEAM_COLOR[teamOfSeat(seat)],
 
-  createStage({ onAction }) {
+  createStage({ onAction: submit }) {
     injectStyle();
     const root = el('div', { class: 'gd board-html', role: 'group', 'aria-label': '掼蛋牌桌' });
     const box = el('div', { class: 'gd-box' });
@@ -468,6 +511,10 @@ export default {
     let pickCode = null; // 逢人配多种组法时选的那一种
     let resHidden = null;
     let autoPass = { key: '', timer: null };
+    // 交出去之后、新局面到来之前不能再点（连点会重复提交）；4 秒还没动静就恢复，以防提交失败
+    let sent = { key: '', t: 0 };
+    let stepNow = '';
+    const onAction = (id) => { sent = { key: stepNow, t: Date.now() }; setTimeout(() => redraw(), 4100); submit(id); };
     const fx = { prev: null, lead: { key: '', t0: null }, boom: null, front: {}, cnt: {}, bub: {}, bubKey: {}, settle: { key: '', t0: null }, trib: { key: '', t0: null }, turn: { key: '', t0: 0 } };
     const felt = [el('div', { class: 'gd-rail' }), el('div', { class: 'gd-top' }), el('div', { class: 'gd-wm' }, '掼')];
     const redraw = () => last && draw(last.view, last.opts);
@@ -528,12 +575,20 @@ export default {
     }
 
     function leadOf(view) {
-      if (view.lead && !view.stale) return { seat: view.lead.seat, t: view.lead, stale: false };
+      const e = endPlay(view);
+      if (e) return e;
+      if (view.lead && !view.stale) return { seat: view.lead.seat, t: view.lead, stale: false, end: !!view.over };
       const table = view.table || {};
       const who = view.wind ? partnerOf(view.wind) : view.turn;
       if (who && table[who]?.cards) return { seat: who, t: table[who], stale: !!view.stale };
       const any = SEATS.find((s) => table[s]?.cards);
       return any ? { seat: any, t: table[any], stale: !!view.stale } : null;
+    }
+    /** 一盘刚打完（新一盘还没人出牌）：上一盘最后那一手 */
+    function endPlay(view) {
+      const h = view.history?.at(-1);
+      if (view.over || view.plays?.length || !h?.last || h.hand !== view.handNo - 1) return null;
+      return { seat: h.last.seat, t: h.last, stale: false, end: true };
     }
     function frontsOf(view, lead) {
       const out = {};
@@ -572,6 +627,18 @@ export default {
       const tk = view.tribute ? `${view.handNo}|${view.tribute.backs.filter((b) => b.done).length}` : '';
       if (tk !== fx.trib.key) fx.trib = { key: tk, t0: live && tk ? t : null };
       fx.prev = view;
+    }
+
+    // 对局页的终局卡（框架画的）浮在牌桌上时，先藏起自己的终局卡，免得两张叠在一起；那张收起后再露出来
+    let endObs = null;
+    function watchEndCard() {
+      if (endObs || typeof MutationObserver !== 'function') return;
+      const host = root.closest('.board-wrap') || root.closest('.stage') || root.parentElement;
+      if (!host) return;
+      const sync = () => root.classList.toggle('ended', !!host.querySelector('.end-card'));
+      endObs = new MutationObserver(sync);
+      endObs.observe(host, { childList: true, subtree: true });
+      sync();
     }
 
     function plate(view, seat, where, L, { me, t0, live, canAct }) {
@@ -620,9 +687,11 @@ export default {
         const c = cols.at(-1);
         if (c && c.r === r) c.items.push(i); else cols.push({ r, items: [i] });
       });
+      // 列多时允许左右压住一部分（每列至少露出 6 成，角上的点数花色看得见），牌能大一些（手机竖屏尤其）
       const width = M.x1 - M.x0;
-      const cw = Math.min(M.cwMax, (width / Math.max(cols.length, 1)) / 1.04);
-      const gap = Math.min(cw * 1.08, width / Math.max(cols.length, 1));
+      const nc = Math.max(cols.length, 1);
+      const cw = Math.min(M.cwMax, width / (0.6 * (nc - 1) + 1));
+      const gap = nc > 1 ? Math.min(cw * 1.08, (width - cw) / (nc - 1)) : 0;
       const total = gap * (cols.length - 1) + cw;
       const x0 = M.x0 + (width - total) / 2;
       const ch = cw * 1.4;
@@ -700,22 +769,24 @@ export default {
     }
 
     /** 进贡还贡面板 */
-    function tributePanel(view, L, spot) {
+    function tributePanel(view, L, spot, hold = 0) {
       const t = view.tribute;
       const nm = (s) => view.seatNames?.[s] || s;
       const mini = (name) => el('span', { class: 'slot' }, cardEl(name, 0, 0, 0.44, { level: view.level }));
       const rows = [];
       if (t.anti) {
-        rows.push(el('div', { class: 'ln' }, `${t.antiBy.map(nm).join('、')} 手里有大王，进贡方合计两张大王`));
+        const no = (x) => `${SEATS.indexOf(x) + 1} 号位`;
+        rows.push(el('div', { class: 'ln' }, t.antiBy.length > 1 ? `${t.antiBy.map(no).join('、')}各有一张大王，不进贡` : `${no(t.antiBy[0])}手里有两张大王，不进贡`));
       } else {
-        for (const p of t.pays) rows.push(el('div', { class: 'tr' }, el('span', { class: 'nm' }, nm(p.from)), el('span', { class: 'k' }, '进贡'), el('span', { class: 'nm' }, nm(p.to)), mini(p.card)));
-        for (const b of t.backs) rows.push(el('div', { class: 'tr' }, el('span', { class: 'nm' }, nm(b.from)), el('span', { class: 'k back' }, '还贡'), el('span', { class: 'nm' }, nm(b.to)),
-          b.done ? mini(b.card) : el('span', { class: 'wait' }, '…')));
+        const who = (x) => el('span', { class: 'nm' }, seatNo(x), el('span', {}, nm(x)));
+        for (const p of t.pays) rows.push(el('div', { class: 'tr' }, who(p.from), el('span', { class: 'k' }, '进贡'), who(p.to), mini(p.card)));
+        for (const b of t.backs) rows.push(el('div', { class: 'tr' }, who(b.from), el('span', { class: 'k back' }, '还贡'), who(b.to),
+          b.done ? (b.card ? mini(b.card) : el('span', { class: 'wait' }, '暗牌')) : el('span', { class: 'wait' }, '…')));
       }
-      const leadTxt = `${nm(t.leader)}先出`;
+      const leadTxt = `${SEATS.indexOf(t.leader) + 1} 号位先出`;
       const box = el('div', { class: 'gd-paper', style: `font-size:.92em;left:${spot.cx / 0.92}em;top:${spot.y / 0.92}em;width:${spot.w / 0.92}em` },
         el('div', { class: 'hd' }, el('b', {}, t.anti ? '抗贡' : '进贡'), el('small', {}, leadTxt)), el('div', { class: 'rows' }, ...rows));
-      play(box, 'gd-rise', 500, fx.trib.t0, 0, EASE);
+      play(box, 'gd-rise', 500, fx.trib.t0, hold, EASE);
       return box;
     }
 
@@ -729,10 +800,15 @@ export default {
       const hd = final
         ? el('div', { class: 'hd' }, el('b', {}, `${view.teamNames[r.winnerTeam]}胜`), r.passA ? el('em', {}, '过 A') : null)
         : el('div', { class: 'hd' }, el('small', {}, `第 ${h.hand} 盘 · 打 ${h.level}`), el('b', {}, h.passA ? '过 A' : h.partnerPos === 2 ? '双下' : `${view.teamNames[h.team]}头游`));
-      const lines = [el('div', { class: 'ln' }, settleLine(h, view.teamNames), h.aFail ? `；${view.teamNames[h.aFail]}打 A 未过${h.reset ? '三次，退回 2' : ''}` : '')];
+      const lines = [el('div', { class: 'ln' }, ...settleSpans(h, view.teamNames, !final))];
+      if (h.last) {
+        const lt = h.last;
+        lines.push(el('div', { class: 'lastp' }, el('small', {}, '最后一手'), seatNo(lt.seat), el('span', { class: 'nm' }, nm(lt.seat)),
+          el('span', { class: 'ty' }, `${lt.type}${lt.key ? ` ${lt.key}` : ''}`), miniRow(lt, view.level)));
+      }
       if (final) lines.push(el('div', { class: 'ln' }, `${view.teamNames.A} `, el('b', {}, r.levels.A), ` · ${view.teamNames.B} `, el('b', {}, r.levels.B), `（共 ${r.hands} 盘）`));
-      const card = el('div', { class: 'gd-paper', style: `left:${spot.cx}em;top:${spot.y}em;width:${spot.w}em`, role: 'status' }, hd, ...lines, el('div', { class: 'rows' }, ...rows));
-      play(card, 'gd-rise', 600, fx.settle.t0, FX.fly, EASE);
+      const card = el('div', { class: `gd-paper${final ? ' final' : ''}`, style: `left:${spot.cx}em;top:${spot.y}em;width:${spot.w}em`, role: 'status' }, hd, ...lines, el('div', { class: 'rows' }, ...rows));
+      play(card, 'gd-rise', 600, fx.settle.t0, END_HOLD, EASE);
       return card;
     }
 
@@ -764,7 +840,7 @@ export default {
       let autoKeep = false;
 
       // 桌心
-      const lead = view.phase === 'play' || view.over ? leadOf(view) : null;
+      const lead = view.phase === 'play' || view.over || endPlay(view) ? leadOf(view) : null;
       const c = L.lead;
       const leadH = c.cw * 1.4;
       kids.push(el('div', { class: 'gd-glow', style: `left:${c.cx}em;top:${c.y + leadH / 2}em;width:${c.maxW * 0.9}em;height:${leadH * 2.6}em` }));
@@ -773,7 +849,8 @@ export default {
         if (lead.t.bomb && fx.boom !== null) play(row, 'gd-shake', 420, fx.boom, 380, 'linear');
         center.push(row);
         kids.push(el('div', { class: `gd-lbl${lead.t.bomb ? ' boom' : ''}`, style: `left:${c.cx}em;top:${c.y + leadH + 0.8}em` },
-          el('span', {}, view.seatNames?.[lead.seat] || lead.seat), el('b', {}, lead.t.type || ''), lead.t.key ? el('span', {}, lead.t.key) : null, lead.stale ? el('span', {}, '上一轮') : null));
+          seatNo(lead.seat), el('span', {}, view.seatNames?.[lead.seat] || lead.seat), el('b', {}, lead.t.type || ''), lead.t.key ? el('span', {}, lead.t.key) : null,
+          lead.stale ? el('span', {}, '上一轮') : lead.end ? el('em', {}, '最后一手') : null));
         if (lead.t.bomb && within(fx.boom, 1500)) {
           const cy = c.y + leadH / 2;
           kids.push(play(el('div', { class: 'gd-burst', style: `left:${c.cx}em;top:${cy}em` }), 'gd-burst', 1100, fx.boom, 300, 'ease-out'));
@@ -839,7 +916,7 @@ export default {
       const h = view.history?.at(-1);
       const showRes = h && (view.over || fresh);
       const both = showRes && view.tribute && fresh && resHidden !== `${view.history.length}|`;
-      if (view.tribute && fresh) kids.push(tributePanel(view, L, both ? L.trib2 : L.trib));
+      if (view.tribute && fresh) kids.push(tributePanel(view, L, both ? L.trib2 : L.trib, showRes && fx.settle.t0 !== null && fx.trib.t0 !== null && Math.abs(fx.settle.t0 - fx.trib.t0) < 50 ? END_HOLD : 0));
       if (showRes) {
         const key = `${view.history.length}|${view.over ? 'o' : ''}`;
         if (resHidden === key) {
@@ -853,10 +930,16 @@ export default {
 
       // 玩家本人的操作
       if (canAct) {
-        const ctlY = Math.max(mineTop - 3.6, L.lead.y + L.lead.cw * 1.4 + 2.6);
-        const ctl = el('div', { class: 'gd-ctl', style: `left:${(L.mine.x0 + L.mine.x1) / 2}em;top:${ctlY}em` });
+        // 手机竖屏整张桌子缩得小，按钮和提示放大一些，手指点得到
+        const k = L.ctlScale || 1;
+        const cx = (L.mine.x0 + L.mine.x1) / 2;
+        const ctlY = Math.max(mineTop - 3.6 * k, L.lead.y + L.lead.cw * 1.4 + 2.6);
+        const ctl = el('div', { class: 'gd-ctl', style: `font-size:${k}em;left:${cx / k}em;top:${ctlY / k}em` });
         const stepKey = `${view.handNo}|${view.phase}|${view.plays?.length || 0}|${view.tribute?.backs.filter((b) => b.done).length || 0}`;
         if (fx.turn.key !== stepKey) fx.turn = { key: stepKey, t0: Date.now() };
+        stepNow = stepKey;
+        const waiting = sent.key === stepKey && Date.now() - sent.t < 4000;
+        if (waiting) ctl.classList.add('sent');
         ctl.append(countdown(opts.clock?.[me] || fx.turn.t0));
         const d = view.hands[me];
         const chosen = [...sel].sort((a, b) => a - b).map((k) => d[k]);
@@ -864,7 +947,7 @@ export default {
         if (view.phase === 'back') {
           const to = view.tribute?.backs.find((b) => b.from === me)?.to;
           const ok = chosen.length === 1 && eligible.has(chosen[0]);
-          tip = ok ? `还给${view.seatNames?.[to] || to}：${chosen[0]}` : `选一张牌还给${view.seatNames?.[to] || to}（点数不超过 10）`;
+          tip = ok ? `还给${view.seatNames?.[to] || to}：${chosen[0]}` : `还给${view.seatNames?.[to] || to}`;
           tcls = ok ? 'ok' : 'muted';
           ctl.append(
             button('提示', { onClick: () => { const n = String(actions[0].id).replace(/^还贡\s*/, ''); sel = new Set([d.indexOf(n)]); redraw(); } }),
@@ -876,13 +959,13 @@ export default {
           if (key !== hintKey) { hintKey = key; hintIdx = -1; }
           const opts2 = optionsFor(view, chosen);
           const pick = opts2.find((o) => codeOf(o.combo) === pickCode) || opts2[0] || null;
-          if (!list.length) { tip = canPass ? '没有压得过的牌，自动「不出」' : '没有能出的牌'; tcls = 'muted'; }
-          else if (!sel.size) { tip = canPass ? '选牌压过上家，或点「提示」' : (view.wind === me ? '接风：该你领出，选牌或点「提示」' : '该你领出：选牌，或点「提示」'); tcls = 'muted'; }
+          if (!list.length) { tip = canPass ? '要不起' : ''; tcls = 'muted'; }
+          else if (!sel.size) { tip = ''; tcls = 'muted'; }
           else if (pick) { tip = pick.text; tcls = 'ok'; }
-          else { tip = canPass ? '不成牌型，或压不过上家' : '这几张不成牌型'; tcls = 'bad'; }
+          else { tip = canPass && optionsFor({ ...view, lead: null }, chosen).length ? '压不过' : '不成牌型'; tcls = 'bad'; }
           if (opts2.length > 1) {
             chips = opts2.map((o) => {
-              const b = el('button', { type: 'button', class: o === pick ? 'on' : '' }, `作${o.text}`);
+              const b = el('button', { type: 'button', class: o === pick ? 'on' : '', 'aria-pressed': String(o === pick) }, o === pick ? `✓ 作${o.text}` : `作${o.text}`);
               b.addEventListener('click', (e) => { e.stopPropagation(); pickCode = codeOf(o.combo); redraw(); });
               return b;
             });
@@ -920,11 +1003,13 @@ export default {
             ].filter(Boolean));
           }
         }
-        kids.push(el('div', { class: `gd-tip ${tcls}`, style: `left:${(L.mine.x0 + L.mine.x1) / 2}em;top:${ctlY - 2.9}em` }, el('span', {}, tip), ...(chips || [])));
+        // 有几种组法时只列组法（选中的那个高亮），不再重复写一遍牌型
+        if (tip || chips) kids.push(el('div', { class: `gd-tip ${tcls}`, style: `font-size:${k}em;left:${cx / k}em;top:${(ctlY - 2.9 * k) / k}em` }, chips ? null : el('span', {}, tip), ...(chips || [])));
         kids.push(ctl);
       }
       if (!autoKeep && autoPass.key) { clearTimeout(autoPass.timer); autoPass = { key: '', timer: null }; }
       setLayer(box, felt, kids);
+      if (view.over) watchEndCard();
       if (box.querySelector('.tmr, .gd-cd')) startTimerTick(root);
     }
 

@@ -364,12 +364,12 @@ function breaks(p, hand, level) {
 
 /**
  * 「提示」顺序：跟牌时先普通牌型（少拆牌、少用逢人配、小的先），炸弹类最后（小的先）；
- * 领出时按牌型 单 → 对 → 三张 → 三带二 → 三连对 → 钢板 → 顺子 → 炸弹类，同牌型里少拆、小的先。
+ * 领出时先不用逢人配、不拆牌的，再按牌型 单 → 对 → 三张 → 三带二 → 三连对 → 钢板 → 顺子 → 炸弹类，同牌型里小的先。
  */
 export function hintSort(plays, hand, level, leading) {
   return plays.map((p) => ({ p, b: breaks(p, hand, level), bv: bombValue(p), o: LEAD_ORDER.indexOf(p.type) }))
     .sort((x, y) => (x.bv >= 0) - (y.bv >= 0) || (x.bv >= 0 && y.bv >= 0 ? x.bv - y.bv : 0)
-      || (leading ? x.o - y.o : 0) || x.p.wild - y.p.wild || x.b - y.b || x.p.key - y.p.key || x.p.n - y.p.n)
+      || (leading ? x.p.wild - y.p.wild || x.b - y.b || x.o - y.o : 0) || x.p.wild - y.p.wild || x.b - y.b || x.p.key - y.p.key || x.p.n - y.p.n)
     .map((x) => x.p);
 }
 
@@ -390,9 +390,18 @@ export function playText(cards, combo, level) {
 }
 
 const SUIT_WORDS = { 黑桃: 0, '♠': 0, '♤': 0, S: 0, 红桃: 1, 红心: 1, '♥': 1, '♡': 1, H: 1, 梅花: 2, 草花: 2, '♣': 2, '♧': 2, C: 2, 方块: 3, 方片: 3, 方板: 3, '♦': 3, '♢': 3, D: 3 };
-const RANK_WORDS = { J: 11, Q: 12, K: 13, A: 14, 10: 10 };
+const RANK_WORDS = { J: 11, Q: 12, K: 13, A: 14, 10: 10, 1: 14, T: 10 };
 const CN_DIGITS = { 二: '2', 两: '2', 三: '3', 四: '4', 五: '5', 六: '6', 七: '7', 八: '8', 九: '9', 十: '10' };
-const TOKEN_RE = /(大王|小王|大鬼|小鬼|逢人配|百搭|配牌|红[桃心]级牌|配)|(黑桃|红桃|红心|梅花|草花|方块|方片|方板|[♠♤♥♡♣♧♦♢]|[SHCD](?=\s*(?:10|[2-9JQKA])))?\s*(10|[2-9]|[JQKA])/g;
+const TOKEN_RE = /(大王|小王|大鬼|小鬼|逢人配|百搭|配牌|红[桃心]级牌|配)|(黑桃|红桃|红心|梅花|草花|方块|方片|方板|[♠♤♥♡♣♧♦♢]|[SHCD](?=\s*(?:10|1(?!0)|[2-9JQKAT])))?\s*(10|1(?!0)|[2-9]|[JQKAT])/g;
+const SUIT_RE = '(?:黑桃|红桃|红心|梅花|草花|方块|方片|方板|[♠♤♥♡♣♧♦♢]|[SHCD])';
+const ONE_RANK = `(大王|小王|大鬼|小鬼|${SUIT_RE}?\\s*(?:10|[2-9JQKA]|[二三四五六七八九十]))`;
+const SUIT_SYM = '[♠♤♥♡♣♧♦♢]';
+// 「对 3」「一对小王」「三个 5」「五张 8」：整手只写了一个点数加张数
+const MULTI = [
+  [new RegExp(`^(?:一对儿?|对子|对|两张|两个)\\s*${ONE_RANK}$`), 2],
+  [new RegExp(`^(?:三张|三个|三条)\\s*${ONE_RANK}$`), 3],
+  [new RegExp(`^([四五六七八九十]|10|[4-9])\\s*[张个]\\s*${ONE_RANK}$`), 0],
+];
 
 /**
  * 把「5 5 5 8 8」「红桃7 黑桃8」「♠10 ♠J ♠Q ♠K ♠A」「逢人配」之类解析成牌的写法。
@@ -400,9 +409,29 @@ const TOKEN_RE = /(大王|小王|大鬼|小鬼|逢人配|百搭|配牌|红[桃�
  */
 export function parseTokens(text) {
   let t = String(text || '').normalize('NFKC').toUpperCase();
-  t = t.replace(/\([^)]*\)|【[^】]*】|\[[^\]]*\]|「|」|“|”|"|'/g, ' ');
+  // 「♥7当5」：逢人配当几（只用来在几种组法里挑一种）；括号里的注释只取这个，其余忽略
+  const as = [];
+  const asOf = (x) => x.replace(/当\s*(10|[2-9JQKA]|[二三四五六七八九十])/g, (m, r) => { as.push(RANK_WORDS[CN_DIGITS[r] || r] ?? Number(CN_DIGITS[r] || r)); return ' '; });
+  t = t.replace(/\([^)]*\)|【[^】]*】|\[[^\]]*\]/g, (m) => { asOf(m); return ' '; });
+  t = asOf(t.replace(/「|」|“|”|"|'|[*`#]/g, ' '));
+  t = t.replace(/级牌|级/g, ' ').trim();
+  // 「逢人配♥7」是一张；「小王×2」「♥7×2」是两张
+  t = t.replace(/(?:逢人配|配)\s*(?:♥|♡|红桃|红心)\s*(10|[2-9JQKA])/g, '♥$1');
+  t = t.replace(new RegExp(`(大王|小王|逢人配|配|${SUIT_RE}?\\s*(?:10|[2-9JQKA]))\\s*[×X]\\s*([1-9])`, 'g'), (m, one, n) => Array(Number(n)).fill(one).join(' '));
+  // 手牌里的写法「A♠♦♦」「5♠ 5♣」：点数在前、花色在后（第一张牌就是这样写时才这样认）
+  if (new RegExp(`^(?:10|[2-9JQKA])${SUIT_SYM}`).test(t)) {
+    t = t.replace(new RegExp(`(10|[2-9JQKA])((?:${SUIT_SYM})+)`, 'g'), (m, r, su) => ` ${[...su].map((x) => x + r).join(' ')} `);
+  }
+  for (const [re, k] of MULTI) {
+    const m = re.exec(t);
+    if (!m) continue;
+    const one = m[m.length - 1];
+    const n = k || Number(CN_DIGITS[m[1]] || m[1]);
+    t = Array(n).fill(one).join(' ');
+    break;
+  }
   t = t.replace(/四大天王|天王炸/g, ' 小王 小王 大王 大王 ');
-  t = t.replace(/三带二|三带一对|三连对|连对|钢板|木板|飞机|同花顺|顺子|炸弹|单张|单牌|对子|三张|三条|一对|三个|四个|五个|张/g, ' ');
+  t = t.replace(/三带二|三带一对|三连对|连对|钢板|木板|飞机|同花顺|顺子|炸弹|单张|单牌|对子|三张|三条|一对|三个|四个|五个|一张|一个|张/g, ' ');
   t = t.replace(/[二两三四五六七八九十]/g, (ch) => ` ${CN_DIGITS[ch]} `);
   const tokens = [];
   const rest = t.replace(TOKEN_RE, (m, special, suit, rank) => {
@@ -419,13 +448,13 @@ export function parseTokens(text) {
   const left = rest.replace(/[\s,，、/+;；。.:：和与及—\-~～]/g, '');
   if (left) return { error: `无法识别「${left.slice(0, 10)}」` };
   if (!tokens.length) return { error: '没有写出任何牌' };
-  return { tokens };
+  return { tokens, as };
 }
 
 /**
  * 把牌的写法落到手里具体的牌上。只写点数的按花色 ♠♣♦♥ 的顺序挑，不够时用逢人配补；
  * 全是只写点数的 5 张不同点数时，另外试试凑成同花顺（跟牌要压炸弹时用得上）。
- * 返回 { options: [牌数组, ...] } 或 { error }
+ * 返回 { options: [牌数组, ...], fills: [每种落法里逢人配补的点数] } 或 { error }
  */
 export function resolveTokens(tokens, hand, level) {
   const pool = hand.slice();
@@ -448,6 +477,7 @@ export function resolveTokens(tokens, hand, level) {
   const fillBare = (order) => {
     const p = base.slice();
     const got = [];
+    const fill = [];
     for (const tk of bare) {
       let c = -1;
       for (const su of order) {
@@ -461,21 +491,23 @@ export function resolveTokens(tokens, hand, level) {
         if (wi < 0) return { error: `你手里的 ${rankName(tk.rank)} 不够（写了 ${bare.filter((b) => b.rank === tk.rank).length} 张）` };
         c = p[wi];
         p.splice(wi, 1);
+        fill.push(tk.rank);
       }
       got.push(c);
     }
-    return { cards: [...picked, ...got] };
+    return { cards: [...picked, ...got], fill };
   };
   const first = fillBare([0, 2, 3, 1]);
   if (first.error) return first;
   const options = [first.cards];
+  const fills = [first.fill];
   if (!picked.length && bare.length === 5 && new Set(bare.map((b) => b.rank)).size === 5) {
     for (let su = 0; su < 4; su++) {
       const r = fillBare([su]);
-      if (!r.error) options.push(r.cards);
+      if (!r.error) { options.push(r.cards); fills.push(r.fill); }
     }
   }
-  return { options };
+  return { options, fills };
 }
 
 /**
@@ -492,8 +524,16 @@ export function resolvePlay(text, hand, level, last) {
   const rs = resolveTokens(tk.tokens, hand, level);
   if (rs.error) return { error: rs.error };
   let bestPick = null, anyKind = null;
-  for (const cards of rs.options) {
-    const list = interpret(cards, level);
+  for (let oi = 0; oi < rs.options.length; oi++) {
+    const cards = rs.options[oi];
+    let list = interpret(cards, level);
+    // 写了「♥7当5」，或只写点数、某个点数不够由逢人配补（「5 5 5 6 6」手里只有两张 5）：
+    // 几种组法里先挑逢人配当这些点数的（对不上、或这样压不过上家时不管它）
+    const want = [...(tk.as || []), ...(rs.fills[oi] || [])];
+    if (want.length && !code && list.length > 1) {
+      const fit = list.filter((x) => { const got = layout(cards, x, level).filter((y) => y.as).map((y) => y.as); return want.every((r) => got.includes(r)); });
+      if (fit.length && pickInterp(fit, last, code)) list = fit;
+    }
     if (list.length && !anyKind) anyKind = { cards, combo: pickInterp(list, null, code) || list[0] };
     const p = pickInterp(list, last, code);
     if (!p) continue;
@@ -519,7 +559,8 @@ export function resolveOne(text, hand, level) {
 
 // ---------- 画面特效与停顿的时长（服务端停顿与回放共用，毫秒） ----------
 
-export const FX = { fly: 460, settle: 4200, tribute: 2400, deal: 900, bomb: 1200 };
+// settle：一盘打完到下一盘开始的总停顿；其中前 endHold 只演最后一手（桌心留着那一手），之后升起结算卡
+export const FX = { fly: 460, settle: 5600, endHold: 1500, tribute: 2400, deal: 900, bomb: 1200 };
 
 /**
  * 两个局面之间画面要演多久：一盘结束（结算卡）、进贡还贡（牌飞过去）、炸弹。

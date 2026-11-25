@@ -153,10 +153,12 @@ test('胡优先于碰；一炮多响两家都胡，打的人各赔一份', () =>
   assert.deepEqual(game.pending(s), ['p2', 'p3', 'p4']);
   assert.deepEqual(ids(s, 'p2'), ['peng', 'pass']);
   assert.deepEqual(ids(s, 'p3'), ['hu', 'pass']);
-  // 响应先藏着
+  // 响应先藏着：别人连「谁答了」都看不到
   s = game.apply(s, 'p2', 'peng');
-  assert.equal(game.view(s, 'p3').log.at(-1).text, '已决定');
+  assert.equal(game.view(s, 'p3').log.at(-1).text, '打 5筒');
+  assert.equal(game.view(s, '*').log.at(-1).text, '打 5筒');
   assert.equal(game.view(s, 'p2').log.at(-1).text, '碰 5筒');
+  assert.equal(game.view(s, null).log.at(-1).text, '碰 5筒');
   s = game.apply(s, 'p3', 'hu');
   s = game.apply(s, 'p4', 'hu');
   assert.ok(s.hand.won[2] && s.hand.won[3], '两家都胡');
@@ -164,6 +166,12 @@ test('胡优先于碰；一炮多响两家都胡，打的人各赔一份', () =>
   assert.equal(s.hand.delta[0], -2, '平胡各 1 分，打的人赔两份');
   assert.equal(s.hand.delta[2], 1);
   assert.equal(s.hand.delta[3], 1);
+  // 结算后：胡公开；被截走的碰只有本人和上帝视角看得到（公开就等于说他有一对 5筒）
+  const pub = game.view(s, 'p4').log.map((e) => `${e.seat} ${e.text}`);
+  assert.ok(pub.includes('p3 胡 5筒') && pub.includes('p4 胡 5筒'));
+  assert.ok(!pub.some((x) => x.startsWith('p2')), pub.join('|'));
+  assert.ok(game.view(s, 'p2').log.some((e) => e.seat === 'p2' && e.text === '碰 5筒（被胡截走）'));
+  assert.ok(game.view(s, null).log.some((e) => e.seat === 'p2' && /被胡截走/.test(e.text)));
   // 继续：从最后一个胡的人（p4）的下家开始，p1 摸牌
   assert.deepEqual(game.pending(s), ['p1']);
   assert.equal(game.interlude(null, s) > 0, true);
@@ -343,13 +351,15 @@ test('内置 AI：能胡就胡；level 2 打孤张、留搭子', () => {
 
 test('整场：多盘累计、庄家轮转、带种子可重现、停顿时长', () => {
   for (const seed of [1, 2, 3]) {
-    let s = game.create({ seed, setup: { hands: 3 } });
+    // 第 3 局用规则 2：窗口里本来要不了的人由 autoAction 代答
+    const setup = seed === 3 ? { hands: 3, rules: 2 } : { hands: 3 };
+    let s = game.create({ seed, setup });
     const actions = [];
     const dealers = [s.hand.dealer];
     let n = 0;
     while (!game.outcome(s).over) {
       for (const seat of game.pending(s)) {
-        const a = game.builtinMove(s, seat, { level: 2 });
+        const a = game.autoAction(s, seat) ?? game.builtinMove(s, seat, { level: 2 });
         const prev = s;
         s = game.apply(s, seat, a);
         actions.push({ seat, action: a });
@@ -364,7 +374,7 @@ test('整场：多盘累计、庄家轮转、带种子可重现、停顿时长',
     assert.equal(s.history.length, 3);
     assert.equal(s.totals.reduce((a, b) => a + b, 0), 0, '零和');
     assert.deepEqual(dealers, [dealers[0], (dealers[0] + 1) % 4, (dealers[0] + 2) % 4]);
-    const again = replay(game, { seed, players: 4, setup: { hands: 3 }, actions });
+    const again = replay(game, { seed, players: 4, setup, actions });
     assert.deepEqual(again, s);
     const out = game.outcome(s);
     const top = Math.max(...s.totals);
@@ -375,6 +385,88 @@ test('整场：多盘累计、庄家轮转、带种子可重现、停顿时长',
   assert.equal(pauseBetween({ handNo: 1, wins: 0, calls: 0 }, { handNo: 1, wins: 1, calls: 0 }), FX.HU);
   assert.equal(pauseBetween({ handNo: 1, wins: 0, calls: 0 }, { handNo: 1, wins: 0, calls: 1 }), FX.CALL);
   assert.equal(pauseBetween({ handNo: 1, wins: 1, calls: 0 }, { handNo: 2, wins: 0, calls: 0, end: 'wall' }), FX.WALL + FX.SETTLE + FX.DEAL);
+});
+
+test('规则 2：响应窗口里其余没胡的人都在（代答「过」），谁真能响应对别人保密', () => {
+  assert.deepEqual(game.newSetup, { rules: 2 });
+  assert.throws(() => game.create({ seed: 1, setup: { rules: 3 } }), /规则版本/);
+  assert.equal(game.create({ seed: 1 }).cfg.rules, 1, '旧记录没有 rules：按规则 1 重放');
+  // 同「胡优先于碰」的牌：p1 打 5筒，p2 能碰，p3 能胡，p4 什么都不能
+  const base = rig({
+    hands: { p1: '123m456m789m1119s5p', p2: '55p113579m24689m', p3: '123s456s789s333p5p', p4: '147m258m369m1s4s7s2s' },
+    que: 'psmp', drawn: '9s',
+  });
+  base.cfg.rules = 2;
+  let s = game.apply(base, 'p1', 'discard:5p');
+  assert.deepEqual(game.pending(s), ['p2', 'p3', 'p4'], 'p4 也在窗口里');
+  assert.deepEqual(ids(s, 'p4'), ['pass']);
+  assert.equal(game.autoAction(s, 'p4'), 'pass');
+  assert.equal(game.autoAction(s, 'p2'), null, '真能响应的要问本人');
+  // 私密步：定缺、响应窗口里的每一步、暗杠
+  assert.equal(game.secret(s, 'p2', null), true);
+  assert.equal(game.secret(s, 'p4', 'pass'), true);
+  assert.equal(game.secret(game.create({ seed: 1 }), 'p1', null), true, '定缺');
+  assert.equal(game.secret(base, 'p1', null), false, '轮到谁出牌是公开的');
+  assert.equal(game.secret(base, 'p1', 'discard:5p'), false);
+  assert.equal(game.secret(base, 'p1', 'angang:5m'), true);
+  s = game.apply(s, 'p4', 'pass');
+  s = game.apply(s, 'p2', 'pass');
+  s = game.apply(s, 'p3', 'pass');
+  assert.equal(s.hand.phase, 'turn');
+  assert.deepEqual(game.pending(s), ['p2']);
+  // 代答的过不记；真过的只有本人和上帝视角看得到
+  assert.ok(!game.view(s, null).log.some((e) => e.seat === 'p4' && e.text === '过'));
+  assert.ok(game.view(s, null).log.some((e) => e.seat === 'p3' && e.text === '过'));
+  assert.ok(game.view(s, 'p3').log.some((e) => e.seat === 'p3' && e.text === '过'));
+  for (const v of ['p1', 'p4', '*']) assert.ok(!game.view(s, v).log.some((e) => e.text === '过'), v);
+  // 没人能要的牌不开窗口
+  const quiet = rig({ hands: { p1: '1239m 2345s 66778p', p2: '111m 222m 333m 4445s', p3: '5678m 5678s 12399s', p4: '1m 2m 3m 4m 5m 6m 7m 8m 9m 1s 2s 3s 4s' }, que: 'pmmp', wall: '9m 1p', drawn: '8p' });
+  quiet.cfg.rules = 2;
+  assert.deepEqual(game.pending(game.apply(quiet, 'p1', 'discard:6p')), ['p2']);
+  // 补杠每次都开窗口（不然「停下来问」就说明有人在等这张），都过就杠成
+  let r = rig({ hands: { p1: '123m456m78m99m3p', p2: '147m258m369m1p4p7p2p', p3: '147m258m369m1p4p7p2p', p4: '147m258m369m1p4p7p2p' }, que: 'ssss', drawn: '3p', melds: { p1: [{ k: 'peng', t: '3p' }] }, wall: '9m' });
+  r.cfg.rules = 2;
+  r = game.apply(r, 'p1', 'bugang:3p');
+  assert.equal(r.hand.phase, 'react');
+  assert.deepEqual(game.pending(r), ['p2', 'p3', 'p4']);
+  for (const x of ['p2', 'p3', 'p4']) r = game.apply(r, x, game.autoAction(r, x));
+  assert.equal(r.hand.melds[0][0].k, 'bu');
+  assert.deepEqual(game.pending(r), ['p1'], '杠后补一张');
+});
+
+test('暗杠：别人看到「暗杠」，不知道是哪张（记录和事件都不带牌）', () => {
+  let a = rig({ hands: { p1: '5555m123s456s78s11m', p2: '1p', p3: '1p', p4: '1p' }, que: 'pppp', drawn: '1m', wall: '9s' });
+  for (const j of [1, 2, 3]) a.hand.hands[j] = T('147m258m369m1s4s7s2s');
+  a = game.apply(a, 'p1', 'angang:5m');
+  const other = game.view(a, 'p2');
+  assert.equal(other.log.at(-1).text, '暗杠');
+  assert.equal(other.ev.type, 'gang');
+  assert.equal(other.ev.t, null);
+  assert.equal(game.view(a, '*').ev.t, null);
+  assert.equal(game.view(a, 'p1').log.at(-1).text, '暗杠 5万');
+  assert.equal(game.view(a, null).ev.t, '5m');
+  assert.ok(!JSON.stringify({ ...other, players: other.players.filter((p) => p.seat !== 'p2') }).includes('5m'), '玩家视角里（除了自己的手牌）哪里都没有 5万');
+});
+
+test('解析：宽松写法', () => {
+  let s = game.create({ seed: 8 });
+  assert.equal(game.parseReply(s, 'p1', '定缺：s').action, 'que:s');
+  assert.equal(game.parseReply(s, 'p1', '胜率：约 25%\n定缺：万').winrate, 25);
+  for (const seat of SEATS) s = game.apply(s, seat, 'que:p');
+  const d = SEATS[s.hand.dealer];
+  const t = s.hand.hands[s.hand.dealer].find((x) => Math.floor(x / 9) === 2);
+  const nm = tileName(t), code = `${(t % 9) + 1}p`;
+  for (const txt of [`出牌：${nm}（等自摸）`, `出牌：${nm}，先不杠`, `行动：打${nm}`, `我打${nm}`, `出牌：「${nm}」。`, `出牌：${code}`]) {
+    assert.equal(game.parseReply(s, d, `判断：x\n胜率：30%\n${txt}`).action, `discard:${code}`, txt);
+  }
+  assert.match(game.parseReply(s, d, `胜率：30%\n判断：先打${nm}`).error, /没有找到/);
+  let rs = rig({ hands: { p1: '123m456m789m1s5p', p2: '55p123m456m789m9m', p3: '1s', p4: '1s' }, que: 'ssss', drawn: '1s' });
+  rs.hand.que = [2, 1, 1, 1];
+  rs.hand.hands[2] = T('147m258m369m1p4p7p2p'); rs.hand.hands[3] = T('147m258m369m1p4p8p3p');
+  rs = game.apply(rs, 'p1', 'discard:5p');
+  assert.equal(game.parseReply(rs, 'p2', '行动：碰，过两巡再说').action, 'peng');
+  assert.equal(game.parseReply(rs, 'p2', '行动：过（不碰）').action, 'pass');
+  assert.equal(game.parseReply(rs, 'p2', '碰').action, 'peng');
 });
 
 test('认输：犯规者垫底，其余按分数', () => {
