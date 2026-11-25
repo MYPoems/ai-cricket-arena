@@ -286,7 +286,9 @@ export class Arena {
         hideThoughts: (outsiders > 0 && game.features?.hidden) || (agents.length > 0 && mode === 'ranked') ? true : options.hideThoughts ?? humans.length > 0,
         ...(options.series ? { series: options.series } : {}),
         // 真人每步限时（秒）：不给就按游戏的默认（牌类 features.turnLimit，其他 10 分钟）
-        ...(Number(options.humanTimeout) > 0 ? { humanTimeout: Math.min(600, Number(options.humanTimeout)) } : {}),
+        ...(Number(options.humanTimeout) > 0 ? { humanTimeout: Math.min(game.features?.clock ? 1800 : 600, Number(options.humanTimeout)) } : {}),
+        // 两人棋类：超时几次判负
+        ...(game.features?.clock && Number(options.timeoutLoss) > 0 ? { timeoutLoss: Math.min(10, Math.max(1, Math.round(Number(options.timeoutLoss)))) } : {}),
       },
       seats: Object.fromEntries(seatIds.map((s) => [s, seats[s]])),
       actions: [],
@@ -575,6 +577,8 @@ export class Arena {
     // 牌类游戏（features.turnLimit）：每步限时几十秒，超时由系统接管这一步并转托管；托管中系统直接代打
     const autoOk = !!game.features?.turnLimit;
     const limit = turnLimitMs(m, game);
+    // 两人棋类：超时累计到次数判负
+    const clock = game.features?.clock ? { max: timeoutLossOf(m) } : null;
     return new Promise((resolve, reject) => {
       let timer = null, autoTimer = null;
       const clear = () => { clearTimeout(timer); clearTimeout(autoTimer); };
@@ -584,6 +588,20 @@ export class Arena {
       const takeover = async (why) => {
         if (rt.humans[seat] !== handle || handle.taking) return;
         handle.taking = true;
+        if (why === 'timeout' && clock) {
+          // 两人棋类：超时累计（整盘，存进对局选项，重启后接着数）；到达次数判负，没到就由系统代走一步
+          const n = (m.options.timeouts?.[seat] || 0) + 1;
+          m.options.timeouts = { ...(m.options.timeouts || {}), [seat]: n };
+          this.db.update('matches', { id: m.id }, { options: m.options });
+          const owner = this.#ownerOf(m, seat);
+          if (n >= clock.max) { done({ forfeit: `${game.seatName(seat)}超时 ${n} 次，判负` }); return; }
+          if (owner) this.hub.emit(`user:${owner}`, { type: 'turn_timeout', matchId: m.id, count: n, max: clock.max, clock: true });
+          this.hub.emit(`match:${m.id}`, { type: 'timeouts', timeouts: { ...m.options.timeouts } });
+          const a = await clockMove(game, state, seat);
+          if (rt.humans[seat] !== handle) return;
+          done(a !== null ? { action: a, timeout: true, text: `（超时，系统代走一步，第 ${n}/${clock.max} 次）` } : { forfeit: `${game.seatName(seat)}超时` });
+          return;
+        }
         let action = autoOk ? await autoMove(game, state, seat) : null;
         if (action === null) action = await timeoutAction(game, state, seat, Object.keys(m.seats).length).catch(() => null);
         if (rt.humans[seat] !== handle) return; // 对局已中止
@@ -995,10 +1013,13 @@ ${game.noun || '行动'}：${act}`;
       waitingElapsed: humanH ? Date.now() - humanH.at : null,
       // 这一步还剩多久（毫秒）、每步限时；托管中的座位（谁在托管大家都看得到，和成熟平台一样）
       waitingLeft: humanH ? Math.max(0, humanH.deadline - Date.now()) : null,
-      turnLimit: game.features?.turnLimit ? turnLimitMs(m, game) : null,
+      turnLimit: game.features?.turnLimit || game.features?.clock ? turnLimitMs(m, game) : null,
+      // 两人棋类：超时几次判负、各方已超时几次（公开）
+      timeoutLoss: game.features?.clock ? timeoutLossOf(m) : null,
+      timeouts: game.features?.clock ? { ...(m.options?.timeouts || {}) } : null,
       auto: { ...(rt?.auto || {}) },
       // 我已经连续超时几次（牌类再超时一次就转托管时页面提醒）
-      myTimeouts: mySeat ? rt?.timeouts?.[mySeat] || 0 : 0,
+      myTimeouts: !mySeat ? 0 : game.features?.clock ? m.options?.timeouts?.[mySeat] || 0 : rt?.timeouts?.[mySeat] || 0,
       humanActions: humanH ? game.actions(state, humanH.seat) : null,
       drawOfferToHuman: humanH?.offer || false,
       seatOrder: Object.keys(m.seats),
@@ -1054,16 +1075,31 @@ export const AUTO_DELAY_MS = [1500, 5000];
 
 /** 真人每一步的限时（秒）：超时按默认行动（过牌、不出、不叫、弃票、弃牌）；没有默认行动时，多人局由系统代打这一步，两人局判超时负 */
 const HUMAN_TIMEOUT_S = 600;
-/** 每步限时（毫秒）：对局选项 humanTimeout（秒）优先，其次游戏的 features.turnLimit（牌类 60 秒），默认 10 分钟 */
+/** 每步限时（毫秒）：对局选项 humanTimeout（秒）优先，其次游戏的 features.turnLimit（牌类 60 秒）；两人棋类（features.clock）默认 5 分钟，其他 10 分钟 */
 export function turnLimitMs(m, game) {
-  const s = Number(m.options?.humanTimeout) || game.features?.turnLimit || HUMAN_TIMEOUT_S;
-  return Math.max(game.features?.turnLimit ? 5 : 30, s) * 1000;
+  const s = Number(m.options?.humanTimeout) || game.features?.turnLimit || (game.features?.clock ? CLOCK_DEFAULT_S : HUMAN_TIMEOUT_S);
+  return Math.max(game.features?.turnLimit || game.features?.clock ? 5 : 30, s) * 1000;
 }
 /** 断线宽限：牌类断线 15 秒转托管；其他三人以上的游戏断线 90 秒后由系统代打正等着他的那一步 */
 export const OFFLINE_GRACE_MS = Number(process.env.ARENA_OFFLINE_GRACE_MS) || 15000;
 export const OFFLINE_SLOW_MS = Number(process.env.ARENA_OFFLINE_SLOW_MS) || 90000;
 /** 托管时代打一步前的停顿（毫秒） */
 const AUTO_PLAY_MS = [700, 1400];
+/** 两人棋类：每步限时默认 5 分钟，超时 3 次判负（开局时可以改） */
+export const CLOCK_DEFAULT_S = 300;
+export const TIMEOUT_LOSS_DEFAULT = 3;
+export const timeoutLossOf = (m) => Math.min(10, Math.max(1, Math.round(Number(m.options?.timeoutLoss)) || TIMEOUT_LOSS_DEFAULT));
+/** 两人棋类超时代走：内置 AI 最低档（不送强着），不行就取第一个合法行动 */
+async function clockMove(game, state, seat) {
+  try {
+    const a = await game.builtinMove(state, seat, { level: 1, depth: 1 });
+    if (a !== null && a !== undefined) { game.apply(state, seat, a); return a; }
+  } catch { /* 用下面的 */ }
+  try {
+    const acts = game.actions(state, seat);
+    return Array.isArray(acts) && acts.length ? acts[0].id : null;
+  } catch { return null; }
+}
 /** 牌类连续超时几次转托管 */
 export const TIMEOUTS_TO_AUTO = 2;
 const TAKEOVER_NOTE = { timeout: '（超时，系统代为行动）', auto: '（托管，系统代为行动）', offline: '（断线，系统代为行动）' };

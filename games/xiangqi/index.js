@@ -11,7 +11,8 @@ export default {
   id: 'xiangqi',
   name: '中国象棋',
   players: { min: 2, max: 2, default: 2 },
-  features: { draw: true, hidden: false, evalEngine: 'pikafish', winbar: true },
+  // clock：两人棋类的每步限时（默认 5 分钟，可在开局时改）和超时判负次数（默认 3 次）
+  features: { draw: true, hidden: false, evalEngine: 'pikafish', winbar: true, clock: true },
   noun: '着法',
   seatNames: SEAT_NAMES,
 

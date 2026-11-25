@@ -116,7 +116,8 @@ export default {
   id: 'gomoku',
   name: '五子棋',
   players: { min: 2, max: 2, default: 2 },
-  features: { draw: true, hidden: false, evalEngine: 'rapfi', winbar: true },
+  // clock：两人棋类的每步限时（默认 5 分钟，可在开局时改）和超时判负次数（默认 3 次）
+  features: { draw: true, hidden: false, evalEngine: 'rapfi', winbar: true, clock: true },
   noun: '落子',
   rankedSeries: { legs: 2, sameSeed: false }, // 无禁手先手优势大，排位赛交换先后手各下一盘
 

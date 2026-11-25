@@ -2534,3 +2534,7 @@ dialog .dlg-body { overscroll-behavior: contain; }
 .online-list small, .online-list a { white-space: nowrap; }
 .online-card h3 small { font-weight: 400; font-size: 13px; }
 .invite-text { margin: 0; }
+
+/* 每步限时、超时判负（开局页、开组局） */
+.clock-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 14px; }
+.clock-fields > .small { grid-column: 1 / -1; }

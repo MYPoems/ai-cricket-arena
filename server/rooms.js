@@ -131,7 +131,11 @@ export function roomRoutes(router, { db, hub, arena }) {
     const title = String(body.title || '').trim().slice(0, 30) || `${user.name}的${game.name}局`;
     const r = {
       id: newId('room'), game: game.id, players: n, title, host_id: user.id, status: 'open', seats: {},
-      options: { showLegal: body.showLegal !== false, delayMs: Math.max(0, Math.min(10000, Number(body.delayMs ?? 600))) },
+      options: {
+        showLegal: body.showLegal !== false, delayMs: Math.max(0, Math.min(10000, Number(body.delayMs ?? 600))),
+        // 两人棋类：真人每步限时（秒）、超时几次判负
+        ...(game.features?.clock ? { humanTimeout: Math.min(1800, Math.max(60, Number(body.humanTimeout) || 300)), timeoutLoss: Math.min(10, Math.max(1, Math.round(Number(body.timeoutLoss)) || 3)) } : {}),
+      },
       match_id: null, created_at: now(), updated_at: now(),
     };
     db.insert('rooms', r);

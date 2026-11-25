@@ -1,24 +1,26 @@
 // 组局：开房、把自己的 AI 蛐蛐拉进座位、坐满后房主开局。
 
-import { h, api, post, guard, guardConfirm, toast, listen, modelLine, fmtTime, dialog, pageHead, emptyState, setTitle, pressed, icon, cleanName, coin } from './ui.js';
+import { h, api, post, guard, guardConfirm, toast, listen, modelLine, fmtTime, dialog, pageHead, emptyState, setTitle, pressed, icon, cleanName, coin, clockFields, clockText } from './ui.js';
 
 export async function roomsView(root, { meta, go, session }) {
   const list = await api('/rooms');
   const create = () => {
     let game = meta.games[0];
     let players = game.players.default;
+    const clock = { moveTime: 300, timeoutLoss: 3 };
     const title = h('input', { type: 'text', id: 'room-title', maxlength: 30, placeholder: '例如：周五斗地主' });
     const body = h('div', { class: 'col' });
     const draw = () => body.replaceChildren(
       h('div', { class: 'field' }, h('span', {}, '游戏'), h('div', { class: 'seg seg-games', role: 'group', 'aria-label': '游戏' }, ...meta.games.map((g) => h('button', { type: 'button', class: g.id === game.id ? 'on' : '', ...pressed(g.id === game.id), title: g.players.min === g.players.max ? `${g.players.min} 人` : `${g.players.min}–${g.players.max} 人`, onclick: () => { game = g; players = g.players.default; draw(); } }, g.name)))),
       game.players.min !== game.players.max ? h('label', { class: 'field' }, h('span', {}, '人数'), h('select', { onchange: (e) => { players = Number(e.target.value); } }, ...Array.from({ length: game.players.max - game.players.min + 1 }, (_, i) => game.players.min + i).map((n) => h('option', { value: n, selected: n === players }, `${n} 人`)))) : null,
       h('label', { class: 'field' }, h('span', {}, '组局名'), title),
+      game.features?.clock ? clockFields(clock) : null,
       h('div', { class: 'small muted' }, '组局开出的是娱乐赛：不计积分，也不占蛐蛐每天主动参加对局的名额。'));
     draw();
     const dlg = dialog('开一个组局', body, [
       h('button', { class: 'btn', type: 'button', onclick: () => dlg.close() }, '取消'),
       h('button', { class: 'btn primary', type: 'button', onclick: guard(async () => {
-        const r = await post('/rooms', { game: game.id, players, title: title.value.trim() });
+        const r = await post('/rooms', { game: game.id, players, title: title.value.trim(), ...(game.features?.clock ? { humanTimeout: clock.moveTime, timeoutLoss: clock.timeoutLoss } : {}) });
         dlg.close();
         go(`#/room/${r.id}`);
       }) }, '创建组局'),
@@ -142,7 +144,7 @@ export async function roomView(root, id, { go, session, characters, meta }) {
     const full = room.filled === room.players;
     const statusText = { open: full ? '坐满了，等房主开局' : `还差 ${room.players - room.filled} 个座位`, started: '已开局', closed: '已关闭' }[room.status];
     root.replaceChildren(
-      pageHead(room.title, `${room.gameName} · ${room.players} 人 · 房主 ${room.host?.name || '—'}`, '组'),
+      pageHead(room.title, `${room.gameName} · ${room.players} 人${room.options?.humanTimeout ? ` · ${clockText(room.options)}` : ''} · 房主 ${room.host?.name || '—'}`, '组'),
       h('div', { class: 'room-page' },
         h('div', { class: 'seats-grid' }, ...seats.map(seatCard)),
         h('div', { class: 'col' },

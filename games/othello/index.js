@@ -50,7 +50,8 @@ export default {
   id: 'othello',
   name: '黑白棋',
   players: { min: 2, max: 2, default: 2 },
-  features: { draw: false, hidden: false, winbar: true, evalEngine: 'local' },
+  // clock：两人棋类的每步限时（默认 5 分钟，可在开局时改）和超时判负次数（默认 3 次）
+  features: { draw: false, hidden: false, winbar: true, evalEngine: 'local', clock: true },
   noun: '落子',
   rankedSeries: { legs: 2, sameSeed: false }, // 交换先后手各下一盘
 

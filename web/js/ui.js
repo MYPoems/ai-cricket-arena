@@ -510,3 +510,20 @@ export function promptDialog({ title = '请输入', label = '', value = '', plac
     input.select();
   });
 }
+
+// ---------- 两人棋类的每步限时 ----------
+export const MOVE_TIMES = [[60, '1 分钟'], [120, '2 分钟'], [180, '3 分钟'], [300, '5 分钟'], [600, '10 分钟'], [1800, '30 分钟']];
+export const TIMEOUT_LOSSES = [1, 2, 3, 5];
+/** 「每步限时」「超时判负」两个下拉框；o 里的 moveTime（秒）、timeoutLoss 跟着改 */
+export function clockFields(o) {
+  o.moveTime ??= 300;
+  o.timeoutLoss ??= 3;
+  return h('div', { class: 'clock-fields' },
+    h('label', { class: 'field' }, h('span', {}, '每步限时'),
+      h('select', { onchange: (e) => { o.moveTime = Number(e.target.value); } }, ...MOVE_TIMES.map(([v, l]) => h('option', { value: v, selected: v === o.moveTime }, l)))),
+    h('label', { class: 'field' }, h('span', {}, '超时判负'),
+      h('select', { onchange: (e) => { o.timeoutLoss = Number(e.target.value); } }, ...TIMEOUT_LOSSES.map((n) => h('option', { value: n, selected: n === o.timeoutLoss }, `超时 ${n} 次`)))),
+    h('div', { class: 'small muted' }, '只管真人：到点由系统代走一步，累计超时到次数判负。'));
+}
+/** 「每步 5 分钟 · 超时 3 次判负」 */
+export const clockText = (o) => `每步 ${MOVE_TIMES.find(([v]) => v === Number(o?.humanTimeout))?.[1] || `${Math.round((Number(o?.humanTimeout) || 300) / 60)} 分钟`} · 超时 ${o?.timeoutLoss || 3} 次判负`;

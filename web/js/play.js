@@ -1,6 +1,6 @@
 // 开局：选游戏、人数和各座位的选手。
 
-import { h, api, post, guard, avatar, modelLine, MODE_NAMES, listen, pageHead, pressed, icon, cleanName, summarizeSeats, dialog } from './ui.js';
+import { h, api, post, guard, avatar, modelLine, MODE_NAMES, listen, pageHead, pressed, icon, cleanName, summarizeSeats, dialog, clockFields } from './ui.js';
 
 export async function playView(root, { meta, characters, go, session }) {
   // 排位赛由天梯自动匹配产生；只有庄家能手动开排位（测试用）
@@ -14,6 +14,7 @@ export async function playView(root, { meta, characters, go, session }) {
   const sel = {
     game: games.find((g) => g.id === q.get('game'))?.id || games[0].id,
     players: null, seats: {}, mode: 'casual', showLegal: true, delayMs: 600, start: 'opening', fen: '',
+    moveTime: 300, timeoutLoss: 3, // 两人棋类：真人每步限时（秒）、超时几次判负
   };
   const game = () => games.find((g) => g.id === sel.game);
 
@@ -125,6 +126,8 @@ export async function playView(root, { meta, characters, go, session }) {
       advBox.replaceChildren(hasHuman ? h('details', { class: 'adv' }, h('summary', {}, '高级'), advOpts) : advOpts);
     }
     startExtra.replaceChildren(
+      // 两人棋类有真人上场：每步限时、超时判负次数
+      g.features?.clock && hasHuman ? clockFields(sel) : null,
       sel.game === 'xiangqi' && sel.mode === 'casual' ? h('label', { class: 'field' }, h('span', {}, '起始局面'), startSel) : null,
       sel.game === 'xiangqi' && sel.mode === 'casual' && sel.start === 'fen' ? fenInput : null,
       sel.game === 'xiangqi' && sel.mode === 'casual' && sel.start !== 'fen' ? h('div', { class: 'small muted' }, puzzles.find((p) => p.id === sel.start)?.desc || '') : null,
@@ -136,7 +139,7 @@ export async function playView(root, { meta, characters, go, session }) {
     if (Object.values(seats).some((v) => !v)) throw new Error('请为每个座位选好选手');
     const puzzle = puzzles.find((p) => p.id === sel.start);
     const fen = sel.game !== 'xiangqi' || sel.mode === 'ranked' ? undefined : sel.start === 'fen' ? sel.fen.trim() : puzzle && puzzle.id !== 'opening' ? puzzle.fen : undefined;
-    const r = await post('/matches', { game: sel.game, seats, mode: sel.mode, options: { showLegal: sel.showLegal, delayMs: sel.delayMs, fen } });
+    const r = await post('/matches', { game: sel.game, seats, mode: sel.mode, options: { showLegal: sel.showLegal, delayMs: sel.delayMs, fen, ...(game().features?.clock ? { humanTimeout: sel.moveTime, timeoutLoss: sel.timeoutLoss } : {}) } });
     go(`#/match/${r.id}`);
   });
 

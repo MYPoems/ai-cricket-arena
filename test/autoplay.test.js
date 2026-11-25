@@ -80,10 +80,13 @@ const turnsOf = (id) => db.all('SELECT ply, seat, analysis FROM turns WHERE matc
 
 test('每步限时：牌类用 features.turnLimit，其他游戏仍是 10 分钟；对局选项可以改', () => {
   for (const g of ['doudizhu', 'poker', 'mahjong', 'guandan', 'liar']) assert.equal(turnLimitMs({ options: {} }, getGame(g)), 60000, g);
-  assert.equal(turnLimitMs({ options: {} }, getGame('xiangqi')), 600000);
+  for (const g of ['xiangqi', 'chess', 'gomoku', 'othello', 'connect4']) assert.equal(turnLimitMs({ options: {} }, getGame(g)), 300000, `${g} 默认每步 5 分钟`);
+  assert.equal(turnLimitMs({ options: {} }, getGame('werewolf')), 600000);
   assert.equal(turnLimitMs({ options: { humanTimeout: 6 } }, getGame('poker')), 6000);
   for (const g of ['doudizhu', 'poker', 'mahjong', 'guandan', 'liar']) assert.ok(getGame(g).features.turnLimit > 0, g);
   for (const g of ['xiangqi', 'chess', 'gomoku', 'werewolf', 'undercover', 'turtlesoup', 'dilemma']) assert.ok(!getGame(g).features.turnLimit, g);
+  for (const g of ['xiangqi', 'chess', 'gomoku', 'othello', 'connect4']) assert.ok(getGame(g).features.clock, g);
+  for (const g of ['dilemma', 'mahjong', 'werewolf']) assert.ok(!getGame(g).features.clock, g);
 });
 
 test('超时：系统代打这一步；连续两次超时才转托管（中间自己出过就重新数）；托管中马上代打；取消后自己出', { timeout: 90000 }, async () => {
@@ -204,4 +207,35 @@ test('组局邀请：房主邀请在线玩家，对方收到私信、加入就�
   const f2 = events.length;
   await cara.post(`/api/rooms/${room.id}/decline`);
   assert.ok(events.slice(f2).some((e) => e.ch === `room:${room.id}` && e.type === 'invite_declined' && e.name === '卡拉'));
+});
+
+test('两人棋类：每步限时和超时判负次数可以设；超时由系统代走一步，累计到次数判负', { timeout: 60000 }, async () => {
+  const seats = (game) => Object.fromEntries(getGame(game).seats(2).map((s, i) => [s, i ? builtin.id : ann.human.id]));
+  // 默认：5 分钟、3 次；设的值会夹在范围里
+  const id0 = arena.createMatch({ game: 'othello', seats: seats('othello'), mode: 'casual', options: { delayMs: 0, humanTimeout: 99999, timeoutLoss: 99 } });
+  const m0 = db.get('SELECT options FROM matches WHERE id = ?', id0).options;
+  assert.equal(m0.humanTimeout, 1800);
+  assert.equal(m0.timeoutLoss, 10);
+  stop(id0);
+  const id = arena.createMatch({ game: 'gomoku', seats: seats('gomoku'), mode: 'casual', options: { delayMs: 0, humanTimeout: 5, timeoutLoss: 2 } });
+  const me = getGame('gomoku').seats(2)[0];
+  await until(() => arena.live.get(id)?.humans?.[me], 5000, '轮到安');
+  const d = (await ann.get(`/api/matches/${id}`)).json;
+  assert.equal(d.turnLimit, 5000);
+  assert.equal(d.timeoutLoss, 2);
+  assert.deepEqual(d.timeouts, {});
+  // 第一次超时：系统代走一步，记一次，私下提醒
+  await until(() => turnsOf(id).some((t) => t.seat === me && /超时，系统代走一步，第 1\/2 次/.test(t.analysis || '')), 9000, '第一次超时代走');
+  assert.equal(db.get('SELECT options FROM matches WHERE id = ?', id).options.timeouts[me], 1, '超时次数存进对局');
+  assert.ok(events.some((e) => e.ch === `user:${ann.id}` && e.type === 'turn_timeout' && e.clock && e.count === 1 && e.max === 2));
+  assert.ok(!arena.live.get(id)?.auto?.[me], '棋类没有托管');
+  // 再轮到：自己走一步不清零（累计，不是连续）
+  await until(() => arena.live.get(id)?.humans?.[me], 5000, '再轮到安');
+  const acts = (await ann.get(`/api/matches/${id}`)).json.humanActions;
+  assert.equal((await ann.post(`/api/matches/${id}/move`, { action: acts[0].id })).status, 200);
+  assert.equal((await ann.get(`/api/matches/${id}`)).json.myTimeouts, 1);
+  // 第二次超时：判负
+  const m = await until(() => { const x = db.get('SELECT status, result FROM matches WHERE id = ?', id); return x.status !== 'running' && x; }, 15000, '超时判负');
+  assert.match(m.result.reason, /超时 2 次，判负/);
+  assert.equal(m.result.ranks[me], 2);
 });

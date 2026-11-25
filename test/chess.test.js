@@ -208,7 +208,7 @@ test('view 与 evalSpec：无隐藏信息，各座位视角一致', () => {
   assert.deepEqual(v.moves.at(-1), { uci: 'd1h5', san: 'Qh5#', side: 'w', check: true });
   const e = chess.evalSpec(playSeq(['e2e4']));
   assert.deepEqual(e, { engine: 'stockfish', fen: 'rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1', persp: 'b' });
-  assert.deepEqual(chess.features, { draw: true, hidden: false, winbar: true, evalEngine: 'stockfish' });
+  assert.deepEqual(chess.features, { draw: true, hidden: false, winbar: true, evalEngine: 'stockfish', clock: true });
   assert.deepEqual(chess.rankedSeries, { legs: 2, sameSeed: false });
 });
 

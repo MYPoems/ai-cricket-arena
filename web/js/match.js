@@ -935,7 +935,9 @@ export async function matchView(root, id, { characters, session }) {
     if (swap && two) ids.reverse();
     const setup = d.record?.setup && Object.keys(d.record.setup).length ? d.record.setup : undefined;
     const r = await post('/matches', { game: d.game, seats: Object.fromEntries(seats.map((s, i) => [s, ids[i]])), mode: 'casual',
-      options: { showLegal: d.options?.showLegal !== false, delayMs: d.options?.delayMs ?? 600, ...(setup ? { setup } : {}) } });
+      options: { showLegal: d.options?.showLegal !== false, delayMs: d.options?.delayMs ?? 600, ...(setup ? { setup } : {}),
+        // 每步限时、超时判负次数沿用这一盘的
+        ...(d.options?.humanTimeout ? { humanTimeout: d.options.humanTimeout } : {}), ...(d.options?.timeoutLoss ? { timeoutLoss: d.options.timeoutLoss } : {}) } });
     location.hash = `#/match/${r.id}`;
   };
   sb.again = h('button', { type: 'button', class: 'btn sm primary', title: '同样的座位和设置，马上再开一盘（娱乐赛）', onclick: guard(() => rematch(false)) }, '再来一局');
@@ -967,19 +969,31 @@ export async function matchView(root, id, { characters, session }) {
     root.classList.remove('fs');
     if (document.fullscreenElement === fsTarget()) document.exitFullscreen().catch(() => {});
   });
+  const fmtLeft = (sec) => (sec >= 60 ? `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}` : `${sec} 秒`);
   const paintTimer = () => {
     const mine = d.status === 'running' && !paused && !!humanSeat && waitingHuman === humanSeat && turnEnd !== null && !d.auto?.[humanSeat];
     const leftS = mine ? Math.max(0, Math.ceil((turnEnd - Date.now()) / 1000)) : null;
-    // 牌类一直显示；其他游戏每步 10 分钟，只在最后一分钟显示
-    const show = leftS !== null && (!!d.turnLimit || leftS <= 60);
+    const cards = !!d.features?.turnLimit; // 牌类：超时代打，连续两次转托管
+    const clock = !!d.features?.clock; // 两人棋类：超时代走一步，累计到次数判负
+    // 牌类、两人棋类一直显示；其他游戏每步 10 分钟，只在最后一分钟显示
+    const show = leftS !== null && (cards || clock || leftS <= 60);
     vis(sb.timer, show);
     if (!show) return;
-    // 牌类已经超时过一次：再超时就转托管，倒计时上直接写出来
-    const last = !!d.turnLimit && (d.myTimeouts || 0) >= 1;
-    setText(sb.timer, last ? `${leftS} 秒 · 再超时转托管` : `${leftS} 秒`);
-    sb.timer.classList.toggle('urgent', leftS <= 5);
-    sb.timer.classList.toggle('warn', last);
-    const tip = `这一步还剩 ${leftS} 秒，到点由系统代打这一步${d.turnLimit ? (last ? '，并转托管' : '；连续两次超时转托管') : ''}`;
+    const n = d.myTimeouts || 0;
+    let text = fmtLeft(leftS), warn = false, tip;
+    if (cards) {
+      warn = n >= 1;
+      if (warn) text += ' · 再超时转托管';
+      tip = `这一步还剩 ${leftS} 秒，到点由系统代打这一步${warn ? '，并转托管' : '；连续两次超时转托管'}`;
+    } else if (clock) {
+      const max = d.timeoutLoss || 3;
+      warn = n >= 1;
+      if (warn) text += max - n <= 1 ? ' · 再超时判负' : ` · 已超时 ${n}/${max}`;
+      tip = `这一步还剩 ${fmtLeft(leftS)}，到点由系统代走一步，累计超时 ${max} 次判负（已超时 ${n} 次）`;
+    } else tip = `这一步还剩 ${leftS} 秒，到点由系统代为行动`;
+    setText(sb.timer, text);
+    sb.timer.classList.toggle('urgent', leftS <= (clock ? 10 : 5));
+    sb.timer.classList.toggle('warn', warn);
     if (sb.timer.title !== tip) sb.timer.title = tip;
   };
   const timerTick = setInterval(paintTimer, 250);
@@ -1034,7 +1048,7 @@ export async function matchView(root, id, { characters, session }) {
       [sb.accept, running && waitingHuman && po && po.seat !== waitingHuman],
       [sb.offer, running && waitingHuman && d.features?.draw && !po],
       // 认输键：在局的真人整盘都显示（轮到自己才可点），不在轮到时才冒出来——冒出来那一下会把旁边的键挤动
-      [sb.auto, running && !!humanSeat && !!d.turnLimit],
+      [sb.auto, running && !!humanSeat && !!d.features?.turnLimit],
       [sb.resign, running && (!!humanSeat || !!waitingHuman)],
       [sb.abort, running && d.mode === 'casual' && canControl],
       [sb.flip, true],
@@ -1046,7 +1060,7 @@ export async function matchView(root, id, { characters, session }) {
     const autoOn = !!(humanSeat && d.auto?.[humanSeat]);
     sb.auto.className = `btn sm${autoOn ? ' primary' : ''}`;
     setText(sb.auto, autoOn ? '取消托管' : '托管');
-    sb.auto.title = autoOn ? '收回来自己出牌' : `交给系统代打，随时可以取消${d.turnLimit ? `；每步限时 ${Math.round(d.turnLimit / 1000)} 秒，连续两次超时也会自动托管` : ''}`;
+    sb.auto.title = autoOn ? '收回来自己出牌' : `交给系统代打，随时可以取消${d.features?.turnLimit ? `；每步限时 ${Math.round((d.turnLimit || 0) / 1000)} 秒，连续两次超时也会自动托管` : ''}`;
     paintTimer();
     paintAuto();
     if (sb.resign) {
@@ -1804,6 +1818,11 @@ export async function matchView(root, id, { characters, session }) {
         d.options.draw = e.draw;
         renderStatus();
         renderThoughts();
+        break;
+      case 'timeouts':
+        d.timeouts = e.timeouts || {};
+        if (humanSeat) d.myTimeouts = d.timeouts[humanSeat] || 0;
+        renderStatus();
         break;
       case 'auto':
         d.auto = e.auto || {};
