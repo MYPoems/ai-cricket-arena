@@ -300,13 +300,26 @@ export async function matchView(root, id, { characters, session }) {
     setTimeout(() => el.remove(), 3300);
   }
   /** 终局卡：对局刚结束时浮在场上，写明结果和原因，带「再来一局」「换边再来」「战报」；不自动消失，点「看棋局」或 ✕、按 Esc 收起 */
+  /** 观众看的终局卡标题：一句话写谁赢（原因放在下面一行） */
+  function endTitle(r) {
+    if (r.winnerTeam) return `${r.winnerTeam}胜`;
+    const ws = seats.filter((s) => seatOutcome(r, s) === 'w');
+    if (!ws.length) return d.game === 'chess' || d.game === 'xiangqi' ? '和棋' : '平局';
+    const roles = d.view?.roles || {};
+    const role = ws.every((s) => roles[s] && roles[s] === roles[ws[0]]) ? roles[ws[0]] : null;
+    if (ws.length > 1 && role) return `${role}胜`;
+    if (ws.length === 1) return `${d.players?.[ws[0]] ? cleanName(d.players[ws[0]].name) : seatName(ws[0])}胜`;
+    return `${ws.map(seatName).join('、')}胜`;
+  }
   function endCard() {
-    boardWrap.querySelector('.end-card')?.remove();
+    // 牌桌、对称座位版式另建了一层容器，挂在画面真正所在的那一层上
+    const host = stage.el.closest('.board-wrap') || stage.el.closest('.stage') || boardWrap;
+    host.querySelector('.end-card')?.remove();
     const r = d.result;
     if (recordMode || left || d.status !== 'finished' || !r || r.aborted) return;
     const mine = humanSeat ? seatOutcome(r, humanSeat) : null;
     const draw = seatOutcome(r, seats[0]) === 'd' && (!mine || mine === 'd');
-    const title = mine ? (mine === 'w' ? '你赢了' : mine === 'l' ? '你输了' : '和局') : resultText(d, d.seatNames);
+    const title = mine ? (mine === 'w' ? '你赢了' : mine === 'l' ? '你输了' : '和局') : endTitle(r);
     const close = () => { el.classList.add('closing'); setTimeout(() => el.remove(), 220); document.removeEventListener('keydown', onEsc, true); };
     const onEsc = (e) => { if (e.key === 'Escape' && el.isConnected && !document.querySelector('dialog[open]')) { e.preventDefault(); e.stopPropagation(); close(); } };
     const again = canRematch();
@@ -320,7 +333,7 @@ export async function matchView(root, id, { characters, session }) {
         again && two ? h('button', { type: 'button', class: 'btn', title: '双方交换座位再开一盘', onclick: guard(() => rematch(true)) }, '换边再来') : null,
         winbarOn && totalPlies() ? h('button', { type: 'button', class: 'btn', onclick: () => { close(); showReport(); } }, '战报') : null,
         h('button', { type: 'button', class: 'btn ghost', onclick: close }, again ? '看看棋局' : '收起')));
-    boardWrap.append(el);
+    host.append(el);
     document.addEventListener('keydown', onEsc, true);
     cleanups.push(() => document.removeEventListener('keydown', onEsc, true));
     el.querySelector('.btn.primary')?.focus({ preventScroll: true });

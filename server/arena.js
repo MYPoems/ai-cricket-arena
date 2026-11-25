@@ -731,7 +731,10 @@ ${game.noun || '行动'}：${act}`;
       if (m.mode !== 'casual') {
         // 有自带 agent 的排位记在单独的 Agent 天梯
         const kinds = Object.values(m.seats).map((cid) => this.db.get('SELECT kind FROM characters WHERE id = ?', cid)?.kind);
-        changes = applyResult(this.db, ratingKey(m.game, kinds), m.id, m.seats, outcome.ranks);
+        // outcome.unrated：不参加积分的座位（例如海龟汤的汤主，只主持不比赛）
+        const off = new Set(outcome.unrated || []);
+        const rated = Object.fromEntries(Object.entries(m.seats).filter(([s]) => !off.has(s)));
+        changes = Object.keys(rated).length >= 2 ? applyResult(this.db, ratingKey(m.game, kinds), m.id, rated, outcome.ranks) : null;
       }
       this.db.update('matches', { id: m.id }, { status: 'finished', result: outcome, rating_changes: changes, finished_at: now(), conversations: m.conversations });
       this.#writeNotes(m, outcome).catch((e) => console.error('写复盘笔记失败：', e.message));

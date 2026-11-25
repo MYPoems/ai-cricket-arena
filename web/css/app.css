@@ -2488,7 +2488,8 @@ dialog .dlg-body { overscroll-behavior: contain; }
 @keyframes end-in { from { opacity: 0; scale: .94; } }
 @keyframes end-out { to { opacity: 0; scale: .96; } }
 .end-card .seal { width: 56px; height: 56px; font: 400 34px/1 var(--brush); color: #fbefd2; }
-.end-card b { font: 400 clamp(26px, 3.2vw, 34px)/1.15 var(--brush); background: var(--gold-text); -webkit-background-clip: text; background-clip: text; color: transparent; filter: var(--gold-text-shadow); }
+.arena.duo .stage { position: relative; }
+.end-card b { max-width: 100%; overflow-wrap: anywhere; font: 400 clamp(24px, 2.8vw, 32px)/1.2 var(--brush); background: var(--gold-text); -webkit-background-clip: text; background-clip: text; color: transparent; filter: var(--gold-text-shadow); }
 .end-card p { margin: 0; font: 500 14px/1.6 var(--sans); color: var(--muted); overflow-wrap: anywhere; }
 .end-card .end-acts { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 8px; }
 .end-card .end-acts .btn { min-width: 88px; }
