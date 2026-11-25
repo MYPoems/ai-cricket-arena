@@ -301,6 +301,12 @@ if (session.user) listen([`user:${session.user.id}`], (e) => {
   if (!busy) { location.hash = href; return; }
   toast(h('span', {}, `天梯为你匹配到一盘${e.game || ''}排位赛 `, h('a', { href }, '进入对局')));
 });
+// 牌类第一次超时：系统替我出了这一步，提醒一句（连续两次超时才转托管）
+if (session.user) listen([`user:${session.user.id}`], (e) => {
+  if (e.type !== 'turn_timeout') return;
+  const here = location.hash.startsWith(`#/match/${e.matchId}`);
+  toast(h('span', {}, `这一步超时，系统替你出了；${e.left > 0 ? '再超时一次就转托管' : '已转托管'}`, here ? '' : [' ', h('a', { href: `#/match/${e.matchId}` }, '回到对局')]), false, { ms: 8000 });
+});
 // 组局邀请：弹窗问要不要来，点「加入」就本人入座；正在对局页上不打断，只提示一句
 if (session.user) listen([`user:${session.user.id}`], (e) => {
   if (e.type !== 'room_invite' || !e.room) return;

@@ -79,24 +79,40 @@ const stop = (id) => { const rt = arena.live.get(id); if (rt) { rt.abortReason =
 const turnsOf = (id) => db.all('SELECT ply, seat, analysis FROM turns WHERE match_id = ? ORDER BY ply', id);
 
 test('每步限时：牌类用 features.turnLimit，其他游戏仍是 10 分钟；对局选项可以改', () => {
-  assert.equal(turnLimitMs({ options: {} }, getGame('mahjong')), 20000);
-  assert.equal(turnLimitMs({ options: {} }, getGame('doudizhu')), 25000);
+  for (const g of ['doudizhu', 'poker', 'mahjong', 'guandan', 'liar']) assert.equal(turnLimitMs({ options: {} }, getGame(g)), 60000, g);
   assert.equal(turnLimitMs({ options: {} }, getGame('xiangqi')), 600000);
   assert.equal(turnLimitMs({ options: { humanTimeout: 6 } }, getGame('poker')), 6000);
   for (const g of ['doudizhu', 'poker', 'mahjong', 'guandan', 'liar']) assert.ok(getGame(g).features.turnLimit > 0, g);
   for (const g of ['xiangqi', 'chess', 'gomoku', 'werewolf', 'undercover', 'turtlesoup', 'dilemma']) assert.ok(!getGame(g).features.turnLimit, g);
 });
 
-test('超时：系统代打这一步并转托管；托管中马上代打；取消后自己出', async () => {
+test('超时：系统代打这一步；连续两次超时才转托管（中间自己出过就重新数）；托管中马上代打；取消后自己出', { timeout: 90000 }, async () => {
   const id = arena.createMatch({ game: 'doudizhu', seats: { p1: ann.human.id, p2: builtin.id, p3: builtin.id }, mode: 'casual', options: { delayMs: 0, seed: 7, humanTimeout: 5 } });
-  await until(() => arena.live.get(id)?.humans?.p1, 15000, '轮到安');
+  const myTurn = () => until(() => arena.live.get(id)?.humans?.p1 && !arena.live.get(id).humans.p1.taking, 20000, '轮到安');
+  const timedOut = () => turnsOf(id).filter((t) => t.seat === 'p1' && /超时，系统代为行动/.test(t.analysis || '')).length;
+  await myTurn();
   const d = (await ann.get(`/api/matches/${id}`)).json;
   assert.equal(d.waitingHuman, 'p1');
   assert.ok(d.waitingLeft > 3000 && d.waitingLeft <= 5000, `剩余 ${d.waitingLeft}`);
   assert.equal(d.turnLimit, 5000);
-  // 不出：5 秒后系统代打，转托管
-  await until(() => arena.live.get(id)?.auto?.p1 === 'timeout', 8000, '超时转托管');
-  await until(() => turnsOf(id).some((t) => t.seat === 'p1' && /超时，系统代为行动/.test(t.analysis || '')), 3000, '代打记录');
+  assert.equal(d.myTimeouts, 0);
+  // 第一次超时：系统代打这一步，不转托管，私下提醒本人
+  await until(() => timedOut() === 1, 8000, '第一次超时代打');
+  assert.ok(!arena.live.get(id)?.auto?.p1, '第一次超时不转托管');
+  assert.ok(events.some((e) => e.ch === `user:${ann.id}` && e.type === 'turn_timeout' && e.matchId === id && e.count === 1 && e.left === 1));
+  // 再轮到：自己出一步，连续超时清零
+  await myTurn();
+  assert.equal((await ann.get(`/api/matches/${id}`)).json.myTimeouts, 1);
+  const acts = (await ann.get(`/api/matches/${id}`)).json.humanActions;
+  assert.equal((await ann.post(`/api/matches/${id}/move`, { action: acts[0].id })).status, 200);
+  assert.equal(arena.live.get(id).timeouts.p1, 0);
+  // 再超时一次：还是只代打（前面自己出过，重新数）
+  await myTurn();
+  await until(() => timedOut() === 2, 8000, '第二次超时代打');
+  assert.ok(!arena.live.get(id)?.auto?.p1, '中间自己出过，不算连续');
+  // 紧接着又超时：连续两次，转托管
+  await until(() => arena.live.get(id)?.auto?.p1 === 'timeout', 25000, '连续两次超时转托管');
+  assert.equal(timedOut(), 3);
   assert.ok(events.some((e) => e.ch === `match:${id}` && e.type === 'auto' && e.seat === 'p1' && e.reason === 'timeout'));
   // 托管中：再轮到时 1.5 秒内代打
   const n0 = turnsOf(id).filter((t) => t.seat === 'p1').length;
@@ -107,6 +123,7 @@ test('超时：系统代打这一步并转托管；托管中马上代打；取�
   const off = await ann.post(`/api/matches/${id}/control`, { op: 'auto_off' });
   assert.equal(off.status, 200);
   assert.deepEqual(off.json.auto, {});
+  assert.equal(arena.live.get(id).timeouts.p1, 0, '取消托管后重新数连续超时');
   // 取消后轮到安：不会马上代打，要等满限时
   await until(() => arena.live.get(id)?.humans?.p1, 20000, '再轮到安');
   const t0 = Date.now();

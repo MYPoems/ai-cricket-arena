@@ -493,8 +493,8 @@ const game = {
   id: 'mahjong',
   name: '麻将',
   players: { min: 4, max: 4, default: 4 },
-  // turnLimit：真人每步限时（秒），超时由系统接管这一步并转托管
-  features: { hidden: true, winbar: false, draw: false, turnLimit: 20 },
+  // turnLimit：真人每步限时（秒），超时由系统代打这一步，连续两次超时转托管
+  features: { hidden: true, winbar: false, draw: false, turnLimit: 60 },
   noun: '出牌',
 
   seats: (n = N) => SEATS.slice(0, n),

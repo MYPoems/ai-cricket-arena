@@ -2508,6 +2508,7 @@ dialog .dlg-body { overscroll-behavior: contain; }
   font: 600 14px/1 var(--num, var(--mono)); font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--text);
   border: 1px solid rgb(226 186 96 / .55); background: rgb(226 186 96 / .1); }
 .turn-timer[hidden] { display: none; }
+.turn-timer.warn { border-color: rgb(255 140 90 / .8); color: #ffd2b8; }
 .turn-timer.urgent { color: #fff; border-color: transparent; background: var(--red); animation: turn-urgent 1s ease-in-out infinite; }
 @keyframes turn-urgent { 50% { scale: 1.08; } }
 .auto-bar { position: absolute; left: 50%; bottom: 23%; z-index: 29; translate: -50% 0; display: flex; align-items: center; gap: 12px; max-width: calc(100% - 24px);

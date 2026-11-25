@@ -350,7 +350,7 @@ export class Arena {
     if (this.live.has(matchId)) return;
     const m = this.db.get('SELECT * FROM matches WHERE id = ?', matchId);
     if (!m || m.status !== 'running') return;
-    const rt = { m, paused: false, step: false, abort: new AbortController(), humans: {}, partials: {}, wake: null, auto: {} };
+    const rt = { m, paused: false, step: false, abort: new AbortController(), humans: {}, partials: {}, wake: null, auto: {}, timeouts: {} };
     this.live.set(matchId, rt);
     this.#loop(m, rt)
       .catch((err) => {
@@ -587,7 +587,15 @@ export class Arena {
         let action = autoOk ? await autoMove(game, state, seat) : null;
         if (action === null) action = await timeoutAction(game, state, seat, Object.keys(m.seats).length).catch(() => null);
         if (rt.humans[seat] !== handle) return; // 对局已中止
-        if (autoOk && why === 'timeout') this.#setAuto(m.id, rt, seat, 'timeout');
+        if (why === 'timeout') {
+          // 连续超时计数（本人自己出了一步就清零）：牌类连续两次超时才转托管，第一次只代打这一步并提醒本人
+          const n = rt.timeouts[seat] = (rt.timeouts[seat] || 0) + 1;
+          if (autoOk && n >= TIMEOUTS_TO_AUTO) this.#setAuto(m.id, rt, seat, 'timeout');
+          else if (autoOk) {
+            const owner = this.#ownerOf(m, seat);
+            if (owner) this.hub.emit(`user:${owner}`, { type: 'turn_timeout', matchId: m.id, count: n, left: TIMEOUTS_TO_AUTO - n });
+          }
+        }
         done(action !== null ? { action, timeout: true, text: TAKEOVER_NOTE[why] } : { forfeit: `${game.seatName(seat)}超时` });
       };
       const arm = () => {
@@ -606,6 +614,7 @@ export class Arena {
             // 自由文本，或不在代表性列表里的行动（例如德州的任意加注额）：交给游戏规则校验
             try { game.apply(state, seat, action); } catch (e) { throw new HttpError(400, e.message); }
           }
+          rt.timeouts[seat] = 0; // 自己出了：连续超时清零
           done({ action, offerDraw });
         },
         acceptDraw: () => {
@@ -883,6 +892,7 @@ ${game.noun || '行动'}：${act}`;
     if (op === 'auto_on' || op === 'auto_off') {
       if (!seat) throw new HttpError(403, '你不在这盘对局里');
       if (!getGame(rt.m.game).features?.turnLimit) throw new HttpError(400, '这个游戏没有托管');
+      if (op === 'auto_off') rt.timeouts[seat] = 0; // 本人收回来了：重新数连续超时
       this.#setAuto(matchId, rt, seat, op === 'auto_on' ? 'manual' : null);
       return { auto: { ...rt.auto } };
     }
@@ -987,6 +997,8 @@ ${game.noun || '行动'}：${act}`;
       waitingLeft: humanH ? Math.max(0, humanH.deadline - Date.now()) : null,
       turnLimit: game.features?.turnLimit ? turnLimitMs(m, game) : null,
       auto: { ...(rt?.auto || {}) },
+      // 我已经连续超时几次（牌类再超时一次就转托管时页面提醒）
+      myTimeouts: mySeat ? rt?.timeouts?.[mySeat] || 0 : 0,
       humanActions: humanH ? game.actions(state, humanH.seat) : null,
       drawOfferToHuman: humanH?.offer || false,
       seatOrder: Object.keys(m.seats),
@@ -1042,7 +1054,7 @@ export const AUTO_DELAY_MS = [1500, 5000];
 
 /** 真人每一步的限时（秒）：超时按默认行动（过牌、不出、不叫、弃票、弃牌）；没有默认行动时，多人局由系统代打这一步，两人局判超时负 */
 const HUMAN_TIMEOUT_S = 600;
-/** 每步限时（毫秒）：对局选项 humanTimeout（秒）优先，其次游戏的 features.turnLimit（牌类几十秒），默认 10 分钟 */
+/** 每步限时（毫秒）：对局选项 humanTimeout（秒）优先，其次游戏的 features.turnLimit（牌类 60 秒），默认 10 分钟 */
 export function turnLimitMs(m, game) {
   const s = Number(m.options?.humanTimeout) || game.features?.turnLimit || HUMAN_TIMEOUT_S;
   return Math.max(game.features?.turnLimit ? 5 : 30, s) * 1000;
@@ -1052,6 +1064,8 @@ export const OFFLINE_GRACE_MS = Number(process.env.ARENA_OFFLINE_GRACE_MS) || 15
 export const OFFLINE_SLOW_MS = Number(process.env.ARENA_OFFLINE_SLOW_MS) || 90000;
 /** 托管时代打一步前的停顿（毫秒） */
 const AUTO_PLAY_MS = [700, 1400];
+/** 牌类连续超时几次转托管 */
+export const TIMEOUTS_TO_AUTO = 2;
 const TAKEOVER_NOTE = { timeout: '（超时，系统代为行动）', auto: '（托管，系统代为行动）', offline: '（断线，系统代为行动）' };
 /** 托管、超时接管用内置 AI 的中档；不合法或出错时返回 null（再退回 timeoutAction） */
 async function autoMove(game, state, seat) {

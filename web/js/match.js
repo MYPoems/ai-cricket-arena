@@ -321,7 +321,7 @@ export async function matchView(root, id, { characters, session }) {
     return `${ws.map(seatName).join('、')}胜`;
   }
   // ---------- 托管 ----------
-  const AUTO_TEXT = { manual: '托管中，系统替你出牌', timeout: '出牌超时，系统托管中', offline: '刚才断线了，系统托管中' };
+  const AUTO_TEXT = { manual: '托管中，系统替你出牌', timeout: '连续两次超时，系统托管中', offline: '刚才断线了，系统托管中' };
   let autoBar = null;
   const setAuto = async (on) => {
     const r = await post(`/matches/${id}/control`, { op: on ? 'auto_on' : 'auto_off' });
@@ -974,9 +974,12 @@ export async function matchView(root, id, { characters, session }) {
     const show = leftS !== null && (!!d.turnLimit || leftS <= 60);
     vis(sb.timer, show);
     if (!show) return;
-    setText(sb.timer, `${leftS} 秒`);
+    // 牌类已经超时过一次：再超时就转托管，倒计时上直接写出来
+    const last = !!d.turnLimit && (d.myTimeouts || 0) >= 1;
+    setText(sb.timer, last ? `${leftS} 秒 · 再超时转托管` : `${leftS} 秒`);
     sb.timer.classList.toggle('urgent', leftS <= 5);
-    const tip = `这一步还剩 ${leftS} 秒，到点由系统代打${d.turnLimit ? '并转托管' : ''}`;
+    sb.timer.classList.toggle('warn', last);
+    const tip = `这一步还剩 ${leftS} 秒，到点由系统代打这一步${d.turnLimit ? (last ? '，并转托管' : '；连续两次超时转托管') : ''}`;
     if (sb.timer.title !== tip) sb.timer.title = tip;
   };
   const timerTick = setInterval(paintTimer, 250);
@@ -1043,7 +1046,7 @@ export async function matchView(root, id, { characters, session }) {
     const autoOn = !!(humanSeat && d.auto?.[humanSeat]);
     sb.auto.className = `btn sm${autoOn ? ' primary' : ''}`;
     setText(sb.auto, autoOn ? '取消托管' : '托管');
-    sb.auto.title = autoOn ? '收回来自己出牌' : `交给系统代打，随时可以取消${d.turnLimit ? `；每步超过 ${Math.round(d.turnLimit / 1000)} 秒也会自动托管` : ''}`;
+    sb.auto.title = autoOn ? '收回来自己出牌' : `交给系统代打，随时可以取消${d.turnLimit ? `；每步限时 ${Math.round(d.turnLimit / 1000)} 秒，连续两次超时也会自动托管` : ''}`;
     paintTimer();
     paintAuto();
     if (sb.resign) {

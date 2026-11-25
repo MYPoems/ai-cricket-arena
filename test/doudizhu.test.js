@@ -15,7 +15,7 @@ test('座位与基本参数', () => {
   assert.equal(game.seatName('p2'), '2 号位');
   assert.deepEqual(game.players, { min: 3, max: 3, default: 3 });
   assert.equal(game.noun, '出牌');
-  assert.deepEqual(game.features, { hidden: true, winbar: false, draw: false, turnLimit: 25 });
+  assert.deepEqual(game.features, { hidden: true, winbar: false, draw: false, turnLimit: 60 });
   assert.deepEqual(game.rankedSeries, { legs: 3, sameSeed: true });
 });
 
