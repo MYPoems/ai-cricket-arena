@@ -10,8 +10,11 @@ import { moveQuality } from './evaluator.js';
 import { HttpError } from './http.js';
 import { setPuzzleBank } from '../games/turtlesoup/index.js';
 import { PUZZLES as SOUP_PUZZLES } from './puzzles/turtlesoup.js';
+import { setWordBank } from '../games/undercover/index.js';
+import { PAIRS as UC_PAIRS, HINTS as UC_HINTS } from './words/undercover.js';
 
 setPuzzleBank(SOUP_PUZZLES);
+setWordBank({ PAIRS: UC_PAIRS, HINTS: UC_HINTS });
 
 export const MAX_RETRIES = 3; // 无效行动最多重来 3 次，仍无效判负
 export const MAX_LIVE = 200; // 全站同时进行的对局上限（手动开局、组局）
@@ -867,7 +870,8 @@ ${game.noun || '行动'}：${act}`;
       // 给页面的标记：这盘进行中只有公共视角（有真人或自带 agent 的隐藏信息对局）；评估先不给
       hiddenLive, evalHidden,
       // 有玩家本人的隐藏信息对局进行中：不给记录、种子和开局参数（拿种子就能在浏览器里重放出所有人的牌）
-      record: masked ? { players: record.players, actions: null } : record,
+      // 题库、词库只在服务端：旧记录的开局参数里没有题目和词时按种子补上，浏览器才能自己重放
+      record: masked ? { players: record.players, actions: null } : game.prepareSetup ? { ...record, setup: game.prepareSetup(record.setup, record.seed) } : record,
       startFen: m.start_fen,
       viewer: pov ? PUBLIC_VIEWER : v,
       pov: pov ? 'public' : null,

@@ -1,8 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import game, { cleanSpeech, speechError, parseSeatRef, MAX_ROUNDS } from '../games/undercover/index.js';
-import { PAIRS, HINTS } from '../games/undercover/words.js';
+import game, { cleanSpeech, speechError, parseSeatRef, MAX_ROUNDS, setWordBank } from '../games/undercover/index.js';
+import { PAIRS, HINTS } from '../server/words/undercover.js';
 import { replay } from '../games/index.js';
+
+setWordBank({ PAIRS, HINTS });
 
 // 固定局面：直接改 create 出来的 state，便于构造规则场景
 function fixed(players, spies, { starter = 'p1', civ = '饺子', spy = '包子' } = {}) {
@@ -373,4 +375,36 @@ test('label、mockReply 与 replay', () => {
     }
     assert.deepEqual(replay(game, { players, seed, actions }), st);
   }
+});
+
+test('词库只在服务端：开局参数带上词对后不需要词库，结果和直接按种子开局一样', async () => {
+  const fs = await import('node:fs');
+  assert.ok(!fs.existsSync(new URL('../games/undercover/words.js', import.meta.url)), '公开目录里不能有词库');
+  for (let seed = 0; seed < 40; seed++) {
+    const direct = game.create({ players: 6, seed });
+    const setup = game.prepareSetup({ rules: 1 }, seed);
+    assert.deepEqual(setup.words, PAIRS[direct.pairIdx]);
+    assert.equal(setup.rules, 1);
+    assert.deepEqual(game.prepareSetup(setup, seed), setup, '已经带词的开局参数原样返回');
+    setWordBank({});
+    try {
+      const viaSetup = game.create({ players: 6, seed, setup });
+      assert.deepEqual(viaSetup, direct);
+      // 浏览器重放：整盘跑完也不需要词库
+      let st = viaSetup;
+      const actions = [];
+      for (let i = 0; i < 200 && game.pending(st).length; i++) {
+        const seat = game.pending(st)[0];
+        const a = game.builtinMove(st, seat, { level: 1 });
+        actions.push({ seat, action: a });
+        st = game.apply(st, seat, a);
+      }
+      assert.deepEqual(replay(game, { players: 6, seed, setup, actions }), st);
+      assert.throws(() => game.create({ players: 6, seed }), /词库只在服务端/);
+    } finally { setWordBank({ PAIRS, HINTS }); }
+  }
+  assert.equal(game.prepareSetup({ pair: 3 }, 9).words.join(), PAIRS[3].join(), '指定词对');
+  assert.throws(() => game.create({ players: 6, seed: 1, setup: { words: ['饺子', '饺子'] } }), /词对不合法/);
+  const v = game.view(game.create({ players: 6, seed: 2 }), 'p1');
+  assert.ok(!('hints' in v), '视角里不带描述样例');
 });

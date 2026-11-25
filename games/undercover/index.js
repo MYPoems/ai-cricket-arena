@@ -3,7 +3,22 @@
 // 每轮：按座位顺序每人说一句描述 → 所有存活者同时投票 → 得票最多者出局并公开身份。
 // 平票时平票者各再说一句，其余存活者在平票者中重投；再平票本轮无人出局。
 
-import { PAIRS, HINTS } from './words.js';
+// 词库在服务端（server/words/undercover.js；/games/ 目录是公开静态文件，词不能放这里），由服务端 setWordBank 注入。
+// 开局时 prepareSetup 把选中的词对和两词的描述样例写进 setup.words / setup.hints，state 里也存一份：浏览器重放、AI 子线程都不需要词库。
+// 旧记录的开局参数里没有词：服务端给浏览器记录前用 prepareSetup 按种子补上（和当时开局选的同一组）。
+let PAIRS = [];
+let HINTS = {};
+export function setWordBank(bank = {}) {
+  PAIRS = Array.isArray(bank.PAIRS) ? bank.PAIRS : [];
+  HINTS = bank.HINTS && typeof bank.HINTS === 'object' ? bank.HINTS : {};
+}
+/** 按种子选词对：和 create 里随机数的第一次取值一致 */
+function pickPair(seed, want) {
+  if (!PAIRS.length) throw new Error('谁是卧底词库只在服务端，开局参数里没有词');
+  const idx = Number.isInteger(want) && want >= 0 && want < PAIRS.length ? want : Math.floor(mulberry32(Number(seed) || 0)() * PAIRS.length);
+  return { idx, words: PAIRS[idx].slice() };
+}
+const hintsOf = (state, word) => state.hints?.[word] || HINTS[word] || [];
 import { newSpeech, speechPause, fitSpeech, CARD_MS } from '../speech.js';
 
 export const MAX_ROUNDS = 8;
@@ -214,8 +229,8 @@ function bigrams(text) {
 /** 某人的发言和我的词有多像：发言里出现我的描述样例关键字（二字组）的比例 */
 function similarity(state, seat, word) {
   const keys = new Set();
-  for (const h of HINTS[word] || []) for (const b of bigrams(h)) keys.add(b);
-  const mine = new Set(HINTS[word] || []);
+  for (const h of hintsOf(state, word)) for (const b of bigrams(h)) keys.add(b);
+  const mine = new Set(hintsOf(state, word));
   const said = state.speeches.filter((x) => x.seat === seat);
   if (!said.length) return null;
   let score = 0;
@@ -239,14 +254,26 @@ export default {
   seats: (n = 6) => ALL_SEATS.slice(0, n),
   seatName,
 
+  /** 服务端开局时（以及把旧记录交给浏览器前）调用：把选中的词对和描述样例写进开局参数 */
+  prepareSetup(setup = {}, seed = 0) {
+    if (Array.isArray(setup?.words)) return setup;
+    const { idx, words } = pickPair(seed, setup?.pair);
+    const { pair, ...rest } = setup || {};
+    return { ...rest, pairIdx: idx, words, hints: Object.fromEntries(words.map((w) => [w, (HINTS[w] || []).slice()])) };
+  },
+
   create({ players = 6, seed = 0, setup = {} } = {}) {
     const n = Number(players);
     if (!Number.isInteger(n) || n < 4 || n > 8) throw new Error('谁是卧底需要 4–8 人');
     const rng = mulberry32(Number(seed) || 0);
     const seats = ALL_SEATS.slice(0, n);
-    let pairIdx = Math.floor(rng() * PAIRS.length);
-    if (Number.isInteger(setup.pair) && setup.pair >= 0 && setup.pair < PAIRS.length) pairIdx = setup.pair;
-    const [a, b] = PAIRS[pairIdx];
+    rng(); // 选词对用掉的一次（见 pickPair），保持后面的洗牌和旧记录一致
+    const given = Array.isArray(setup?.words) ? setup.words : null;
+    if (given && !(given.length === 2 && given.every((w) => typeof w === 'string' && w) && given[0] !== given[1])) throw new Error('开局参数里的词对不合法');
+    const chosen = given ? { idx: Number.isInteger(setup.pairIdx) ? setup.pairIdx : null, words: given } : pickPair(seed, setup?.pair);
+    const pairIdx = chosen.idx;
+    const [a, b] = chosen.words;
+    const hints = { [a]: (given ? setup.hints?.[a] : HINTS[a]) || [], [b]: (given ? setup.hints?.[b] : HINTS[b]) || [] };
     const swap = rng() < 0.5;
     const pair = swap ? { civ: b, spy: a } : { civ: a, spy: b };
     // 洗牌决定卧底座位
@@ -260,7 +287,7 @@ export default {
     const starter = seats[Math.floor(rng() * n)];
     const words = Object.fromEntries(seats.map((s) => [s, spies.includes(s) ? pair.spy : pair.civ]));
     const state = {
-      n, seats, pairIdx, pair, words, spies,
+      n, seats, pairIdx, pair, words, spies, hints,
       alive: seats.slice(), out: [],
       round: 1, phase: 'speak', starter, queue: [], tied: null,
       speeches: [], votes: {}, voteLog: [], result: null,
@@ -434,7 +461,7 @@ export default {
       const word = state.words[seat];
       const used = new Set(state.speeches.map((x) => x.text));
       const ok = (h) => !speechError(h, word);
-      const hints = (HINTS[word] || []).filter(ok);
+      const hints = hintsOf(state, word).filter(ok);
       const fresh = hints.filter((h) => !used.has(h));
       if (fresh.length) return pick(fresh);
       const generic = GENERIC.filter((h) => ok(h) && !used.has(h));

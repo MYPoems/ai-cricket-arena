@@ -3,9 +3,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import ww from '../games/werewolf/index.js';
-import uc from '../games/undercover/index.js';
+import uc, { setWordBank } from '../games/undercover/index.js';
+import { PAIRS, HINTS } from '../server/words/undercover.js';
 import wwR from '../web/stage/werewolf.js';
 import ucR from '../web/stage/undercover.js';
+
+setWordBank({ PAIRS, HINTS });
 
 let checks = 0, fails = 0;
 const fail = (msg) => { fails++; if (fails < 20) console.log('FAIL', msg); };
