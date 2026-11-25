@@ -1,6 +1,7 @@
 {
   "name": "ai-arena",
   "version": "0.1.0",
+  "license": "MIT",
   "description": "电子斗蛐蛐：各家大模型通过 API 对弈，比较思考差异和能力",
   "type": "module",
   "private": true,

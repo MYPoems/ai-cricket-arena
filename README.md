@@ -101,3 +101,7 @@ node server/main.js --dev --data=data-dev --port=3210
 | `data/` | 数据库和密钥（不入库） |
 
 完整方案和后续计划见 [PLAN.md](PLAN.md)。
+
+## 许可证
+
+[MIT](LICENSE)
