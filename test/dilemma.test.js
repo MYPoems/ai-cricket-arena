@@ -228,3 +228,60 @@ test('带种子的对局可以从记录重放', () => {
   assert.equal(r.history.length, g.create({ players: 2, seed: 12345 }).total);
   assert.equal(actions.length, r.total * 4);
 });
+
+// ---------- 规则 2：喊话轮流先手、达标线 ----------
+const fresh2 = (rounds = 20) => g.create({ players: 2, seed: 7, setup: { rounds, rules: 2 } });
+/** 规则 2 打一轮：按先手顺序喊话，再各自选择 */
+function round2(s, ca, cb) {
+  while (s.phase === 'talk') s = g.apply(s, g.pending(s)[0], '');
+  s = g.apply(s, 'a', ca);
+  return g.apply(s, 'b', cb);
+}
+
+test('规则 2：新开的对局带 rules 2，旧记录按 1 重放', () => {
+  assert.equal(g.newSetup.rules, 2);
+  assert.equal(fresh().rules, 1);
+  assert.equal(fresh2().rules, 2);
+});
+
+test('规则 2：喊话轮流先手，后说的能听到先说的', () => {
+  let s = fresh2();
+  assert.deepEqual(g.pending(s), ['a'], '单数轮甲先说');
+  assert.throws(() => g.apply(s, 'b', '抢话'), /已经提交|不需要/);
+  s = g.apply(s, 'a', '我先表态：合作');
+  assert.deepEqual(g.pending(s), ['b']);
+  assert.equal(g.view(s, 'b').current.talk.a, '我先表态：合作', '先说的话一出口对方就能看到');
+  assert.match(g.turnPrompt(s, 'b'), /对方先说，对方喊：「我先表态：合作」/);
+  s = g.apply(s, 'b', '好');
+  assert.equal(s.phase, 'choose');
+  s = g.apply(g.apply(s, 'a', 'C'), 'b', 'C');
+  assert.deepEqual(g.pending(s), ['b'], '双数轮乙先说');
+  assert.equal(g.view(s, null).first, 'b');
+  assert.match(g.turnPrompt(s, 'b'), /这一轮你先说/);
+});
+
+test('规则 2：达标线决定胜负，领先后一直背叛赢不了', () => {
+  const tft = (s, me) => { const p = s.history.at(-1); return !p || p.choice[me === 'a' ? 'b' : 'a'] === 'C' ? 'C' : 'D'; };
+  const play = (fa, fb, rounds = 20) => {
+    let s = fresh2(rounds);
+    while (!g.outcome(s).over) s = round2(s, fa(s, 'a'), fb(s, 'b'));
+    return g.outcome(s);
+  };
+  // 前 10 轮合作，然后先背叛一次再一直背叛：以牙还牙会跟着背叛，两人都掉到线下
+  let o = play((s) => (s.history.length >= 10 ? 'D' : 'C'), tft);
+  assert.equal(o.winner, null);
+  assert.match(o.reason, /两败俱伤/);
+  // 一直背叛对一直合作：只有背叛的达标
+  o = play(() => 'D', () => 'C');
+  assert.equal(o.winner, 'a');
+  assert.match(o.reason, /只有甲达标/);
+  // 都达标：分高的赢
+  o = play((s) => (s.history.length === 19 ? 'D' : 'C'), () => 'C');
+  assert.equal(o.winner, 'a');
+  assert.match(o.reason, /双方都达标，甲分高/);
+  // 一直合作：同分平局
+  o = play(() => 'C', () => 'C');
+  assert.equal(o.winner, null);
+  assert.match(o.reason, /同分/);
+  assert.match(g.systemPrompt('a'), /达标线/);
+});

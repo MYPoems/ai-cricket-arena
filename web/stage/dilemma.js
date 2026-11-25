@@ -167,7 +167,8 @@ const STYLE = `
 /* ---- 玩家本人操作 ---- */
 .dlm-ctl { position: absolute; left: 50%; translate: -50% 0; z-index: 7; display: none; }
 .dlm-ctl.on { display: flex; }
-.dlm-ctl.talk { top: 41cqw; width: max(42cqw, 260px); gap: 1cqw; align-items: center; }
+.dlm-ctl.talk { top: 41.4cqw; width: 36cqw; gap: .8cqw; align-items: center; }
+.dlm-ctl.talk .btn.mute { padding-left: 1cqw; padding-right: 1cqw; }
 .dlm-ctl.talk input { flex: 1; min-width: 0; font: 500 max(13px, 1.6cqw)/1.4 var(--serif); padding: .9cqw 1.4cqw; user-select: text; }
 .dlm-ctl.talk .btn { flex: none; font-size: max(13px, 1.6cqw); }
 .dlm-ctl.choose { top: 27.4cqw; gap: 3cqw; }
@@ -182,7 +183,12 @@ const STYLE = `
 .dlm-pick:active:not(:disabled) { translate: 0 2px; }
 .dlm-pick:disabled { filter: saturate(.4) brightness(.8); cursor: default; }
 .dlm-pick small { position: absolute; left: -2cqw; right: -2cqw; top: calc(100% + 1cqw); writing-mode: horizontal-tb; font: 500 max(9px, 1.15cqw)/1.35 var(--sans); letter-spacing: 0; color: rgb(242 227 194 / .62); white-space: nowrap; }
-/* 手机：喊话输入框横跨整张桌子，放到心电图的位置上（喊话时心电图让位），不再压着两张牌和桌沿铭牌；按键 44px、输入框 16px 字（iOS 聚焦时不放大页面） */
+/* 窄屏：两张牌之间放不下输入框和两个按钮，喊话输入框改为横跨整张桌子，放到心电图的位置上（喊话时心电图让位），不压着两张牌和桌沿铭牌 */
+@container (max-width: 760px) {
+  .dlm-ctl.talk { top: auto; bottom: 2.6cqw; left: 3cqw; right: 3cqw; translate: none; width: auto; gap: 8px; }
+  .dlm-box.talking .dlm-ecg { opacity: 0; pointer-events: none; }
+}
+/* 手机：按键 44px、输入框 16px 字（iOS 聚焦时不放大页面） */
 @container (max-width: 520px) {
   .dlm-ctl.talk { top: auto; bottom: 2.6cqw; left: 3cqw; right: 3cqw; translate: none; width: auto; gap: 8px; }
   .dlm-ctl.talk input { font-size: 16px; padding: 6px 12px; min-height: 44px; }
@@ -193,6 +199,7 @@ const STYLE = `
   .dlm-box.choosing .dlm-plaque { visibility: hidden; }
 }
 .dlm-ecg { transition: opacity .25s; }
+.dlm-side .st .ln.ok { color: #6fd3a2; } .dlm-side .st .ln.no { color: #ff8a72; }
 .dlm-pick small .s2 { display: none; }
 `;
 
@@ -384,7 +391,10 @@ export default {
         const st = view.stats || {};
         for (const s of ['a', 'b']) {
           const x = st[s];
-          stat[s].innerHTML = x && x.played ? `<span>合作 ${pct(x.coopRate)}</span><span class="more"> · 报复 ${pct(x.retaliation)} · 先背叛 ${x.unprovoked}</span>` : '<span>合作 —</span>';
+          const n = hist.length;
+          const avg = view.line && n ? (view.score?.[s] ?? 0) / n : null;
+          const ln = avg === null ? '' : `<span class="ln ${avg >= view.line ? 'ok' : 'no'}" title="平均每轮 ${avg.toFixed(2)} 分；达标线是平均每轮 ${view.line} 分">均 ${avg.toFixed(1)}</span> · `;
+          stat[s].innerHTML = x && x.played ? `${ln}<span>合作 ${pct(x.coopRate)}</span><span class="more"> · 报复 ${pct(x.retaliation)} · 先背叛 ${x.unprovoked}</span>` : `<span>合作 —</span>${view.line ? `<span class="more"> · 达标线均 ${view.line}</span>` : ''}`;
           side[s].classList.toggle('win', !!view.over && view.winner === s);
         }
         const sc = view.score || { a: 0, b: 0 };
@@ -451,7 +461,11 @@ export default {
           if (cur) {
             const t = cur.talk?.[s];
             if (t !== null && t !== undefined) { talk = t; faint = view.phase === 'talk'; }
-            else if (view.phase === 'talk' && movable !== s && ((view.pending || []).includes(s) || !viewer)) typing = true;
+            else if (view.phase === 'talk' && movable !== s) {
+              // 轮流先手：只有正在说的那个人冒「…」；同时喊话（旧规则）时还没交的都冒
+              const talker = view.first ? (cur.talk?.[view.first] == null ? view.first : other(view.first)) : null;
+              typing = talker ? talker === s : ((view.pending || []).includes(s) || !viewer);
+            }
           } else if (view.over && last) talk = last.talk[s];
           let html = '', cls = '';
           if (typing) html = '<span class="dots"><i></i><i></i><i></i></span>';
@@ -465,12 +479,15 @@ export default {
         // 桌沿铭牌
         if (view.over) {
           plaqueR.textContent = `共 ${view.round} 轮`;
-          plaqueP.textContent = view.winner ? `${NAMES[view.winner]}胜` : '平局';
+          const line = view.line ? view.line * view.round : null;
+          const ok = line === null ? null : ['a', 'b'].filter((s) => (view.score?.[s] ?? 0) >= line);
+          plaqueP.textContent = (view.winner ? `${NAMES[view.winner]}胜` : ok && !ok.length ? '两败俱伤' : '平局') + (line === null ? '' : ` · 达标线 ${line}`);
           plaqueP.className = 'p hot';
         } else {
           plaqueR.textContent = `第 ${view.round} 轮`;
           // 真人在局：牌匾上写明总轮数保密（到最后一轮也不会提前告诉你）
-          plaqueP.textContent = `${view.phase === 'talk' ? '喊话' : '出牌'}${movable || (viewer && viewer !== '*') ? ' · 共几轮保密' : ''}`;
+          const talkWho = view.phase === 'talk' && view.first ? `${NAMES[view.first]}先说` : '';
+          plaqueP.textContent = `${view.phase === 'talk' ? '喊话' : '出牌'}${talkWho ? ` · ${talkWho}` : ''}${movable || (viewer && viewer !== '*') ? ' · 共几轮保密' : ''}`;
           plaqueP.className = `p${choosing ? ' hot' : ''}`;
         }
         box.querySelector('.dlm-seal')?.remove();
@@ -488,6 +505,8 @@ export default {
         const canChoose = !!movable && !view.over && view.phase === 'choose';
         if (movable) {
           input.placeholder = `对${NAMES[other(movable)]}说一句…`;
+          const heard = view.first && view.first !== movable ? cur?.talk?.[view.first] : null;
+          input.placeholder = heard != null ? `回${NAMES[other(movable)]}一句…` : `对${NAMES[other(movable)]}说一句…`;
           input.title = '可以不说话；一共打几轮双方都不知道，到最后一轮也不会提前告诉你';
           const payHint = (m) => `对方合 +${m.C}<span class="s1"> · 背 </span><span class="s2"><br>对方背 </span>+${m.D}`;
           btnC.querySelector('small').innerHTML = payHint(PAY.C);
@@ -509,13 +528,15 @@ export default {
     const out = [];
     const short = (t) => (t ? (chars(t) > 6 ? `「${[...t].slice(0, 6).join('')}…」` : `「${t}」`) : '（不说）');
     const push = (seat, kind, v) => out.push({ seat, label: kind === 'talk' ? short(v) : choiceName(v) });
-    for (const r of view?.history || []) {
-      for (const s of ['a', 'b']) push(s, 'talk', r.talk[s]);
+    // 规则 2 起喊话轮流先手：双数轮乙先说
+    const order = (i) => ((view?.rules || 1) >= 2 && i % 2 === 0 ? ['b', 'a'] : ['a', 'b']);
+    (view?.history || []).forEach((r, i) => {
+      for (const s of order(i + 1)) push(s, 'talk', r.talk[s]);
       for (const s of ['a', 'b']) push(s, 'choice', r.choice[s]);
-    }
+    });
     const cur = view?.current;
     if (cur) {
-      for (const s of ['a', 'b']) if (cur.talk[s] !== null && cur.talk[s] !== undefined) push(s, 'talk', cur.talk[s]);
+      for (const s of order(view.round)) if (cur.talk[s] !== null && cur.talk[s] !== undefined) push(s, 'talk', cur.talk[s]);
       for (const s of ['a', 'b']) if (cur.choice[s] !== null && cur.choice[s] !== undefined) push(s, 'choice', cur.choice[s]);
     }
     return out;

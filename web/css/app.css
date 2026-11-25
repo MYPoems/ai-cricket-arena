@@ -783,6 +783,8 @@ pre.code { margin: 0; padding: 14px 80px 14px 16px; overflow-x: auto; border-rad
 .stage-bar .bar-ctrl { display: flex; align-items: center; gap: 2px; flex-wrap: nowrap; overflow: hidden; padding-bottom: 3px; margin-bottom: -3px; }
 .stage-bar .bar-ctrl .btn { margin-left: 4px; }
 .stage-bar:has(> .scrub) { padding-bottom: 18px; }
+/* 进度条只在复盘、回放和终局后出现；预留它的位置，出现时状态栏不变高 */
+.stage-bar { padding-bottom: 18px; }
 .stage-bar .scrub { position: absolute; left: 14px; right: 14px; bottom: 5px; width: auto; height: 4px; margin: 0; accent-color: var(--gold-2); }
 .stage-bar select.speed { width: auto; padding: 3px 6px; font: 500 12px/1 var(--num); }
 .stage-state { font-weight: 700; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--gold-2); }
@@ -1627,9 +1629,10 @@ dialog.closing::backdrop { animation: dlg-veil-out 160ms var(--in) both; }
 
 /* ---- 转播条：控制键折行不裁切；结束后的结果单独一行；回放键和对局键之间一道竖线 ---- */
 .stage-bar .bar-info { flex-wrap: wrap; row-gap: 4px; }
-.stage-bar .bar-info .stage-state { order: 3; flex: 1 1 auto; }
+.stage-bar .bar-info .stage-state { order: 3; flex: 1 1 0; min-width: 6em; }
 .stage-bar .bar-info .bar-plies { order: 4; margin-left: auto; }
-.stage-bar .bar-info .stage-state.done { order: 9; flex: 1 1 100%; white-space: normal; overflow-wrap: anywhere; line-height: 1.45; }
+/* 结果一行写不下就省略（全文在终局卡和悬停提示里）：换行会把状态栏撑高、整块场地往下跳 */
+.stage-bar .bar-info .stage-state.done { order: 3; flex: 1 1 0; }
 .stage-state:empty { display: none; }
 .stage-bar .bar-ctrl { flex-wrap: wrap; overflow: visible; row-gap: 4px; }
 .stage-bar .bar-ctrl .btn.sm { margin-left: 4px; white-space: nowrap; }
@@ -2476,3 +2479,20 @@ dialog .dlg-body { overscroll-behavior: contain; }
   table.users-table .c-act { grid-area: act; }
 }
 /* 第三轮打磨（站内页面）到此为止 */
+
+/* ---------- 终局卡：对局刚结束时浮在场上，带「再来一局」 ---------- */
+.end-card { position: absolute; left: 50%; top: 50%; z-index: 30; translate: -50% -50%; width: min(420px, 90%); display: grid; justify-items: center; gap: 8px; padding: 22px 24px 18px; border-radius: 16px; text-align: center; color: var(--text);
+  border: var(--bz) solid transparent; background: var(--glint), var(--surface), var(--edge-hi) border-box; box-shadow: var(--hi), var(--e4);
+  animation: end-in 420ms var(--glide, ease-out) both; }
+.end-card.closing { animation: end-out 200ms ease-in both; }
+@keyframes end-in { from { opacity: 0; scale: .94; } }
+@keyframes end-out { to { opacity: 0; scale: .96; } }
+.end-card .seal { width: 56px; height: 56px; font: 400 34px/1 var(--brush); color: #fbefd2; }
+.end-card b { font: 400 clamp(26px, 3.2vw, 34px)/1.15 var(--brush); background: var(--gold-text); -webkit-background-clip: text; background-clip: text; color: transparent; filter: var(--gold-text-shadow); }
+.end-card p { margin: 0; font: 500 14px/1.6 var(--sans); color: var(--muted); overflow-wrap: anywhere; }
+.end-card .end-acts { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 8px; }
+.end-card .end-acts .btn { min-width: 88px; }
+.end-card .end-x { position: absolute; right: 8px; top: 8px; width: 30px; height: 30px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--muted); font-size: 14px; cursor: pointer; }
+.end-card .end-x:hover { color: var(--text); background: rgb(255 240 210 / .08); }
+.end-card.draw .seal { filter: saturate(.5) brightness(1.1); }
+@media (prefers-reduced-motion: reduce) { .end-card, .end-card.closing { animation: none; } }

@@ -299,6 +299,32 @@ export async function matchView(root, id, { characters, session }) {
     boardWrap.append(el);
     setTimeout(() => el.remove(), 3300);
   }
+  /** 终局卡：对局刚结束时浮在场上，写明结果和原因，带「再来一局」「换边再来」「战报」；不自动消失，点「看棋局」或 ✕、按 Esc 收起 */
+  function endCard() {
+    boardWrap.querySelector('.end-card')?.remove();
+    const r = d.result;
+    if (recordMode || left || d.status !== 'finished' || !r || r.aborted) return;
+    const mine = humanSeat ? seatOutcome(r, humanSeat) : null;
+    const draw = seatOutcome(r, seats[0]) === 'd' && (!mine || mine === 'd');
+    const title = mine ? (mine === 'w' ? '你赢了' : mine === 'l' ? '你输了' : '和局') : resultText(d, d.seatNames);
+    const close = () => { el.classList.add('closing'); setTimeout(() => el.remove(), 220); document.removeEventListener('keydown', onEsc, true); };
+    const onEsc = (e) => { if (e.key === 'Escape' && el.isConnected && !document.querySelector('dialog[open]')) { e.preventDefault(); e.stopPropagation(); close(); } };
+    const again = canRematch();
+    const el = h('div', { class: `end-card${draw ? ' draw' : mine === 'l' ? ' lost' : ''}`, role: 'dialog', 'aria-label': '对局结束' },
+      h('button', { type: 'button', class: 'end-x', title: '收起（Esc）', 'aria-label': '收起', onclick: close }, '✕'),
+      h('span', { class: 'seal', 'aria-hidden': 'true' }, draw ? '和' : mine === 'l' ? '负' : '胜'),
+      h('b', {}, title),
+      r.reason ? h('p', {}, r.reason) : null,
+      h('div', { class: 'end-acts' },
+        again ? h('button', { type: 'button', class: 'btn primary', title: '同样的座位和设置，马上再开一盘（娱乐赛）', onclick: guard(() => rematch(false)) }, '再来一局') : null,
+        again && two ? h('button', { type: 'button', class: 'btn', title: '双方交换座位再开一盘', onclick: guard(() => rematch(true)) }, '换边再来') : null,
+        winbarOn && totalPlies() ? h('button', { type: 'button', class: 'btn', onclick: () => { close(); showReport(); } }, '战报') : null,
+        h('button', { type: 'button', class: 'btn ghost', onclick: close }, again ? '看看棋局' : '收起')));
+    boardWrap.append(el);
+    document.addEventListener('keydown', onEsc, true);
+    cleanups.push(() => document.removeEventListener('keydown', onEsc, true));
+    el.querySelector('.btn.primary')?.focus({ preventScroll: true });
+  }
   /** 这一步配什么音效 */
   function soundFor(label = '', view = null) {
     const t = String(label || '');
@@ -951,6 +977,7 @@ export async function matchView(root, id, { characters, session }) {
       if (sb.state) sb.state.replaceWith(el); else sb.info.append(el);
       sb.state = el;
     }
+    if (sb.state && sb.state.title !== status) sb.state.title = status;
     if (winbarOn && !evalHidden()) { if (tug.parentNode !== statusBar) sb.ctrl.after(tug); } else tug.remove();
     if (reviewing && canReview() && n) {
       if (sb.scrub.max !== String(n)) sb.scrub.max = String(n);
@@ -1691,8 +1718,8 @@ export async function matchView(root, id, { characters, session }) {
         // 对局页的转播条已经写着结果，不再弹提示条；棋类在棋盘上浮一条结果横幅
         if (!recordMode && d.status === 'finished') resultBanner();
         if (d.status === 'finished') sfx('win');
-        // 战报等结果横幅演完再弹
-        if (d.status === 'finished' && winbarOn && !recordMode) reportTimer = setTimeout(() => { if (root.isConnected && !left) showReport(); }, two && !duo ? 3400 : 1800);
+        // 结果横幅、终局动画演完，再浮出终局卡（再来一局、战报都在卡上，不再自动弹战报）
+        if (d.status === 'finished' && !recordMode) reportTimer = setTimeout(() => { if (root.isConnected && !left) endCard(); }, two && !duo && !hud ? 3400 : 2600);
         // 棋类已经有结果横幅，不再叠一枚「终」字大印
         // 狼人杀、谁是卧底的场景匾自己盖「胜」印，不再在屏幕正中压一枚大「终」字（会盖住座位和发言）
         if (d.status === 'finished' && !hud && !duo && !(two && !recordMode)) stampFx(d.result?.ranks && Object.values(d.result.ranks).every((r) => r === 1) ? '和' : '终', true);
