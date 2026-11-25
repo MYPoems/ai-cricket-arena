@@ -16,6 +16,10 @@ const LOADERS = {
   othello: () => import('./othello.js'),
   connect4: () => import('./connect4.js'),
   werewolf: () => import('./werewolf.js'),
+  turtlesoup: () => import('./turtlesoup.js'),
+  liar: () => import('./liar.js'),
+  mahjong: () => import('./mahjong.js'),
+  guandan: () => import('./guandan.js'),
 };
 
 export async function loadRenderer(gameId) {

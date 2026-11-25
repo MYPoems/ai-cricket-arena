@@ -308,7 +308,9 @@ export async function matchView(root, id, { characters, session }) {
     const roles = d.view?.roles || {};
     const role = ws.every((s) => roles[s] && roles[s] === roles[ws[0]]) ? roles[ws[0]] : null;
     if (ws.length > 1 && role) return `${role}胜`;
-    if (ws.length === 1) return `${d.players?.[ws[0]] ? cleanName(d.players[ws[0]].name) : seatName(ws[0])}胜`;
+    // 名字有重名（例如几个座位都是同一个内置 AI）时写座位
+    const nm = (s) => (d.players?.[s] ? cleanName(d.players[s].name) : null);
+    if (ws.length === 1) return `${nm(ws[0]) && seats.filter((s) => nm(s) === nm(ws[0])).length === 1 ? nm(ws[0]) : seatName(ws[0])}胜`;
     return `${ws.map(seatName).join('、')}胜`;
   }
   function endCard() {
@@ -343,7 +345,9 @@ export async function matchView(root, id, { characters, session }) {
     const t = String(label || '');
     if (d.game === 'poker') return /弃牌|过牌/.test(t) ? 'card' : 'chip';
     if (d.game === 'doudizhu') return /炸弹|王炸/.test(t) ? 'bomb' : 'card';
-    if (d.game === 'werewolf' || d.game === 'undercover' || d.game === 'dilemma') return null;
+    if (d.game === 'mahjong') return 'card';
+    if (d.game === 'guandan') return /炸|同花顺|天王/.test(t) ? 'bomb' : 'card';
+    if (d.game === 'werewolf' || d.game === 'undercover' || d.game === 'dilemma' || d.game === 'turtlesoup' || d.game === 'liar') return null;
     const st = stampFor(t, view);
     if (st === '杀' || st === '将') return 'check';
     return /吃|x|×/.test(t) ? 'capture' : 'move';

@@ -8,6 +8,10 @@ import { getCharacter, canRank, engineGameName } from './characters.js';
 import { applyResult, PLACEMENT_GAMES, ratingKey } from './ladder/rating.js';
 import { moveQuality } from './evaluator.js';
 import { HttpError } from './http.js';
+import { setPuzzleBank } from '../games/turtlesoup/index.js';
+import { PUZZLES as SOUP_PUZZLES } from './puzzles/turtlesoup.js';
+
+setPuzzleBank(SOUP_PUZZLES);
 
 export const MAX_RETRIES = 3; // 无效行动最多重来 3 次，仍无效判负
 export const MAX_LIVE = 200; // 全站同时进行的对局上限（手动开局、组局）
@@ -186,7 +190,7 @@ export class Arena {
     const agents = Object.values(chars).filter((c) => c.kind === 'agent');
     const outsiders = humans.length + agents.length;
     // game.newSetup：新开的对局默认带上的开局参数（例如规则版本；旧记录没有它，重放时按旧规则）
-    const setup = { ...(game.newSetup || {}), ...(options.setup || {}), ...(options.fen ? { fen: options.fen } : {}) };
+    let setup = { ...(game.newSetup || {}), ...(options.setup || {}), ...(options.fen ? { fen: options.fen } : {}) };
     if (mode === 'ranked') {
       const bad = Object.values(chars).filter((c) => !canRank(this.db, c));
       if (bad.length) throw new HttpError(400, `${bad.map((c) => c.name).join('、')} 不能参加排位赛（本机订阅和自定义接口只能下娱乐赛）`);
@@ -207,6 +211,8 @@ export class Arena {
     }
     let state;
     try {
+      // game.prepareSetup：开局时由服务端补全开局参数（例如海龟汤把选中的整道谜题写进去，题库只在服务端）
+      if (game.prepareSetup) setup = game.prepareSetup(setup, seed);
       state = game.create({ players: n, seed, setup });
     } catch (e) {
       throw new HttpError(400, `开局参数不合法：${e.message}`);
