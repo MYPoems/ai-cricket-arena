@@ -459,7 +459,8 @@ const game = {
   id: 'poker',
   name: '德州扑克',
   players: { min: 2, max: MAX, default: 6 },
-  features: { hidden: true, winbar: false, draw: false },
+  // turnLimit：真人每步限时（秒），超时由系统接管这一步并转托管
+  features: { hidden: true, winbar: false, draw: false, turnLimit: 30 },
   noun: '行动',
   rankedSeries: { legs: 2, sameSeed: true },
 

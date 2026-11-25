@@ -1,6 +1,6 @@
 // 前端入口：登录状态、按地址栏 hash 切换页面。
 
-import { h, api, listen, icon, dialog, setTitle, connectionOk, emptyState, coin, toast } from './ui.js';
+import { h, api, post, guard, listen, icon, dialog, setTitle, connectionOk, emptyState, coin, toast } from './ui.js';
 import { nudgeTurn } from './sound.js';
 import { playView } from './play.js';
 import { lobbyView } from './lobby.js';
@@ -264,7 +264,22 @@ async function refreshLive() {
   } catch { liveCount = 0; }
   paintDot();
 }
-addEventListener('dsqq:conn', (e) => { paintDot(); if (e.detail.ok) refreshLive(); });
+addEventListener('dsqq:conn', (e) => { paintDot(); if (e.detail.ok) { refreshLive(); checkMyLive(); } });
+
+// ---------- 断线重连：我坐着的对局还在进行，提醒回去 ----------
+// 打开网站、实时连接断开后重新连上时各查一次；正开着那盘对局的页面就不提醒，每盘只提醒一次
+const shownLive = new Set();
+async function checkMyLive() {
+  if (!session.user) return;
+  let list = [];
+  try { list = await api('/me/live'); } catch { return; }
+  for (const x of list) {
+    if (shownLive.has(x.matchId) || location.hash.startsWith(`#/match/${x.matchId}`)) continue;
+    shownLive.add(x.matchId);
+    const why = x.auto === 'offline' ? '，断线期间由系统托管' : x.auto ? '，系统托管中' : x.myTurn ? '，正轮到你' : '';
+    toast(h('span', {}, `你有一盘${x.gameName}还在进行${why} `, h('a', { href: `#/match/${x.matchId}` }, '回到对局')), false, { ms: 15000 });
+  }
+}
 
 // 首屏就是大厅时，大厅的数据和登录状态一起取（少等一个来回）；没有权限看（要登录）时拿到 null，照常走登录
 let earlyLobby = /^#?\/?$/.test(location.hash) ? api('/lobby').catch(() => null) : null;
@@ -275,6 +290,7 @@ try {
   throw e;
 }
 refreshLive();
+checkMyLive();
 if (session.user || session.publicView) listen(['lobby'], (e) => { if (e.type === 'match_created' || e.type === 'match_finished') refreshLive(); });
 // 天梯给我匹配到了对局（我开了「参加天梯自动匹配」）：提醒一下、带我进去；不在任何页面上操作到一半时直接跳过去
 if (session.user) listen([`user:${session.user.id}`], (e) => {
@@ -284,6 +300,26 @@ if (session.user) listen([`user:${session.user.id}`], (e) => {
   const busy = /^#\/(match|new|rooms?)(\/|$)/.test(location.hash) && !location.hash.startsWith(href);
   if (!busy) { location.hash = href; return; }
   toast(h('span', {}, `天梯为你匹配到一盘${e.game || ''}排位赛 `, h('a', { href }, '进入对局')));
+});
+// 组局邀请：弹窗问要不要来，点「加入」就本人入座；正在对局页上不打断，只提示一句
+if (session.user) listen([`user:${session.user.id}`], (e) => {
+  if (e.type !== 'room_invite' || !e.room) return;
+  nudgeTurn();
+  const r = e.room;
+  const text = `${e.from} 邀请你一起玩${r.gameName}（「${r.title}」，已坐 ${r.filled}/${r.players} 人）`;
+  if (/^#\/match\//.test(location.hash)) {
+    toast(h('span', {}, `${text} `, h('a', { href: `#/room/${r.id}` }, '去看看')), false, { ms: 15000 });
+    return;
+  }
+  const dlg = dialog('组局邀请', h('p', { class: 'invite-text' }, text), [
+    h('button', { class: 'btn', type: 'button', onclick: () => { dlg.close(); post(`/rooms/${r.id}/decline`).catch(() => {}); } }, '不去'),
+    h('button', { class: 'btn primary', type: 'button', onclick: guard(async () => {
+      await post(`/rooms/${r.id}/join`);
+      dlg.close();
+      location.hash = `#/room/${r.id}`;
+    }) }, '加入'),
+  ]);
+  dlg.dataset.keep = '1'; // 点遮罩不关，免得误点就当没看见
 });
 // 庄家：有新的注册申请时角标 +1
 if (session.user?.role === 'admin') listen(['admin'], (e) => { if (e.type === 'registration' || e.type === 'user_updated') reloadSession(); });

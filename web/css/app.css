@@ -2502,3 +2502,34 @@ dialog .dlg-body { overscroll-behavior: contain; }
 .end-card .end-x:hover { color: var(--text); background: rgb(255 240 210 / .08); }
 .end-card.draw .seal { filter: saturate(.5) brightness(1.1); }
 @media (prefers-reduced-motion: reduce) { .end-card, .end-card.closing { animation: none; } }
+
+/* ================= 出牌倒计时、托管、全屏 ================= */
+.turn-timer { display: inline-flex; align-items: center; justify-content: center; min-width: 4.4em; height: 30px; padding: 0 10px; border-radius: 999px;
+  font: 600 14px/1 var(--num, var(--mono)); font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--text);
+  border: 1px solid rgb(226 186 96 / .55); background: rgb(226 186 96 / .1); }
+.turn-timer[hidden] { display: none; }
+.turn-timer.urgent { color: #fff; border-color: transparent; background: var(--red); animation: turn-urgent 1s ease-in-out infinite; }
+@keyframes turn-urgent { 50% { scale: 1.08; } }
+.auto-bar { position: absolute; left: 50%; bottom: 23%; z-index: 29; translate: -50% 0; display: flex; align-items: center; gap: 12px; max-width: calc(100% - 24px);
+  padding: 6px 6px 6px 16px; border-radius: 999px; color: #f6e7c8; font-size: 14px; white-space: nowrap;
+  background: rgb(24 8 4 / .84); border: 1px solid rgb(226 186 96 / .5); box-shadow: 0 6px 18px rgb(0 0 0 / .45); backdrop-filter: blur(6px); animation: auto-in .25s ease-out; }
+.auto-bar .t { overflow: hidden; text-overflow: ellipsis; }
+/* 德州的底牌、斗地主的手牌比较高：托管条再往上放，不压牌 */
+.g-poker .auto-bar, .g-liar .auto-bar { bottom: 33%; }
+.g-doudizhu .auto-bar, .g-guandan .auto-bar { bottom: 28%; }
+@keyframes auto-in { from { opacity: 0; translate: -50% 8px; } }
+/* 全屏：整个对局页铺满屏幕，没有站点顶栏 */
+.fs { --top: 0px; overflow: auto; background: var(--grain), var(--backdrop); }
+.fs > .arena { height: 100vh; height: 100dvh; }
+/* 牌桌版式全屏：右栏收窄一些，宽度让给牌桌 */
+.fs > .arena.hud { --hud: clamp(240px, 17vw, 320px); }
+@media (prefers-reduced-motion: reduce) { .turn-timer.urgent, .auto-bar { animation: none; } }
+
+/* 在线玩家（大厅侧栏、组局页） */
+.online-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.online-list li { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: 8px; min-height: 30px; }
+.online-list .dot { width: 8px; height: 8px; border-radius: 50%; background: #4cc38a; box-shadow: 0 0 0 3px rgb(76 195 138 / .18); }
+.online-list .nm { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.online-list small, .online-list a { white-space: nowrap; }
+.online-card h3 small { font-weight: 400; font-size: 13px; }
+.invite-text { margin: 0; }

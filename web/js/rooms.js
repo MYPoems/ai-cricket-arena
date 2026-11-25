@@ -82,6 +82,43 @@ export async function roomView(root, id, { go, session, characters, meta }) {
     dlg.querySelector('.pick:not(:disabled)')?.focus({ preventScroll: true });
   }
 
+  // ---------- 在线真人：房主和已入座的人可以邀请 ----------
+  let online = [];
+  const onlineBox = h('div', { class: 'card pad col online-card' });
+  const canInvite = () => me && room.status === 'open' && (isHost() || Object.values(room.seats).some((s) => s?.by?.id === me.id));
+  const seatedUsers = () => new Set(Object.values(room.seats).filter((s) => s?.character?.kind === 'human').map((s) => s.character.owner_id));
+  const invited = new Map(); // userId → 邀请时间（按钮显示「已邀请」20 秒）
+  async function loadOnline() {
+    if (!me) return;
+    try { online = await api('/online'); } catch { online = []; }
+    drawOnline();
+  }
+  function drawOnline() {
+    if (!me) { onlineBox.hidden = true; return; }
+    const inRoom = seatedUsers();
+    const others = online.filter((u) => !u.me);
+    const full = room.filled >= room.players;
+    onlineBox.hidden = room.status !== 'open';
+    onlineBox.replaceChildren(
+      h('h3', {}, '在线玩家', h('small', { class: 'muted' }, ` ${others.length} 人`)),
+      others.length ? h('ul', { class: 'online-list' }, ...others.map((u) => {
+        const here = inRoom.has(u.id);
+        const sent = Date.now() - (invited.get(u.id) || 0) < 20000;
+        return h('li', {},
+          h('span', { class: 'dot', 'aria-hidden': 'true' }),
+          h('span', { class: 'nm' }, u.name),
+          h('small', { class: 'muted' }, here ? '在这一局' : u.playing ? `${u.playing.gameName}对局中` : '空闲'),
+          canInvite() && !here ? h('button', { type: 'button', class: 'btn sm', disabled: sent || full, title: full ? '座位已经坐满了' : null, onclick: guard(async () => {
+            await post(`/rooms/${id}/invite`, { userId: u.id });
+            invited.set(u.id, Date.now());
+            toast(`已邀请${u.name}`);
+            drawOnline();
+            setTimeout(drawOnline, 20100);
+          }) }, sent ? '已邀请' : '邀请') : null);
+      })) : h('div', { class: 'small muted' }, '现在没有别的玩家在线。'),
+      canInvite() ? h('div', { class: 'small muted' }, '对方会收到弹窗，点「加入」就本人入座。') : null);
+  }
+
   // 座位上只有选手的简要资料（没有平台的中文名）：模型蛐蛐只写模型，免得写成「deepseek · deepseek-chat」
   const lineOf = (c) => (c.kind === 'model' && !c.providerName ? c.model || '' : modelLine(c));
 
@@ -120,20 +157,28 @@ export async function roomView(root, id, { go, session, characters, meta }) {
               room = await post(`/rooms/${id}/close`);
               draw();
             }) }, '关闭组局') : null),
+          onlineBox,
           h('div', { class: 'card quiet pad small muted' }, '组局是娱乐赛：不计积分，也不占蛐蛐每天主动参加对局的名额，没有次数限制。每只蛐蛐用的是它主人的 API 密钥。'))));
+    drawOnline();
   }
   draw();
+  loadOnline();
   // 开局了：自己坐在里面（本人入座）就直接进对局，不用再点「观战」
   function mySeatName() {
     if (!me) return null;
     const hit = Object.entries(room.seats || {}).find(([, s]) => s?.character?.kind === 'human' && s.character.owner_id === me.id);
     return hit ? room.seatNames[hit[0]] : null;
   }
-  return listen([`room:${id}`], (e) => {
+  // 在线名单：有人上线、下线时（服务端两秒合并一次）重新取；另外每 30 秒兜底刷新一次
+  const stopLobby = me ? listen(['lobby'], (e) => { if (e.type === 'presence') loadOnline(); }) : () => {};
+  const onlineTimer = me ? setInterval(loadOnline, 30000) : null;
+  const stopRoom = listen([`room:${id}`], (e) => {
+    if (e.type === 'invite_declined') { toast(`${e.name}这次不来`); return; }
     if (e.type !== 'room') return;
     const was = room.status;
     room = e.room;
     if (was !== 'started' && room.status === 'started' && room.matchId && mySeatName()) { toast(`开局了，你在${mySeatName()}`); go(`#/match/${room.matchId}`); return; }
     draw();
   });
+  return () => { stopRoom(); stopLobby(); clearInterval(onlineTimer); };
 }

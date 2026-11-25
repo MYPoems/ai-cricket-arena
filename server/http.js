@@ -157,10 +157,26 @@ export class Hub {
     this.channels = new Map();
     this.total = 0;
     this.perIp = new Map();
+    // 在线：登录用户开着网站的连接（一个标签页一条；换频道时会短暂多一条）。连接数从 0 变 1、从 1 变 0 时通知 onPresence 的监听者
+    this.users = new Map(); // userId → Set<res>
+    this.presenceFns = [];
+    this.presenceTimer = null;
     setInterval(() => this.#ping(), 25000).unref();
   }
 
-  subscribe(req, res, channels) {
+  /** 这个用户现在开着网站吗 */
+  online(userId) { return (this.users.get(userId)?.size || 0) > 0; }
+  onlineIds() { return [...this.users.keys()]; }
+  /** fn(userId, online)：上线、下线（最后一条连接断开）时调用 */
+  onPresence(fn) { this.presenceFns.push(fn); }
+  #presence(userId, on) {
+    for (const fn of this.presenceFns) { try { fn(userId, on); } catch (err) { console.error(err); } }
+    // 大厅、组局页的在线名单：合并成最多两秒一次的提醒，页面收到后自己来取
+    if (!this.presenceTimer) this.presenceTimer = setTimeout(() => { this.presenceTimer = null; this.emit('lobby', { type: 'presence' }); }, 2000);
+    this.presenceTimer.unref?.();
+  }
+
+  subscribe(req, res, channels, userId = null) {
     const ip = ipOf(req);
     if (this.total >= SSE_MAX || (this.perIp.get(ip) || 0) >= SSE_MAX_PER_IP) throw new HttpError(429, '实时连接太多，稍后再试');
     this.total++;
@@ -171,11 +187,22 @@ export class Hub {
       if (!this.channels.has(ch)) this.channels.set(ch, new Set());
       this.channels.get(ch).add(res);
     }
+    if (userId) {
+      if (!this.users.has(userId)) this.users.set(userId, new Set());
+      const mine = this.users.get(userId);
+      mine.add(res);
+      if (mine.size === 1) this.#presence(userId, true);
+    }
     let closed = false;
     req.on('close', () => {
       if (closed) return;
       closed = true;
       this.total--;
+      if (userId) {
+        const mine = this.users.get(userId);
+        mine?.delete(res);
+        if (mine && !mine.size) { this.users.delete(userId); this.#presence(userId, false); }
+      }
       const n = (this.perIp.get(ip) || 1) - 1;
       if (n > 0) this.perIp.set(ip, n); else this.perIp.delete(ip);
       for (const ch of channels) {

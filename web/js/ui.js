@@ -198,9 +198,9 @@ function toastBox() {
   }
   return toastHost;
 }
-export function toast(text, err = false) {
+export function toast(text, err = false, { ms } = {}) {
   const box = toastBox();
-  let left = err ? 7000 : 4000;
+  let left = ms || (err ? 7000 : 4000);
   let started = 0;
   let timer = null;
   let el = null;

@@ -68,16 +68,16 @@ function faceSvg(code) {
 // 竖版（手机）：三家的名牌并排在上沿，左右两家的手牌竖在两边，玩家本人的名牌在左下、操作条在名牌上方、手牌最大。
 const LAYOUTS = {
   land: {
-    w: 80, h: 50, plateFs: 1,
-    bottom: { hand: { cx: 40.6, cy: 44.8, dir: [1, 0], w: 3.25, rot: 0, max: 47 }, river: { cx: 40, cy: 29.8, along: [1, 0], grow: [0, 1] }, plate: [1.8, 42.4], shout: [40, 37.4], seal: 'n e', tag: 'up' },
-    right: { hand: { cx: 74.6, cy: 24.6, dir: [0, -1], w: 1.95, rot: -90, max: 34 }, river: { cx: 48.2, cy: 23.6, along: [0, -1], grow: [1, 0] }, plate: [64.8, 42.4], shout: [65, 24.5], seal: 'n w', tag: 'up' },
-    top: { hand: { cx: 40, cy: 5.4, dir: [-1, 0], w: 2.25, rot: 0, max: 48 }, river: { cx: 40, cy: 16.2, along: [1, 0], grow: [0, -1] }, plate: [64.8, 1.8], shout: [40, 11.6], seal: 's w', tag: '' },
-    left: { hand: { cx: 5.4, cy: 24.6, dir: [0, 1], w: 1.95, rot: 90, max: 34 }, river: { cx: 31.8, cy: 23.6, along: [0, 1], grow: [-1, 0] }, plate: [1.8, 1.8], shout: [15, 24.5], seal: 's e', tag: 'side' },
+    w: 80, h: 50, plateFs: 1, rw: 2.32,
+    bottom: { hand: { cx: 40.6, cy: 44.8, dir: [1, 0], w: 3.25, rot: 0, max: 47 }, river: { cx: 40, cy: 29.4, along: [1, 0], grow: [0, 1] }, plate: [1.8, 42.4], shout: [40, 37.4], seal: 'n e', tag: 'up' },
+    right: { hand: { cx: 74.6, cy: 24.6, dir: [0, -1], w: 2.2, rot: -90, max: 34 }, river: { cx: 48.2, cy: 23.6, along: [0, -1], grow: [1, 0] }, plate: [64.8, 42.4], shout: [65, 24.5], seal: 'n w', tag: 'up' },
+    top: { hand: { cx: 40, cy: 5.4, dir: [-1, 0], w: 2.55, rot: 0, max: 48 }, river: { cx: 40, cy: 16.6, along: [1, 0], grow: [0, -1] }, plate: [64.8, 1.8], shout: [40, 11.6], seal: 's w', tag: '' },
+    left: { hand: { cx: 5.4, cy: 24.6, dir: [0, 1], w: 2.2, rot: 90, max: 34 }, river: { cx: 31.8, cy: 23.6, along: [0, 1], grow: [-1, 0] }, plate: [1.8, 1.8], shout: [15, 24.5], seal: 's e', tag: 'side' },
     con: { cx: 40, cy: 23, w: 11.6, h: 9.2 },
     ctl: 'left:50%;top:75.2%', wait: 'left:50%;top:76.8%', ban: 23, pill: [63.4, 38.6],
   },
   port: {
-    w: 50, h: 70, plateFs: 1.15,
+    w: 50, h: 70, plateFs: 1.15, rw: 2.12,
     bottom: { hand: { cx: 25, cy: 62.8, dir: [1, 0], w: 3.3, rot: 0, max: 47.6 }, river: { cx: 25, cy: 35.6, along: [1, 0], grow: [0, 1] }, plate: [1, 52.4], shout: [25, 46.5], seal: 'c', tag: 'up' },
     right: { hand: { cx: 47.05, cy: 31, dir: [0, -1], w: 1.9, rot: -90, max: 42 }, river: { cx: 33.2, cy: 30, along: [0, -1], grow: [1, 0] }, plate: [33.6, 1], shout: [40.5, 30], seal: 'c', tag: '' },
     top: { hand: { cx: 25, cy: 11, dir: [-1, 0], w: 2.1, rot: 0, max: 45 }, river: { cx: 25, cy: 24.4, along: [1, 0], grow: [0, -1] }, plate: [17.3, 1], shout: [25, 15.5], seal: 'c', tag: '' },
@@ -86,7 +86,6 @@ const LAYOUTS = {
     ctl: 'left:50%;top:73.14%;translate:-50% -100%', wait: 'left:50%;top:73.14%;translate:-50% -100%', ban: 30, pill: [48.6, 45.4],
   },
 };
-const RW = 2.02; // 牌河里一张牌的宽
 const TH = 1.36; // 牌高 / 牌宽
 
 // ---------- 样式 ----------
@@ -525,6 +524,7 @@ export default {
       const out = [];
       const side = pos === 'left' || pos === 'right';
       const rot = side ? LY[pos].hand.rot : 0;
+      const RW = LY.rw; // 牌河里一张牌的宽
       const alongStep = RW + 0.04, crossStep = RW * TH + 0.08;
       const ld = view.lastDiscard;
       river.forEach((r, k) => {

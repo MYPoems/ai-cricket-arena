@@ -87,6 +87,10 @@ export async function matchView(root, id, { characters, session }) {
   };
   resetClock();
   let waitingHuman = d.waitingHuman;
+  // 这一步到点的本机时间（服务端给的是剩余毫秒，不依赖两边时钟一致）
+  let turnEnd = null;
+  const syncDeadline = () => { turnEnd = d.status === 'running' && d.waitingHuman && d.waitingLeft != null ? Date.now() + d.waitingLeft : null; };
+  syncDeadline();
   let offerNext = false;
   let replaying = null; // { timer }
   let speed = Number(query.get('speed')) || 1;
@@ -316,6 +320,27 @@ export async function matchView(root, id, { characters, session }) {
     if (ws.length === 1) return `${nm(ws[0]) && seats.filter((s) => nm(s) === nm(ws[0])).length === 1 ? nm(ws[0]) : seatName(ws[0])}胜`;
     return `${ws.map(seatName).join('、')}胜`;
   }
+  // ---------- 托管 ----------
+  const AUTO_TEXT = { manual: '托管中，系统替你出牌', timeout: '出牌超时，系统托管中', offline: '刚才断线了，系统托管中' };
+  let autoBar = null;
+  const setAuto = async (on) => {
+    const r = await post(`/matches/${id}/control`, { op: on ? 'auto_on' : 'auto_off' });
+    d.auto = r.auto || {};
+    renderStatus();
+  };
+  function paintAuto() {
+    const reason = d.status === 'running' && humanSeat ? d.auto?.[humanSeat] : null;
+    if (!reason) { autoBar?.remove(); autoBar = null; return; }
+    const host = stage.el.closest('.board-wrap') || stage.el.closest('.stage') || boardWrap;
+    if (!autoBar) {
+      autoBar = h('div', { class: 'auto-bar', role: 'status' }, h('span', { class: 't' }),
+        h('button', { type: 'button', class: 'btn sm primary', onclick: guard(() => setAuto(false)) }, '取消托管'));
+    }
+    const t = AUTO_TEXT[reason] || AUTO_TEXT.manual;
+    if (autoBar.firstChild.textContent !== t) autoBar.firstChild.textContent = t;
+    if (autoBar.parentNode !== host) host.append(autoBar);
+  }
+
   function endCard() {
     // 牌桌、对称座位版式另建了一层容器，挂在画面真正所在的那一层上
     const host = stage.el.closest('.board-wrap') || stage.el.closest('.stage') || boardWrap;
@@ -821,6 +846,12 @@ export async function matchView(root, id, { characters, session }) {
     return `${o === 'w' ? '你赢了' : o === 'l' ? '你输了' : '和局'} · ${resultText(d, d.seatNames)}`;
   }
   /** 进行中的状态字：谁在想、谁在发言、投票进度——不再只显示「…」 */
+  /** 别的座位在托管：状态字后面带一句（谁在托管大家都看得到） */
+  function autoNote() {
+    const others = seats.filter((s) => s !== humanSeat && d.auto?.[s]);
+    return others.length ? ` · ${others.map((s) => (duo ? `${seats.indexOf(s) + 1} 号` : seatName(s))).join('、')}托管中` : '';
+  }
+
   function liveStatus() {
     if (paused) return '已暂停';
     if (waitingHuman) return '轮到你';
@@ -913,6 +944,43 @@ export async function matchView(root, id, { characters, session }) {
   // 录像、音效、导出、链接：手机上（≤480）收进「⋯」菜单
   sb.record = ibtn('record', '录成视频（按当前回放速度）', record, 'bar-extra');
   sb.sound = ibtn('sound', '关掉音效', toggleSound, 'bar-extra');
+  // 出牌倒计时（轮到我时）；托管（牌类游戏）；全屏（手机上也直接显示，iPhone 的 Safari 不支持网页全屏就不显示）
+  sb.timer = h('span', { class: 'turn-timer', role: 'timer', hidden: true });
+  sb.auto = h('button', { type: 'button', class: 'btn sm', onclick: guard(() => setAuto(!d.auto?.[humanSeat])) }, '托管');
+  const fsTarget = () => root;
+  const toggleFs = async () => {
+    try {
+      if (document.fullscreenElement) await document.exitFullscreen();
+      else await fsTarget().requestFullscreen({ navigationUI: 'hide' });
+    } catch (e) { toast(`没能全屏：${e.message}`, true); }
+  };
+  sb.fs = document.fullscreenEnabled ? ibtn('expand', '全屏', toggleFs) : null;
+  const onFs = () => {
+    const on = document.fullscreenElement === fsTarget();
+    root.classList.toggle('fs', on);
+    if (sb.fs) setIcon(sb.fs, on ? 'shrink' : 'expand', on ? '退出全屏（Esc）' : '全屏');
+    dispatchEvent(new Event('resize')); // 画面按新尺寸重新量
+  };
+  document.addEventListener('fullscreenchange', onFs);
+  cleanups.push(() => {
+    document.removeEventListener('fullscreenchange', onFs);
+    root.classList.remove('fs');
+    if (document.fullscreenElement === fsTarget()) document.exitFullscreen().catch(() => {});
+  });
+  const paintTimer = () => {
+    const mine = d.status === 'running' && !paused && !!humanSeat && waitingHuman === humanSeat && turnEnd !== null && !d.auto?.[humanSeat];
+    const leftS = mine ? Math.max(0, Math.ceil((turnEnd - Date.now()) / 1000)) : null;
+    // 牌类一直显示；其他游戏每步 10 分钟，只在最后一分钟显示
+    const show = leftS !== null && (!!d.turnLimit || leftS <= 60);
+    vis(sb.timer, show);
+    if (!show) return;
+    setText(sb.timer, `${leftS} 秒`);
+    sb.timer.classList.toggle('urgent', leftS <= 5);
+    const tip = `这一步还剩 ${leftS} 秒，到点由系统代打${d.turnLimit ? '并转托管' : ''}`;
+    if (sb.timer.title !== tip) sb.timer.title = tip;
+  };
+  const timerTick = setInterval(paintTimer, 250);
+  cleanups.push(() => clearInterval(timerTick));
   sb.mRecord = h('button', { type: 'button', role: 'menuitem', onclick: guard(record) }, icon('record'), '录成视频');
   sb.mSound = h('button', { type: 'button', role: 'menuitem', onclick: toggleSound });
   sb.more = h('details', { class: 'stage-more' },
@@ -928,8 +996,8 @@ export async function matchView(root, id, { characters, session }) {
   });
   sb.ctrl = h('div', { class: 'bar-ctrl' },
     sb.play, sb.speed, sb.prev, sb.next, sb.latest, sb.sep1,
-    sb.pause, sb.pov, sb.step, sb.accept, sb.offer, sb.resign, sb.abort, sb.flip, sb.report, sb.again, sb.swap, sb.sep2,
-    sb.record, sb.sound,
+    sb.timer, sb.pause, sb.pov, sb.step, sb.accept, sb.offer, sb.auto, sb.resign, sb.abort, sb.flip, sb.report, sb.again, sb.swap, sb.sep2,
+    sb.record, sb.sound, sb.fs,
     h('a', { class: 'icon-btn bar-extra', title: '导出记录', 'aria-label': '导出记录', href: `/api/matches/${id}/export` }, icon('download')),
     ibtn('link', '复制这一步的链接（打开就停在这一步）', copyLink, 'bar-extra'),
     sb.more);
@@ -942,7 +1010,7 @@ export async function matchView(root, id, { characters, session }) {
     const reviewing = viewPly !== null;
     // 复盘、回放时不显示「思考中」：看的是过去的局面
     const status = reviewing && viewPly < n ? (replaying ? '回放中' : '复盘中')
-      : running ? liveStatus() : shortRes(myResult() || resultText(d, d.seatNames));
+      : running ? liveStatus() + autoNote() : shortRes(myResult() || resultText(d, d.seatNames));
     const po = pendingOffer();
     const prevStatus = lastStatus;
     lastStatus = status;
@@ -963,6 +1031,7 @@ export async function matchView(root, id, { characters, session }) {
       [sb.accept, running && waitingHuman && po && po.seat !== waitingHuman],
       [sb.offer, running && waitingHuman && d.features?.draw && !po],
       // 认输键：在局的真人整盘都显示（轮到自己才可点），不在轮到时才冒出来——冒出来那一下会把旁边的键挤动
+      [sb.auto, running && !!humanSeat && !!d.turnLimit],
       [sb.resign, running && (!!humanSeat || !!waitingHuman)],
       [sb.abort, running && d.mode === 'casual' && canControl],
       [sb.flip, true],
@@ -971,6 +1040,12 @@ export async function matchView(root, id, { characters, session }) {
       [sb.swap, canRematch() && two],
     ].filter(([el]) => el);
     for (const [el, on] of keys) vis(el, on);
+    const autoOn = !!(humanSeat && d.auto?.[humanSeat]);
+    sb.auto.className = `btn sm${autoOn ? ' primary' : ''}`;
+    setText(sb.auto, autoOn ? '取消托管' : '托管');
+    sb.auto.title = autoOn ? '收回来自己出牌' : `交给系统代打，随时可以取消${d.turnLimit ? `；每步超过 ${Math.round(d.turnLimit / 1000)} 秒也会自动托管` : ''}`;
+    paintTimer();
+    paintAuto();
     if (sb.resign) {
       const can = running && !!waitingHuman;
       sb.resign.disabled = !can;
@@ -1141,7 +1216,8 @@ export async function matchView(root, id, { characters, session }) {
       const best = ply === 0 ? d.options?.startEval?.best : turns.get(ply)?.eval?.raw?.best;
       if (best) arrows.push({ iccs: best, kind: 'best' });
     }
-    const movable = latest && d.status === 'running' && waitingHuman && !paused ? waitingHuman : null;
+    // 托管中不给操作区（系统马上代打，按钮留着会和系统抢）
+    const movable = latest && d.status === 'running' && waitingHuman && !paused && !d.auto?.[waitingHuman] ? waitingHuman : null;
     // live：正在看实时局面（不是复盘、回放）；牌桌画面复盘时据此不显示「轮到谁」
     stage.render(view, { movable, actions: movable ? d.humanActions : null, arrows, animate, replay: !!replaying, live: latest && d.status === 'running', viewer: d.viewer, players: playerInfo, clock: latest && d.status === 'running' ? Object.fromEntries(clock) : {}, dock: dockEl });
     // 棋类快速回放：走子动画跟着倍速加快，不会一步还没走完下一步就来了（牌桌游戏的动画和停顿是对齐好的，不动）
@@ -1604,6 +1680,7 @@ export async function matchView(root, id, { characters, session }) {
 
   async function refresh() {
     d = await api(`/matches/${id}${d.viewer ? `?viewer=${d.viewer}` : ''}`);
+    syncDeadline();
     viewCache.clear();
     for (const t of d.turns) turns.set(t.ply, t);
   }
@@ -1724,6 +1801,13 @@ export async function matchView(root, id, { characters, session }) {
         d.options.draw = e.draw;
         renderStatus();
         renderThoughts();
+        break;
+      case 'auto':
+        d.auto = e.auto || {};
+        // 我的托管开关变了：这一步的到点时间跟着变（取消托管后重新计时）
+        if (e.seat === humanSeat) { await refresh(); waitingHuman = d.waitingHuman; }
+        renderStatus();
+        renderStage(false);
         break;
       case 'control':
         paused = e.paused;

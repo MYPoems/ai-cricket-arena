@@ -51,7 +51,7 @@ export function routes(router, { db, hub, arena, matchmaker, compare, evaluator 
     // user:<id> 是私人频道（天梯匹配到对局的通知），只能订阅自己的；订阅着它也就是「这个人开着网站」（自动匹配据此判断真人在线）
     const chans = [...new Set(String(query.ch || 'lobby').slice(0, 4000).split(','))].filter((c) => CHANNEL_RE.test(c)).filter((c) => c !== 'admin' || isAdmin(user))
       .filter((c) => !c.startsWith('user:') || (user && c === `user:${user.id}`)).slice(0, 40); // 一个标签页的所有订阅合成一条连接（浏览器对同一站点只开 6 条长连接）
-    hub.subscribe(req, res, chans);
+    hub.subscribe(req, res, chans, user?.id || null);
   });
 
   // ---------- 密钥与设置 ----------
@@ -254,7 +254,8 @@ export function routes(router, { db, hub, arena, matchmaker, compare, evaluator 
     const seat = mySeat(params.id, user);
     const player = !!seat;
     const owner = isAdmin(user) || m.created_by === user.id;
-    if (['resign', 'accept_draw'].includes(body.op) ? !player : !owner) throw new HttpError(403, ['resign', 'accept_draw'].includes(body.op) ? '你不在这盘对局里' : '只有开局的人和庄家能暂停或中止这盘');
+    const mine = ['resign', 'accept_draw', 'auto_on', 'auto_off'].includes(body.op); // 座位上的真人自己的操作
+    if (mine ? !player : !owner) throw new HttpError(403, mine ? '你不在这盘对局里' : '只有开局的人和庄家能暂停或中止这盘');
     return arena.control(params.id, body.op, seat);
   });
 

@@ -127,6 +127,56 @@ export class Arena {
     this.live = new Map(); // matchId → 运行时状态
     this.agentTurns = new Map(); // 自带 agent：characterId → 等它来领的回合列表
     this.agentWaiters = new Map(); // characterId → 正在长轮询的请求
+    // 断线：账号最后一条连接断开的时间。过了宽限期还没回来，牌类游戏转系统托管，回来自动取消（见 #offlineCheck）
+    this.offlineSince = new Map();
+    hub.onPresence?.((uid, on) => this.#presenceChanged(uid, on));
+  }
+
+  // ---------- 托管、断线 ----------
+
+  /** 打开 / 关掉某个真人座位的托管；reason：manual（本人点的）、timeout（超时）、offline（断线），null 为取消 */
+  #setAuto(matchId, rt, seat, reason) {
+    if ((rt.auto[seat] || null) === (reason || null)) return;
+    if (reason) rt.auto[seat] = reason; else delete rt.auto[seat];
+    this.hub.emit(`match:${matchId}`, { type: 'auto', seat, on: !!reason, reason: reason || null, auto: { ...rt.auto } });
+    rt.humans[seat]?.autoChanged?.();
+  }
+
+  /** 这个账号坐在哪些进行中的对局里（真人座位） */
+  liveSeatsOf(userId) {
+    const out = [];
+    for (const [matchId, rt] of this.live) {
+      if (!rt.m) continue;
+      const seat = this.seatOf(rt.m, userId);
+      if (seat) out.push({ matchId, game: rt.m.game, seat, auto: rt.auto[seat] || null, myTurn: !!rt.humans[seat] });
+    }
+    return out;
+  }
+
+  #presenceChanged(uid, on) {
+    if (on) {
+      this.offlineSince.delete(uid);
+      // 回来了：断线转的托管自动取消（本人点的、超时转的托管要本人取消）
+      for (const { matchId, seat, auto } of this.liveSeatsOf(uid)) if (auto === 'offline') this.#setAuto(matchId, this.live.get(matchId), seat, null);
+      return;
+    }
+    this.offlineSince.set(uid, Date.now());
+    setTimeout(() => this.#offlineCheck(uid), OFFLINE_GRACE_MS + 50).unref?.();
+    setTimeout(() => this.#offlineCheck(uid), OFFLINE_SLOW_MS + 50).unref?.();
+  }
+
+  /** 断线超过宽限期：牌类（有出牌限时的游戏）转托管；其他三人以上的游戏，断线 90 秒后正等着他的这一步由系统代打；两人对局不因断线判负，照常按每步限时 */
+  #offlineCheck(uid) {
+    const since = this.offlineSince.get(uid);
+    if (since === undefined || this.hub.online?.(uid)) return;
+    const gone = Date.now() - since;
+    for (const { matchId, seat } of this.liveSeatsOf(uid)) {
+      const rt = this.live.get(matchId);
+      const game = getGame(rt.m.game);
+      if (game.features?.turnLimit) {
+        if (gone >= OFFLINE_GRACE_MS && !rt.auto[seat]) this.#setAuto(matchId, rt, seat, 'offline');
+      } else if (gone >= OFFLINE_SLOW_MS && Object.keys(rt.m.seats).length > 2) rt.humans[seat]?.takeover?.('offline');
+    }
   }
 
   // ---------- 自带 agent 选手 ----------
@@ -235,6 +285,8 @@ export class Arena {
         // 有 agent 的排位赛也隐藏：对手的思考实时公开等于把计划告诉 agent。都在对局结束后公开
         hideThoughts: (outsiders > 0 && game.features?.hidden) || (agents.length > 0 && mode === 'ranked') ? true : options.hideThoughts ?? humans.length > 0,
         ...(options.series ? { series: options.series } : {}),
+        // 真人每步限时（秒）：不给就按游戏的默认（牌类 features.turnLimit，其他 10 分钟）
+        ...(Number(options.humanTimeout) > 0 ? { humanTimeout: Math.min(600, Number(options.humanTimeout)) } : {}),
       },
       seats: Object.fromEntries(seatIds.map((s) => [s, seats[s]])),
       actions: [],
@@ -298,7 +350,7 @@ export class Arena {
     if (this.live.has(matchId)) return;
     const m = this.db.get('SELECT * FROM matches WHERE id = ?', matchId);
     if (!m || m.status !== 'running') return;
-    const rt = { paused: false, step: false, abort: new AbortController(), humans: {}, partials: {}, wake: null };
+    const rt = { m, paused: false, step: false, abort: new AbortController(), humans: {}, partials: {}, wake: null, auto: {} };
     this.live.set(matchId, rt);
     this.#loop(m, rt)
       .catch((err) => {
@@ -520,13 +572,35 @@ export class Arena {
 
   #humanMove({ m, rt, game, state, seat, offer }) {
     const secret = !!rt.partials[seat]?.secret;
+    // 牌类游戏（features.turnLimit）：每步限时几十秒，超时由系统接管这一步并转托管；托管中系统直接代打
+    const autoOk = !!game.features?.turnLimit;
+    const limit = turnLimitMs(m, game);
     return new Promise((resolve, reject) => {
-      const onAbort = () => { clearTimeout(timer); reject(new Abort()); };
-      const done = (v) => { clearTimeout(timer); rt.abort.signal.removeEventListener('abort', onAbort); delete rt.humans[seat]; resolve(v); };
+      let timer = null, autoTimer = null;
+      const clear = () => { clearTimeout(timer); clearTimeout(autoTimer); };
+      const onAbort = () => { clear(); reject(new Abort()); };
+      const done = (v) => { clear(); rt.abort.signal.removeEventListener('abort', onAbort); delete rt.humans[seat]; resolve(v); };
+      /** 系统接管这一步：why = auto（托管中）、timeout（超时）、offline（断线） */
+      const takeover = async (why) => {
+        if (rt.humans[seat] !== handle || handle.taking) return;
+        handle.taking = true;
+        let action = autoOk ? await autoMove(game, state, seat) : null;
+        if (action === null) action = await timeoutAction(game, state, seat, Object.keys(m.seats).length).catch(() => null);
+        if (rt.humans[seat] !== handle) return; // 对局已中止
+        if (autoOk && why === 'timeout') this.#setAuto(m.id, rt, seat, 'timeout');
+        done(action !== null ? { action, timeout: true, text: TAKEOVER_NOTE[why] } : { forfeit: `${game.seatName(seat)}超时` });
+      };
+      const arm = () => {
+        clearTimeout(timer);
+        handle.at = Date.now();
+        handle.deadline = handle.at + limit;
+        timer = setTimeout(() => takeover('timeout'), limit);
+      };
       const handle = {
-        at: Date.now(),
-        seat, offer: !!offer,
+        at: Date.now(), deadline: Date.now() + limit, limit,
+        seat, offer: !!offer, takeover, taking: false,
         resolve: (action, offerDraw = false) => {
+          if (handle.taking) throw new HttpError(409, '系统已经替你出了这一步');
           const acts = game.actions(state, seat);
           if (!acts || !acts.some((a) => a.id === action)) {
             // 自由文本，或不在代表性列表里的行动（例如德州的任意加注额）：交给游戏规则校验
@@ -539,20 +613,37 @@ export class Arena {
           done({ acceptDraw: true });
         },
         resign: () => done({ forfeit: `${game.seatName(seat)}认输` }),
+        // 托管开了：稍停一下就代打（像人出牌的节奏）；关了：这一步重新计时
+        autoChanged: () => {
+          clearTimeout(autoTimer);
+          if (handle.taking) return;
+          if (rt.auto[seat]) autoTimer = setTimeout(() => takeover('auto'), AUTO_PLAY_MS[0] + Math.random() * (AUTO_PLAY_MS[1] - AUTO_PLAY_MS[0]));
+          else arm();
+        },
       };
       rt.humans[seat] = handle;
       // 限时：挂机不能卡住整局（成熟平台都有回合计时和托管）
-      const limit = Math.max(30, Number(m.options.humanTimeout) || HUMAN_TIMEOUT_S) * 1000;
-      const timer = setTimeout(async () => {
-        if (rt.humans[seat] !== handle) return;
-        const action = await timeoutAction(game, state, seat, Object.keys(m.seats).length).catch(() => null);
-        if (rt.humans[seat] !== handle) return; // 算托管行动的工夫里本人出手了，或对局已中止
-        done(action !== null ? { action, timeout: true, text: TIMEOUT_NOTE } : { forfeit: `${game.seatName(seat)}超时` });
-      }, limit);
+      arm();
       // 私密行动（夜里）不说是谁：各位玩家收到后刷新详情，只有轮到的那位能拿到自己的行动
       this.hub.emit(`match:${m.id}`, { type: 'human_turn', seat: secret ? null : seat });
       rt.abort.signal.addEventListener('abort', onAbort, { once: true });
+      if (rt.auto[seat] && autoOk) handle.autoChanged();
+      else {
+        // 轮到时人已经断线一阵子了：按断线规则处理（见 #offlineCheck）
+        const owner = this.#ownerOf(m, seat);
+        const since = owner ? this.offlineSince.get(owner) : undefined;
+        if (since !== undefined && !this.hub.online?.(owner) && (autoOk || Object.keys(m.seats).length > 2)) {
+          const wait = (autoOk ? OFFLINE_GRACE_MS : OFFLINE_SLOW_MS) - (Date.now() - since);
+          setTimeout(() => this.#offlineCheck(owner), Math.max(0, wait) + 50).unref?.();
+        }
+      }
     });
+  }
+
+  /** 真人座位是哪个账号的 */
+  #ownerOf(m, seat) {
+    const c = this.db.get('SELECT kind, owner_id FROM characters WHERE id = ?', m.seats[seat]);
+    return c?.kind === 'human' ? c.owner_id : null;
   }
 
   /**
@@ -789,6 +880,12 @@ ${game.noun || '行动'}：${act}`;
     const rt = this.live.get(matchId);
     if (!rt) throw new HttpError(409, '对局不在进行中');
     const h = this.#humanHandler(rt, seat);
+    if (op === 'auto_on' || op === 'auto_off') {
+      if (!seat) throw new HttpError(403, '你不在这盘对局里');
+      if (!getGame(rt.m.game).features?.turnLimit) throw new HttpError(400, '这个游戏没有托管');
+      this.#setAuto(matchId, rt, seat, op === 'auto_on' ? 'manual' : null);
+      return { auto: { ...rt.auto } };
+    }
     if (op === 'pause') rt.paused = true;
     else if (op === 'resume') { rt.paused = false; rt.wake?.(); }
     else if (op === 'step') { rt.step = true; rt.wake?.(); }
@@ -886,6 +983,10 @@ ${game.noun || '行动'}：${act}`;
       waitingHuman: humanH ? humanH.seat : null,
       // 已经想了多久（毫秒）：浏览器用它接上思考计时，不依赖两边的时钟一致
       waitingElapsed: humanH ? Date.now() - humanH.at : null,
+      // 这一步还剩多久（毫秒）、每步限时；托管中的座位（谁在托管大家都看得到，和成熟平台一样）
+      waitingLeft: humanH ? Math.max(0, humanH.deadline - Date.now()) : null,
+      turnLimit: game.features?.turnLimit ? turnLimitMs(m, game) : null,
+      auto: { ...(rt?.auto || {}) },
       humanActions: humanH ? game.actions(state, humanH.seat) : null,
       drawOfferToHuman: humanH?.offer || false,
       seatOrder: Object.keys(m.seats),
@@ -941,9 +1042,28 @@ export const AUTO_DELAY_MS = [1500, 5000];
 
 /** 真人每一步的限时（秒）：超时按默认行动（过牌、不出、不叫、弃票、弃牌）；没有默认行动时，多人局由系统代打这一步，两人局判超时负 */
 const HUMAN_TIMEOUT_S = 600;
+/** 每步限时（毫秒）：对局选项 humanTimeout（秒）优先，其次游戏的 features.turnLimit（牌类几十秒），默认 10 分钟 */
+export function turnLimitMs(m, game) {
+  const s = Number(m.options?.humanTimeout) || game.features?.turnLimit || HUMAN_TIMEOUT_S;
+  return Math.max(game.features?.turnLimit ? 5 : 30, s) * 1000;
+}
+/** 断线宽限：牌类断线 15 秒转托管；其他三人以上的游戏断线 90 秒后由系统代打正等着他的那一步 */
+export const OFFLINE_GRACE_MS = Number(process.env.ARENA_OFFLINE_GRACE_MS) || 15000;
+export const OFFLINE_SLOW_MS = Number(process.env.ARENA_OFFLINE_SLOW_MS) || 90000;
+/** 托管时代打一步前的停顿（毫秒） */
+const AUTO_PLAY_MS = [700, 1400];
+const TAKEOVER_NOTE = { timeout: '（超时，系统代为行动）', auto: '（托管，系统代为行动）', offline: '（断线，系统代为行动）' };
+/** 托管、超时接管用内置 AI 的中档；不合法或出错时返回 null（再退回 timeoutAction） */
+async function autoMove(game, state, seat) {
+  try {
+    const a = await game.builtinMove(state, seat, { level: 2, depth: 2 });
+    if (a === null || a === undefined) return null;
+    game.apply(state, seat, a);
+    return a;
+  } catch { return null; }
+}
 const TIMEOUT_SAFE = ['check', '不出', '叫0', 'none', 'fold', 'pass'];
 const TIMEOUT_SPEECH = ['（超时，没有发言）', '过。'];
-const TIMEOUT_NOTE = '（超时，系统代为行动）';
 /** 自带 agent 一个回合里推送的思考合计上限（字） */
 const AGENT_THINK_MAX = 20000;
 

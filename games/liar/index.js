@@ -396,7 +396,8 @@ const game = {
   id: 'liar',
   name: '吹牛左轮',
   players: { min: 2, max: 4, default: 4 },
-  features: { hidden: true, winbar: false, draw: false },
+  // turnLimit：真人每步限时（秒），超时由系统接管这一步并转托管
+  features: { hidden: true, winbar: false, draw: false, turnLimit: 30 },
   noun: '出牌',
 
   seats: (n = 4) => SEATS.slice(0, n),

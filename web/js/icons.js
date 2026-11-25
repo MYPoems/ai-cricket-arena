@@ -21,6 +21,8 @@ const PATHS = {
   moon: '<path d="M20.5 13.6A8.5 8.5 0 1 1 10.4 3.5a6.6 6.6 0 0 0 10.1 10.1z"/>',
   info: '<circle cx="12" cy="12" r="8.5"/><path d="M12 11v5.5"/><path d="M12 7.6v.1"/>',
   close: '<path d="M6 6l12 12"/><path d="M18 6 6 18"/>',
+  expand: '<path d="M4 9V4h5"/><path d="M20 9V4h-5"/><path d="M4 15v5h5"/><path d="M20 15v5h-5"/>',
+  shrink: '<path d="M9 4v5H4"/><path d="M15 4v5h5"/><path d="M9 20v-5H4"/><path d="M15 20v-5h5"/>',
   check: '<path d="M4.5 12.5l5 5 10-11"/>',
   'chevron-left': '<path d="M15 5l-7 7 7 7"/>',
   'chevron-right': '<path d="M9 5l7 7-7 7"/>',

@@ -49,6 +49,8 @@ export async function lobbyView(root, { go, session, meta, early }) {
   let noCricket = false;
   let filter = pref('game') || 'all';
   let sort = pref('sort') || 'hot';
+  let online = []; // 在线的真人玩家（只给登录用户看）
+  const onlineBox = h('div');
 
   const hero = h('section', { class: 'card framed hero' });
   const side = h('aside', { class: 'col' });
@@ -137,10 +139,28 @@ export async function lobbyView(root, { go, session, meta, early }) {
           h('a', { class: 'btn', href: '#/new' }, '我来挑战一只蛐蛐'),
           h('a', { class: 'btn', href: '#/rooms' }, '开一个组局'),
           h('a', { class: 'btn', href: '#/agent-guide' }, '让我的 Agent 上场'))),
+      onlineBox,
       data.tops.length ? h('div', { class: 'card quiet pad col', style: { gap: '8px' } }, h('div', { class: 'label' }, '天梯榜首'),
         h('div', { class: 'side-list' }, ...data.tops.slice(0, 6).map((t) => h('a', { class: 'it', href: `#/characters/${t.id}` }, h('span', { class: 'k' }, t.gameName), h('span', { class: 'row', style: { gap: '8px', flexWrap: 'nowrap', minWidth: 0 } }, coin(t, 'sm'), h('b', { style: { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, cleanName(t.name))), h('span', { class: 'num' }, t.points))))) : null,
       data.log.length ? h('div', { class: 'card quiet pad col', style: { gap: '8px' } }, h('div', { class: 'label' }, '动态'),
         h('div', { class: 'feed' }, ...data.log.map((x) => h('div', { class: /晋级|王者|连胜|爆冷/.test(x.text) ? 'hot' : '' }, x.text)))) : null);
+  }
+
+  // ---------- 在线玩家 ----------
+  function drawOnline() {
+    const others = online.filter((u) => !u.me);
+    onlineBox.replaceChildren(guest ? '' : h('div', { class: 'card quiet pad col', style: { gap: '8px' } },
+      h('div', { class: 'label' }, `在线玩家 · ${others.length}`),
+      others.length
+        ? h('ul', { class: 'online-list' }, ...others.slice(0, 12).map((u) => h('li', {}, h('span', { class: 'dot', 'aria-hidden': 'true' }), h('span', { class: 'nm' }, u.name),
+          u.playing ? h('a', { class: 'small', href: `#/match/${u.playing.matchId}` }, `${u.playing.gameName}对局中`) : h('small', { class: 'muted' }, '空闲'))))
+        : h('div', { class: 'small muted' }, '现在只有你在线。'),
+      others.length ? h('a', { class: 'small', href: '#/rooms' }, '开一个组局，就能邀请他们来 →') : null));
+  }
+  async function loadOnline() {
+    if (guest) return;
+    try { online = await api('/online'); } catch { online = []; }
+    if (root.isConnected) drawOnline();
   }
 
   // ---------- 等人入座的组局 ----------
@@ -307,6 +327,7 @@ export async function lobbyView(root, { go, session, meta, early }) {
       // 思考的流式输出（delta）、无效着法：大厅上不显示，直接丢掉
       if (e.type === 'delta' || e.type === 'illegal') return;
       if (e.ch === 'lobby') {
+        if (e.type === 'presence') { loadOnline(); return; }
         if (e.type === 'match_created' || e.type === 'match_finished' || e.type === 'room_updated') reload();
         return;
       }
@@ -342,6 +363,7 @@ export async function lobbyView(root, { go, session, meta, early }) {
   function drawAll() { drawHero(); drawSide(); drawRooms(); drawFilters(); drawGrid(); drawRecent(); }
   drawAll();
   subscribe();
+  loadOnline();
   // 画完再问一句「我有没有蛐蛐」（不挡首屏）：没有的话，快速开始第一项换成「养第一只蛐蛐」
   // 已经知道养过了就不再问（这个标签页里只问到「有」为止）
   if (!guest && !hasCricket) api('/characters').then((list) => { hasCricket = list.some((c) => c.mine && !c.system && c.kind !== 'human'); noCricket = !hasCricket; if (noCricket && root.isConnected) drawSide(); }).catch(() => {});

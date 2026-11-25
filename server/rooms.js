@@ -3,11 +3,12 @@
 
 import { getGame } from '../games/index.js';
 import { newId, now } from './db.js';
-import { getCharacter } from './characters.js';
+import { getCharacter, humanCharacter } from './characters.js';
 import { HttpError } from './http.js';
 import { canManage } from './auth.js';
 
 const OPEN_HOURS = 6; // 开着没开局的房间 6 小时后自动关闭
+const INVITE_GAP_MS = 20000; // 同一个组局对同一个人，20 秒内只发一次邀请
 
 export function roomRoutes(router, { db, hub, arena }) {
   const get = (id) => {
@@ -48,6 +49,72 @@ export function roomRoutes(router, { db, hub, arena }) {
     const cutoff = new Date(Date.now() - OPEN_HOURS * 3600e3).toISOString();
     db.run("UPDATE rooms SET status = 'closed', updated_at = ? WHERE status = 'open' AND updated_at < ?", now(), cutoff);
   }
+
+  // ---------- 在线真人、邀请 ----------
+
+  /** 进行中的对局里我坐着的真人座位（断线重连后顶栏提示「回到对局」） */
+  const liveOf = (uid) => arena.liveSeatsOf(uid).map((x) => {
+    let gameName = x.game;
+    try { gameName = getGame(x.game).name; } catch { /* 游戏已下线 */ }
+    return { ...x, gameName };
+  });
+
+  router.get('/api/me/live', ({ user }) => liveOf(user.id), { auth: 'user' });
+
+  /** 在线的真人玩家（登录用户开着网站）：名字、在不在对局里。只给登录用户看，游客看不到谁在线 */
+  router.get('/api/online', ({ user }) => {
+    const ids = hub.onlineIds?.() || [];
+    if (!ids.length) return [];
+    const rows = db.all(`SELECT id, name FROM users WHERE status = 'active' AND id IN (${ids.map(() => '?').join(',')})`, ...ids);
+    return rows.map((u) => {
+      const live = liveOf(u.id);
+      return { id: u.id, name: u.name, me: u.id === user.id, playing: live.length ? { matchId: live[0].matchId, gameName: live[0].gameName } : null };
+    }).sort((a, b) => Number(b.me) - Number(a.me) || Number(!!a.playing) - Number(!!b.playing) || String(a.name).localeCompare(String(b.name), 'zh'));
+  }, { auth: 'user' });
+
+  const lastInvite = new Map(); // `${roomId}:${userId}` → 时间
+  /** 邀请在线的真人来组局：房主或已经在座的人可以邀请；对方收到弹窗，点「加入」就本人入座 */
+  router.post('/api/rooms/:id/invite', ({ params, body, user }) => {
+    const r = get(params.id);
+    if (r.status !== 'open') throw new HttpError(409, '这个组局已经开局或关闭了');
+    const inRoom = Object.values(r.seats).some((x) => x.userId === user.id);
+    if (r.host_id !== user.id && user.role !== 'admin' && !inRoom) throw new HttpError(403, '房主或已经入座的人才能邀请');
+    const target = db.get("SELECT id, name FROM users WHERE id = ? AND status = 'active'", String(body.userId || ''));
+    if (!target) throw new HttpError(404, '没有这个玩家');
+    if (target.id === user.id) throw new HttpError(400, '不用邀请自己');
+    if (!hub.online?.(target.id)) throw new HttpError(409, `${target.name}现在不在线`);
+    const human = humanCharacter(db, target.id);
+    if (human && Object.values(r.seats).some((x) => x.characterId === human.id)) throw new HttpError(409, `${target.name}已经在这一局里了`);
+    const game = getGame(r.game);
+    if (game.seats(r.players).every((s) => r.seats[s])) throw new HttpError(409, '座位已经坐满了');
+    const key = `${r.id}:${target.id}`;
+    if (Date.now() - (lastInvite.get(key) || 0) < INVITE_GAP_MS) throw new HttpError(429, `刚邀请过${target.name}，等一会儿再邀请`);
+    lastInvite.set(key, Date.now());
+    if (lastInvite.size > 2000) for (const [k, t] of lastInvite) if (Date.now() - t > INVITE_GAP_MS) lastInvite.delete(k);
+    const v = view(r);
+    hub.emit(`user:${target.id}`, { type: 'room_invite', from: user.name, room: { id: v.id, title: v.title, gameName: v.gameName, players: v.players, filled: v.filled } });
+    return { ok: true, name: target.name };
+  });
+
+  /** 本人入座：坐到第一个空位（收到邀请点「加入」） */
+  router.post('/api/rooms/:id/join', ({ params, user }) => {
+    const r = get(params.id);
+    if (r.status !== 'open') throw new HttpError(409, '这个组局已经开局或关闭了');
+    const human = humanCharacter(db, user.id);
+    if (!human) throw new HttpError(400, '你的账号还没有本人选手');
+    if (Object.values(r.seats).some((x) => x.characterId === human.id)) return view(r);
+    const game = getGame(r.game);
+    const seat = game.seats(r.players).find((s) => !r.seats[s]);
+    if (!seat) throw new HttpError(409, '座位已经坐满了');
+    return save(r, { seats: { ...r.seats, [seat]: { characterId: human.id, userId: user.id } } });
+  });
+
+  /** 不去：告诉组局里的人 */
+  router.post('/api/rooms/:id/decline', ({ params, user }) => {
+    const r = get(params.id);
+    hub.emit(`room:${r.id}`, { type: 'invite_declined', name: user.name });
+    return { ok: true };
+  });
 
   router.get('/api/rooms', () => {
     expireOld();

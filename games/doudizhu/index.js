@@ -247,7 +247,8 @@ const game = {
   id: 'doudizhu',
   name: '斗地主',
   players: { min: 3, max: 3, default: 3 },
-  features: { hidden: true, winbar: false, draw: false },
+  // turnLimit：真人每步限时（秒），超时由系统接管这一步并转托管
+  features: { hidden: true, winbar: false, draw: false, turnLimit: 25 },
   noun: '出牌',
   rankedSeries: { legs: 3, sameSeed: true }, // 复式：同一副牌轮换座位打 3 次
 
