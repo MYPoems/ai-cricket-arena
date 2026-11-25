@@ -31,11 +31,12 @@ import othello from './othello/index.js';
 import connect4 from './connect4/index.js';
 import werewolf from './werewolf/index.js';
 import turtlesoup from './turtlesoup/index.js';
+import go from './go/index.js';
 import liar from './liar/index.js';
 import mahjong from './mahjong/index.js';
 import guandan from './guandan/index.js';
 
-export const GAMES = { [xiangqi.id]: xiangqi, [gomoku.id]: gomoku, [chess.id]: chess, [doudizhu.id]: doudizhu, [undercover.id]: undercover, [poker.id]: poker, [dilemma.id]: dilemma, [othello.id]: othello, [connect4.id]: connect4, [werewolf.id]: werewolf, [turtlesoup.id]: turtlesoup, [liar.id]: liar, [mahjong.id]: mahjong, [guandan.id]: guandan };
+export const GAMES = { [xiangqi.id]: xiangqi, [gomoku.id]: gomoku, [go.id]: go, [chess.id]: chess, [doudizhu.id]: doudizhu, [undercover.id]: undercover, [poker.id]: poker, [dilemma.id]: dilemma, [othello.id]: othello, [connect4.id]: connect4, [werewolf.id]: werewolf, [turtlesoup.id]: turtlesoup, [liar.id]: liar, [mahjong.id]: mahjong, [guandan.id]: guandan };
 
 export function registerGame(g) {
   GAMES[g.id] = g;

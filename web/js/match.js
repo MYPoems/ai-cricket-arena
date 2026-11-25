@@ -108,7 +108,7 @@ export async function matchView(root, id, { characters, session }) {
   const seatLabel = (s) => { const n = fullName(s); const i = n.lastIndexOf('·'); return i > 0 && sharedPrefix.has(n.slice(0, i).trim()) ? n.slice(i + 1).trim() : n; };
   const color = (seat) => renderer.seatColor?.(seat, seats.indexOf(seat)) || PALETTE[seats.indexOf(seat) % PALETTE.length];
   // 着法表里的阵营小棋子：用棋子本来的颜色（白子白、黑子黑、红子红），不用为文字对比度调过的阵营色
-  const SIDE_DOT = { xiangqi: { r: '#c42d1e', b: '#1c1612' }, chess: { w: '#f6f0e2', b: '#1c1612' }, gomoku: { b: '#1c1612', w: '#f6f0e2' }, othello: { b: '#1c1612', w: '#f6f0e2' } };
+  const SIDE_DOT = { xiangqi: { r: '#c42d1e', b: '#1c1612' }, chess: { w: '#f6f0e2', b: '#1c1612' }, gomoku: { b: '#1c1612', w: '#f6f0e2' }, go: { b: '#1c1612', w: '#f6f0e2' }, othello: { b: '#1c1612', w: '#f6f0e2' } };
   const sideDot = (seat) => SIDE_DOT[d.game]?.[seat] || color(seat);
   // 我自己坐的座位（一盘里可以有多位真人，各看各的）；有真人在局时不给暂停
   const humanSeat = d.mySeat || null;

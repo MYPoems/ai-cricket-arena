@@ -15,6 +15,7 @@ const LOADERS = {
   dilemma: () => import('./dilemma.js'),
   othello: () => import('./othello.js'),
   connect4: () => import('./connect4.js'),
+  go: () => import('./go.js'),
   werewolf: () => import('./werewolf.js'),
   turtlesoup: () => import('./turtlesoup.js'),
   liar: () => import('./liar.js'),

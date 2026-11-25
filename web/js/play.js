@@ -15,6 +15,7 @@ export async function playView(root, { meta, characters, go, session }) {
     game: games.find((g) => g.id === q.get('game'))?.id || games[0].id,
     players: null, seats: {}, mode: 'casual', showLegal: true, delayMs: 600, start: 'opening', fen: '',
     moveTime: 300, timeoutLoss: 3, // 两人棋类：真人每步限时（秒）、超时几次判负
+    goSize: 9, // 围棋路数（大模型每步一次调用，19 路一盘几百手，默认 9 路）
   };
   const game = () => games.find((g) => g.id === sel.game);
 
@@ -126,6 +127,8 @@ export async function playView(root, { meta, characters, go, session }) {
       advBox.replaceChildren(hasHuman ? h('details', { class: 'adv' }, h('summary', {}, '高级'), advOpts) : advOpts);
     }
     startExtra.replaceChildren(
+      sel.game === 'go' ? h('label', { class: 'field' }, h('span', {}, '棋盘'),
+        h('select', { onchange: (e) => { sel.goSize = Number(e.target.value); } }, ...[[9, '9 路（一盘约 80 手）'], [13, '13 路（约 160 手）'], [19, '19 路（约 300 手，模型对局很慢）']].map(([v, l]) => h('option', { value: v, selected: v === sel.goSize }, l)))) : null,
       // 两人棋类有真人上场：每步限时、超时判负次数
       g.features?.clock && hasHuman ? clockFields(sel) : null,
       sel.game === 'xiangqi' && sel.mode === 'casual' ? h('label', { class: 'field' }, h('span', {}, '起始局面'), startSel) : null,
@@ -139,7 +142,7 @@ export async function playView(root, { meta, characters, go, session }) {
     if (Object.values(seats).some((v) => !v)) throw new Error('请为每个座位选好选手');
     const puzzle = puzzles.find((p) => p.id === sel.start);
     const fen = sel.game !== 'xiangqi' || sel.mode === 'ranked' ? undefined : sel.start === 'fen' ? sel.fen.trim() : puzzle && puzzle.id !== 'opening' ? puzzle.fen : undefined;
-    const r = await post('/matches', { game: sel.game, seats, mode: sel.mode, options: { showLegal: sel.showLegal, delayMs: sel.delayMs, fen, ...(game().features?.clock ? { humanTimeout: sel.moveTime, timeoutLoss: sel.timeoutLoss } : {}) } });
+    const r = await post('/matches', { game: sel.game, seats, mode: sel.mode, options: { showLegal: sel.showLegal, delayMs: sel.delayMs, fen, ...(sel.game === 'go' ? { setup: { size: sel.goSize } } : {}), ...(game().features?.clock ? { humanTimeout: sel.moveTime, timeoutLoss: sel.timeoutLoss } : {}) } });
     go(`#/match/${r.id}`);
   });
 
