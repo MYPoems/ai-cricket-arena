@@ -5,3 +5,5 @@ engines/*
 !engines/README.md
 *.log
 data-dev/
+# 作者自己的服务器部署脚本（不公开）
+deploy/nas/

@@ -7,3 +7,5 @@ data-test
 .claude
 engines/*
 !engines/README.md
+deploy/nas
+*.log

@@ -1,10 +1,65 @@
 # 电子斗蛐蛐
 
-> 原名「AI 对弈场」，2026-11-22 改名。
+各家大模型通过 API 同台下棋、打牌、玩推理游戏，实时显示中文思考过程，用胜率条、着法质量、段位天梯来比较模型之间思考的差异和能力。也可以自己上场和 AI 玩，或者叫上朋友一起组局。
 
-各家大模型通过 API 同台下棋、打牌、玩推理游戏，实时显示中文思考过程，用胜率条、着法质量、段位天梯来比较模型之间思考的差异和能力。也可以自己上场和 AI 玩。
+## 在线平台
 
-线上地址：https://pk.mypoetry.cn （游客可以观战；注册账号、庄家审批通过后才能养蛐蛐、组局、开局）
+不想自己部署，可以直接来作者的平台玩：**https://pk.mypoetry.cn**
+
+- 游客可以直接观战。
+- 想养自己的 AI 蛐蛐、亲自上场或组局：在网站上点「申请入场」注册，审批通过后就能用（AI 选手用你自己的 API Key）。
+
+## 一键部署到自己的电脑或服务器
+
+### Docker（推荐）
+
+装好 [Docker](https://docs.docker.com/get-docker/) 后，一条命令下载、构建、在后台启动，结束时会打印管理员账号和初始密码。
+
+Linux、macOS（或 Windows 的 Git Bash）：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/MYPoems/ai-cricket-arena/main/scripts/install.sh | bash
+```
+
+Windows PowerShell：
+
+```powershell
+irm https://raw.githubusercontent.com/MYPoems/ai-cricket-arena/main/scripts/install.ps1 | iex
+```
+
+没装 Docker 时，这两个脚本会改用本机的 Node.js 24 运行。再跑一次就是升级，数据不会丢。
+
+也可以自己敲：
+
+```bash
+git clone https://github.com/MYPoems/ai-cricket-arena.git && cd ai-cricket-arena && docker compose up -d --build
+```
+
+### 不用 Docker
+
+需要 Node.js 24 或更高版本：
+
+```bash
+git clone https://github.com/MYPoems/ai-cricket-arena.git && cd ai-cricket-arena && npm install && npm start
+```
+
+### 第一次使用
+
+1. 打开 http://localhost:3200 ，用庄家（管理员）账号 `admin` 登录。初始密码是第一次启动时随机生成的：
+   - Docker：`docker compose exec arena cat /app/data/admin-initial-password.txt`
+   - 不用 Docker：项目目录下的 `data/admin-initial-password.txt`
+   
+   也可以在第一次启动前用环境变量 `ARENA_ADMIN_PASSWORD` 指定。登录后在「我的账号」里改密码，再删掉这个文件。
+2. 在「设置」里填要用的平台的 API Key（加密保存在本机数据库），然后在「蛐蛐」里创建 AI 选手。
+3. 在「开局」里选游戏和座位，开始对局。没有 API Key 也能玩：座位上放内置 AI、随机走子或你自己。
+
+### 部署到公网服务器
+
+- Docker 方式已经监听所有网卡（端口 3200，可用 `ARENA_PORT` 改）；不用 Docker 时在 `.env` 里设 `HOST=0.0.0.0`。
+- 网站自带账号系统：别人注册后要庄家在「审批」页通过才能用；游客默认可以观战，庄家可以在「设置」里关掉。
+- HTTPS：放在 Caddy、Nginx 或 Cloudflare Tunnel 后面，转发到 3200 端口。网站用 Server-Sent Events 推送实时画面，Nginx 要关掉这一路的缓冲（`proxy_buffering off;`）。
+- 数据都在 `data/` 目录（SQLite 数据库、加密主密钥）。备份：停掉服务后复制整个目录。
+- 引擎（可选）把 Linux 版放进 `engines/`，见下文。
 
 ## 游戏
 
@@ -50,18 +105,9 @@
 - **提和**（象棋、国际象棋）：任一方判断局面已和，可以在走棋时提出和棋；对方模型可以接受（对局以和棋结束）或照常走棋表示拒绝。内置 AI 和引擎在自己不占优时接受，随机走子不接受；你自己上场时也能提和、接受和棋。被拒后 10 个回合内不能再提。
 - **犯规规则**：着法无效时告诉模型原因让它重走，最多重走 3 次，仍无效判负。
 
-## 运行
+## 配置
 
-需要 Node.js 24 或更高版本。
-
-```powershell
-npm install
-npm start
-```
-
-打开 http://127.0.0.1:3200 ，在「设置」里填写要用的平台的 API Key（加密保存在本机），然后在「选手」里创建 AI 选手。
-
-也可以把密钥写在 `.env` 里，见 `.env.example`。
+所有配置都可以不写，用默认值就能跑。需要时复制 `.env.example` 为 `.env` 再改，例如端口、管理员初始密码、各平台 API Key（也可以在网页「设置」里填）。
 
 ### 支持的平台
 
