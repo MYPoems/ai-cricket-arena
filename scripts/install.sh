@@ -5,6 +5,8 @@
 # 已经装过的再跑一次就是升级（拉取最新代码、重建），数据不会丢。
 # 可选环境变量：DSQQ_DIR 安装目录（默认 ./ai-cricket-arena）、ARENA_PORT 端口（默认 3200）、DSQQ_MODE=docker|node 指定方式
 set -euo pipefail
+# Windows 的 Git Bash 会把 /app/... 这种参数改写成 Windows 路径，传给 docker 的容器内路径要原样保留
+export MSYS_NO_PATHCONV=1
 
 REPO="https://github.com/MYPoems/ai-cricket-arena.git"
 DIR="${DSQQ_DIR:-ai-cricket-arena}"

@@ -1,4 +1,4 @@
-# 一键部署电子斗蛐蛐（Windows PowerShell）：
+﻿# 一键部署电子斗蛐蛐（Windows PowerShell）：
 #   irm https://raw.githubusercontent.com/MYPoems/ai-cricket-arena/main/scripts/install.ps1 | iex
 # 有 Docker Desktop 就用 Docker 在后台运行；没有就用本机的 Node.js 24 在当前窗口运行。
 # 已经装过的再跑一次就是升级（拉取最新代码、重建），数据不会丢。
